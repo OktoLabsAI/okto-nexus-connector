@@ -1,0 +1,196 @@
+"""``okto-nexus-connector`` CLI entry point (plan section 6).
+
+Command surface: connect, identity (add/list/show/remove/replace-credential),
+discover, bind (create/list/show/remove), runtime
+(start/status/inspect/logs/interrupt/stop/submit), daemon
+(start/run/status/stop), service (install/uninstall/status), doctor.
+Every automation surface honors ``--json`` and ``--non-interactive`` with
+stable exit codes; secrets only ever enter through stdin, masked input or
+the vault.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import json
+import sys
+from pathlib import Path
+
+from .. import __version__
+from ..errors import ConnectorError
+from .output import EXIT_OK, EXIT_USAGE, Output
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="okto-nexus-connector",
+        description="Remote harness connector for Okto Nexus")
+    parser.add_argument("--version", action="version",
+                        version=f"okto-nexus-connector {__version__}")
+    parser.add_argument("--json", action="store_true",
+                        help="machine-readable JSON output")
+    parser.add_argument("--non-interactive", action="store_true",
+                        help="never prompt; ambiguity fails with guidance")
+    parser.add_argument("--state-dir", type=Path, default=None,
+                        help="override the per-user state directory")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    connect = sub.add_parser("connect", help="guided first-use flow")
+    connect.add_argument("--server", required=True,
+                         help="Nexus Server base URL")
+    connect.add_argument("--agent", default=None,
+                         help="agent id hint from the Server screen")
+    connect.add_argument("--alias", default=None,
+                         help="local identity alias (default: agent id)")
+    connect.add_argument("--binding-alias", default=None,
+                         help="local binding alias (default: harness)")
+    connect.add_argument("--harness", default=None,
+                         help="adapter: codex_app_server|pi_rpc|claude_stream")
+    connect.add_argument("--executable", default=None,
+                         help="explicit harness executable to select")
+    connect.add_argument("--pi-node", default=None,
+                         help="trusted Node binary for the Pi CLI")
+    connect.add_argument("--credential-stdin", action="store_true",
+                         help="read the canonical key from stdin")
+    connect.add_argument("--credential-env", default=None,
+                         help="environment variable holding the key")
+    connect.add_argument("--mcp-entry", default=None,
+                         help="explicitly selected MCP config file")
+    connect.add_argument("--mcp-entry-name", default=None,
+                         help="entry name inside --mcp-entry")
+    connect.add_argument("--project", type=Path, default=None,
+                         help="project directory (default: cwd)")
+    connect.add_argument("--start", action="store_true",
+                         help="also start a runtime after connecting")
+    connect.add_argument("--trusted-provider-home", action="store_true",
+                         help="approve using the provider's own home dir")
+
+    identity = sub.add_parser("identity", help="imported identity management")
+    identity_sub = identity.add_subparsers(dest="subcommand", required=True)
+    add = identity_sub.add_parser("add", help="import a canonical key")
+    add.add_argument("--server", required=True)
+    add.add_argument("--agent", default=None)
+    add.add_argument("--alias", required=True)
+    add.add_argument("--credential-stdin", action="store_true")
+    add.add_argument("--credential-env", default=None)
+    identity_sub.add_parser("list")
+    show = identity_sub.add_parser("show")
+    show.add_argument("alias")
+    remove = identity_sub.add_parser("remove")
+    remove.add_argument("alias")
+    replace = identity_sub.add_parser("replace-credential")
+    replace.add_argument("alias")
+    replace.add_argument("--credential-stdin", action="store_true")
+    replace.add_argument("--credential-env", default=None)
+
+    sub.add_parser("discover", help="local harness inventory (redacted)") \
+        .add_argument("--harness", default=None)
+
+    bind = sub.add_parser("bind", help="advanced binding management")
+    bind_sub = bind.add_subparsers(dest="subcommand", required=True)
+    bind_create = bind_sub.add_parser("create")
+    bind_create.add_argument("--identity", required=True)
+    bind_create.add_argument("--harness", required=True)
+    bind_create.add_argument("--executable", required=True)
+    bind_create.add_argument("--pi-node", default=None)
+    bind_create.add_argument("--alias", required=True)
+    bind_create.add_argument("--project", type=Path, default=None)
+    bind_list = bind_sub.add_parser("list")
+    bind_show = bind_sub.add_parser("show")
+    bind_show.add_argument("alias")
+    bind_remove = bind_sub.add_parser("remove")
+    bind_remove.add_argument("alias")
+    bind_remove.add_argument("--keep-config", action="store_true")
+
+    runtime = sub.add_parser("runtime", help="managed runtime operations")
+    runtime_sub = runtime.add_subparsers(dest="subcommand", required=True)
+    start = runtime_sub.add_parser("start",
+                                   help="open or reuse an authorized session")
+    start.add_argument("alias")
+    start.add_argument("--project", type=Path, default=None)
+    start.add_argument("--harness", default=None)
+    start.add_argument("--new-session", action="store_true")
+    start.add_argument("--text", default=None,
+                       help="initial turn text")
+    runtime_sub.add_parser("status")
+    inspect = runtime_sub.add_parser("inspect")
+    inspect.add_argument("session_id")
+    logs = runtime_sub.add_parser("logs")
+    logs.add_argument("session_id")
+    logs.add_argument("--follow", action="store_true")
+    submit = runtime_sub.add_parser("submit")
+    submit.add_argument("session_id")
+    submit.add_argument("text")
+    interrupt = runtime_sub.add_parser("interrupt",
+                                       help="cancel the active turn")
+    interrupt.add_argument("session_id")
+    stop = runtime_sub.add_parser("stop",
+                                  help="close owned session resources")
+    stop.add_argument("session_id")
+
+    daemon = sub.add_parser("daemon", help="local daemon lifecycle")
+    daemon_sub = daemon.add_subparsers(dest="subcommand", required=True)
+    daemon_sub.add_parser("start", help="background; returns after readiness")
+    daemon_sub.add_parser("run", help="foreground (containers/diagnostics)")
+    daemon_sub.add_parser("status")
+    daemon_sub.add_parser("stop")
+
+    service = sub.add_parser("service", help="OS autostart management")
+    service_sub = service.add_subparsers(dest="subcommand", required=True)
+    install = service_sub.add_parser("install")
+    install.add_argument("--dry-run", action="store_true")
+    uninstall = service_sub.add_parser("uninstall")
+    uninstall.add_argument("--dry-run", action="store_true")
+    service_sub.add_parser("status")
+
+    doctor = sub.add_parser("doctor", help="layered diagnostics")
+    doctor.add_argument("--probe", action="store_true",
+                        help="attempt live network probes")
+
+    mcp = sub.add_parser("mcp-config",
+                         help="direct-HTTP MCP client configuration")
+    mcp_sub = mcp.add_subparsers(dest="subcommand", required=True)
+    mcp_plan = mcp_sub.add_parser("plan")
+    mcp_plan.add_argument("--server", required=True)
+    mcp_plan.add_argument("--harness", required=True,
+                          choices=["codex_app_server", "claude_stream",
+                                   "pi_rpc"])
+    mcp_plan.add_argument("--capability-ref", required=True,
+                          help="mcp-cap: reference issued by the Server")
+    mcp_apply = mcp_sub.add_parser("apply")
+    mcp_apply.add_argument("--server", required=True)
+    mcp_apply.add_argument("--harness", required=True)
+    mcp_apply.add_argument("--capability-ref", required=True)
+    mcp_apply.add_argument("--file", type=Path, required=True)
+    mcp_apply.add_argument("--entry-name", default="nexus")
+    mcp_remove = mcp_sub.add_parser("remove")
+    mcp_remove.add_argument("--harness", required=True)
+    mcp_remove.add_argument("--file", type=Path, required=True)
+    mcp_remove.add_argument("--entry-name", default="nexus")
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    output = Output(json_mode=args.json)
+    from .commands import dispatch
+    try:
+        result = asyncio.run(dispatch(args, output))
+    except ConnectorError as error:
+        return output.error(error)
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return EXIT_USAGE
+    if result is None:
+        return EXIT_OK
+    if isinstance(result, int):
+        return result
+    output.result(result)
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())

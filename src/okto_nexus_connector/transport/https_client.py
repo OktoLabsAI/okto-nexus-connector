@@ -1,0 +1,390 @@
+"""Outbound HTTPS client for the Nexus Server management API.
+
+This is the Connector-side client for the contract routes of plan A.5
+(`/v1/connections/*`, `/v1/runtime/*`). It never proxies MCP and never
+forwards provider secrets. TLS is required outside explicit loopback
+development; redirects to another origin are refused for credentialed
+requests (A.15).
+"""
+
+from __future__ import annotations
+
+import ipaddress
+from dataclasses import dataclass
+from urllib.parse import urlsplit
+
+import httpx
+
+from ..errors import ConnectorError
+from ..redaction import redact_text
+
+DEFAULT_TIMEOUT = httpx.Timeout(15.0, connect=10.0)
+_USER_AGENT = "okto-nexus-connector/0.1.0.dev0"
+
+
+@dataclass(frozen=True, slots=True)
+class MeInfo:
+    server_id: str
+    agent_id: str
+    display_name: str
+    permissions: tuple[str, ...]
+    authorization_revision: int
+    configuration_revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class BindingProposal:
+    proposal_id: str
+    proposal_revision: int
+    binding_id: str
+    endpoint_id: str
+    profile_id: str
+    workspace_binding_id: str
+    workspace_id: str
+    authorization_revision: int
+    configuration_revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class IntentResolution:
+    operation_id: str
+    session_id: str
+    reuse: bool
+    execution: dict[str, object]
+    lease_seconds: float
+    allowed_actions: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SessionCapability:
+    capability_ref: str
+    capability: str
+    expires_in: float
+
+
+def origin_of(base_url: str) -> str:
+    parts = urlsplit(base_url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ConnectorError("PROFILE_DRIFT", "origin",
+                             "base URL must be http(s) with a host")
+    host = f"[{parts.hostname.lower()}]" if ":" in parts.hostname \
+        else parts.hostname.lower()
+    default = (parts.scheme == "https" and parts.port == 443) or \
+              (parts.scheme == "http" and parts.port == 80)
+    port = "" if (parts.port is None or default) else f":{parts.port}"
+    return f"{parts.scheme}://{host}{port}"
+
+
+def is_loopback_origin(base_url: str) -> bool:
+    parts = urlsplit(base_url)
+    host = (parts.hostname or "").lower()
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host == "localhost"
+
+
+def _no_proxy_for(base_url: str) -> bool:
+    """Honor NO_PROXY for explicitly excluded hosts."""
+    import os
+    parts = urlsplit(base_url)
+    host = (parts.hostname or "").lower()
+    excludes = os.environ.get("NO_PROXY", "") or os.environ.get(
+        "no_proxy", "")
+    if not excludes:
+        return False
+    for entry in excludes.split(","):
+        entry = entry.strip().lower().lstrip(".")
+        if entry and (host == entry or host.endswith("." + entry)):
+            return True
+    return False
+
+
+class NexusHTTPClient:
+    """One Server profile's authenticated HTTPS client."""
+
+    def __init__(self, base_url: str, *, verify: bool = True,
+                 timeout: httpx.Timeout | None = None,
+                 client: httpx.AsyncClient | None = None):
+        self.base_url = base_url.rstrip("/")
+        self.origin = origin_of(self.base_url)
+        self._loopback = is_loopback_origin(self.base_url)
+        if not verify and not self._loopback:
+            raise ConnectorError("PROFILE_DRIFT", "tls",
+                                 "TLS verification cannot be disabled for a "
+                                 "non-loopback origin")
+        self._verify = verify
+        self._timeout = timeout or DEFAULT_TIMEOUT
+        self._client = client
+        self._owned = client is None
+
+    async def __aenter__(self) -> "NexusHTTPClient":
+        if self._client is None:
+            # Loopback targets never use environment proxies; remote
+            # origins keep normal proxy/trust_env behavior.
+            trust_env = not (self._loopback or
+                             _no_proxy_for(self.base_url))
+            self._client = httpx.AsyncClient(
+                verify=self._verify, timeout=self._timeout,
+                headers={"User-Agent": _USER_AGENT},
+                follow_redirects=False, trust_env=trust_env)
+        return self
+
+    async def __aexit__(self, *_exc) -> None:
+        if self._owned and self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
+    # -- low level -------------------------------------------------------
+
+    async def _request(self, method: str, path: str, *, key: str | None,
+                        json_body: dict[str, object] | None = None,
+                        expect: int | tuple[int, ...] = 200) -> dict[str, object]:
+        assert self._client is not None, "use 'async with NexusHTTPClient'"
+        headers: dict[str, str] = {}
+        if key is not None:
+            headers["Authorization"] = f"Bearer {key}"
+        try:
+            response = await self._client.request(
+                method, f"{self.base_url}{path}", headers=headers,
+                json=json_body)
+        except httpx.HTTPError as exc:
+            raise ConnectorError(
+                "EXECUTOR_OFFLINE", "http",
+                redact_text(f"transport failure: {exc}"),
+                retry_safe=True,
+                action="Check the Server address/network and retry; no "
+                       "effect was possible.") from None
+        if response.has_redirect_location:
+            target = origin_of(str(response.url).join(
+                response.headers["location"]))
+            if target != self.origin:
+                raise ConnectorError(
+                    "PROFILE_DRIFT", "http",
+                    "credential redirect to another origin refused",
+                    action="Verify the approved Server origin; "
+                           "cross-origin redirects are refused.")
+        if isinstance(expect, int):
+            expect = (expect,)
+        if response.status_code not in expect:
+            raise _error_from(response)
+        try:
+            payload = response.json()
+        except ValueError:
+            raise ConnectorError("VERSION_INCOMPATIBLE", "http",
+                                  "non-JSON response from Server") from None
+        if not isinstance(payload, dict):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "http",
+                                 "malformed Server response")
+        return payload
+
+    # -- contract routes (plan A.5) ---------------------------------------
+
+    async def me(self, key: str) -> MeInfo:
+        payload = await self._request("GET", "/v1/connections/me", key=key)
+        agent_id = payload.get("agent_id")
+        server_id = payload.get("server_id")
+        if not isinstance(agent_id, str) or not agent_id.startswith("ag_"):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "me",
+                                 "Server /me did not return an agent identity")
+        if not isinstance(server_id, str) or not server_id:
+            raise ConnectorError("SERVER_ID_CHANGED", "me",
+                                 "Server /me did not identify itself",
+                                 action="Confirm the Server installation "
+                                        "identity and update the profile.")
+        permissions = payload.get("permissions", [])
+        revisions = payload.get("revisions", {})
+        return MeInfo(
+            server_id=server_id,
+            agent_id=agent_id,
+            display_name=str(payload.get("display_name", "")),
+            permissions=tuple(str(item) for item in permissions
+                              if isinstance(item, str)),
+            authorization_revision=int(
+                revisions.get("authorization", 1)),
+            configuration_revision=int(
+                revisions.get("configuration", 1)),
+        )
+
+    async def prepare_binding(self, key: str, *, agent_id_hint: str,
+                              connector_id: str, adapter_id: str,
+                              candidate_version: str,
+                              binding_alias: str,
+                              workspace_hint: dict[str, object] | None = None
+                              ) -> BindingProposal:
+        payload = await self._request(
+            "POST", "/v1/connections/bindings:prepare", key=key, json_body={
+                "agent_id_hint": agent_id_hint,
+                "executor": {"connector_id": connector_id,
+                             "adapter_id": adapter_id,
+                             "candidate_version": candidate_version},
+                "binding_alias": binding_alias,
+                "workspace_hint": workspace_hint or {},
+            })
+        return _proposal_from(payload)
+
+    async def apply_binding(self, key: str, proposal: BindingProposal
+                            ) -> BindingProposal:
+        payload = await self._request(
+            "POST", "/v1/connections/bindings:apply", key=key, json_body={
+                "proposal_id": proposal.proposal_id,
+                "proposal_revision": proposal.proposal_revision,
+            })
+        return _proposal_from(payload)
+
+    async def binding_ticket(self, key: str, binding_id: str) -> tuple[str, float]:
+        payload = await self._request(
+            "POST", f"/v1/connections/bindings/{binding_id}/ticket",
+            key=key, json_body={})
+        ticket = payload.get("ticket")
+        expires = payload.get("expires_in", 600)
+        if not isinstance(ticket, str) or not ticket:
+            raise ConnectorError("AGENT_AUTH_REQUIRED", "ticket",
+                                 "Server refused to issue a binding ticket")
+        return ticket, float(expires)
+
+    async def resolve_intent(self, key: str, *, binding_id: str,
+                             workspace_binding_id: str,
+                             intent: str,
+                             session_id: str | None = None,
+                             new_session: bool = False,
+                             text: str | None = None) -> IntentResolution:
+        body: dict[str, object] = {
+            "binding_id": binding_id,
+            "workspace_binding_id": workspace_binding_id,
+            "intent": intent,
+            "new_session": new_session,
+        }
+        if session_id is not None:
+            body["session_id"] = session_id
+        if text is not None:
+            body["text"] = text
+        payload = await self._request(
+            "POST", "/v1/runtime/intents:resolve", key=key, json_body=body,
+            expect=(200, 409))
+        if payload.get("error") is not None:
+            raise _error_payload(payload, "intents:resolve")
+        execution = payload.get("execution", {})
+        lease = payload.get("lease", {})
+        actions = execution.get("allowed_actions", [])
+        return IntentResolution(
+            operation_id=str(payload["operation_id"]),
+            session_id=str(payload["session_id"]),
+            reuse=bool(payload.get("reuse", False)),
+            execution=execution if isinstance(execution, dict) else {},
+            lease_seconds=float(lease.get("seconds", 120)),
+            allowed_actions=tuple(str(item) for item in actions
+                                  if isinstance(item, str)),
+        )
+
+    async def submit_operation(self, key: str, *, operation_id: str,
+                               binding_id: str, session_id: str,
+                               action: str, payload: dict[str, object]
+                               ) -> dict[str, object]:
+        return await self._request(
+            "POST", "/v1/runtime/operations", key=key, json_body={
+                "operation_id": operation_id,
+                "binding_id": binding_id,
+                "session_id": session_id,
+                "action": action,
+                "payload": payload,
+            }, expect=(200, 202))
+
+    async def get_operation(self, key: str, operation_id: str
+                            ) -> dict[str, object]:
+        return await self._request(
+            "GET", f"/v1/runtime/operations/{operation_id}", key=key)
+
+    async def session_capability(self, key: str, *, binding_id: str,
+                                 session_id: str,
+                                 actions: tuple[str, ...]
+                                 ) -> SessionCapability:
+        payload = await self._request(
+            "POST", f"/v1/runtime/sessions/{session_id}/capability",
+            key=key, json_body={
+                "binding_id": binding_id,
+                "actions": list(actions),
+            })
+        ref = payload.get("capability_ref")
+        capability = payload.get("capability")
+        if (not isinstance(ref, str) or not ref.startswith("mcp-cap:") or
+                not isinstance(capability, str) or not capability):
+            raise ConnectorError("AGENT_AUTH_REQUIRED", "capability",
+                                 "Server did not issue a session capability")
+        return SessionCapability(ref, capability,
+                                 float(payload.get("expires_in", 3600)))
+
+    async def approval_decision(self, key: str, *, request_id: str,
+                                decision: str, cas_token: str,
+                                response: dict[str, object] | None = None
+                                ) -> bool:
+        payload = await self._request(
+            "POST", "/v1/runtime/approval-decisions", key=key, json_body={
+                "request_id": request_id,
+                "decision": decision,
+                "cas_token": cas_token,
+                "response": response or {},
+            }, expect=(200, 409))
+        if payload.get("error") is not None:
+            raise _error_payload(payload, "approval-decisions")
+        return bool(payload.get("applied", False))
+
+    def link_url(self, executor_id: str) -> str:
+        base = self.base_url
+        scheme = "wss" if base.startswith("https") else "ws"
+        return (base.replace("https", "wss", 1) if scheme == "wss"
+                else base.replace("http", "ws", 1)) + \
+            f"/v1/runtime/executors/{executor_id}/link"
+
+
+def _proposal_from(payload: dict[str, object]) -> BindingProposal:
+    required = ("proposal_id", "binding_id", "endpoint_id", "profile_id",
+                "workspace_binding_id", "workspace_id")
+    missing = [key for key in required
+               if not isinstance(payload.get(key), str)
+               or not payload.get(key)]
+    if missing:
+        raise ConnectorError("VERSION_INCOMPATIBLE", "bindings",
+                             f"binding proposal missing fields: {missing}")
+    return BindingProposal(
+        proposal_id=str(payload["proposal_id"]),
+        proposal_revision=int(payload.get("proposal_revision", 1)),
+        binding_id=str(payload["binding_id"]),
+        endpoint_id=str(payload["endpoint_id"]),
+        profile_id=str(payload["profile_id"]),
+        workspace_binding_id=str(payload["workspace_binding_id"]),
+        workspace_id=str(payload["workspace_id"]),
+        authorization_revision=int(payload.get("authorization_revision", 1)),
+        configuration_revision=int(payload.get("configuration_revision", 1)),
+    )
+
+
+def _error_from(response: httpx.Response) -> ConnectorError:
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if isinstance(payload, dict) and isinstance(payload.get("error"), dict):
+        return _error_payload(payload, "http")
+    hint = {401: "Import a valid canonical agent key.",
+            403: "The canonical key lacks the required scope.",
+            404: "The Server does not implement this contract route yet.",
+            409: "A conflicting state exists; inspect it before retrying."}
+    return ConnectorError(
+        "EXECUTOR_OFFLINE" if response.status_code >= 500
+        else "AGENT_AUTH_REQUIRED",
+        "http", f"HTTP {response.status_code}",
+        retry_safe=response.status_code >= 500 or response.status_code == 429,
+        action=hint.get(response.status_code))
+
+
+def _error_payload(payload: dict[str, object], stage: str) -> ConnectorError:
+    error = payload["error"]
+    return ConnectorError(
+        str(error.get("code", "UNKNOWN")), str(error.get("stage", stage)),
+        redact_text(str(error.get("message", ""))),
+        bool(error.get("possible_effect", False)),
+        bool(error.get("retry_safe", False)),
+        error.get("operation_id") if isinstance(
+            error.get("operation_id"), str) else None,
+        error.get("action") if isinstance(error.get("action"), str) else None)

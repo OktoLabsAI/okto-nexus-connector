@@ -1,0 +1,24 @@
+# build artifacts
+build/
+dist/
+*.egg-info/
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# local state / test scratch
+.tmp-state/
+*.db
+*.db-wal
+*.db-shm
+hang_tb.txt
+
+# coverage
+.coverage
+htmlcov/
