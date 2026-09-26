@@ -36,7 +36,7 @@ Evidence: [local-suite-2026-09-26](evidence/local-suite-2026-09-26.md).
 | TC-26 | Native Pi bridge | PASS | contract (scope/lease gates; free text never an action) |
 | TC-27 | Two channels/uncertain | PASS (contract) | transport/lease separation; no retry-on-uncertainty paths; real partition needs C11 |
 | TC-28 | Daily CLI | PASS | e2e (human + --json paths, stable codes) |
-| TC-29 | Approval authority | PASS | approvals route through server CAS; agent key only transports decision |
+| TC-29 | Approval authority | PASS | tests/integration/test_approvals.py (routing, no auto-approval, CAS refusal) |
 | TC-30 | Doctor | PASS | e2e + unit (layered, prescriptive; never suggests disabling TLS) |
 | TC-31 | Crash boundaries | PASS (shape) | journal/receipt survival + unknown ownership after restart; OS-level cuts inherit Core K10 evidence |
 | TC-32 | Lease/clock | PASS (shape) | rollback-fenced clock refuses new work (Core fence exercised) |

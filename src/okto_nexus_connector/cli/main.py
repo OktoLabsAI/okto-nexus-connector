@@ -148,6 +148,18 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--probe", action="store_true",
                         help="attempt live network probes")
 
+    approvals = sub.add_parser("approvals",
+                               help="pending HITL requests (decision "
+                                    "authority stays on the Server)")
+    approvals_sub = approvals.add_subparsers(dest="subcommand",
+                                             required=True)
+    approvals_sub.add_parser("list", help="list pending requests")
+    decide = approvals_sub.add_parser("decide")
+    decide.add_argument("request_id")
+    decide.add_argument("decision", choices=["approve", "deny"])
+    decide.add_argument("--cas-token", default="",
+                        help="CAS token correlating the pending request")
+
     mcp = sub.add_parser("mcp-config",
                          help="direct-HTTP MCP client configuration")
     mcp_sub = mcp.add_subparsers(dest="subcommand", required=True)

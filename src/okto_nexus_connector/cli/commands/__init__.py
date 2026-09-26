@@ -39,6 +39,9 @@ async def dispatch(args, output: Output):
     if command == "mcp-config":
         from .mcp_config import run_mcp_config
         return await run_mcp_config(args, output, root)
+    if command == "approvals":
+        from .approvals import run_approvals
+        return await run_approvals(args, output, root)
     raise ConnectorError("CAPABILITY_UNSUPPORTED", "cli",
                          f"unknown command {command!r}")
 

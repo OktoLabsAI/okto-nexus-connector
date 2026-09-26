@@ -25,7 +25,7 @@ python -m pytest tests/ -q --tb=no
 ## Result
 
 ```
-105 passed, 1 warning in 208.12s (0:03:28)
+106 passed, 1 warning in 209.88s (0:03:29)
 ```
 
 (The warning is pytest-asyncio's unknown-mark notice for `process`/
@@ -38,7 +38,7 @@ pyproject.)
 |---|---|---|
 | unit | 49 tests | state/vault semantics, redaction, IPC framing, lock identity, direct-HTTP MCP config with CAS/backup, OS service plans, structural no-MCP/no-Popen/no-server-deps boundaries |
 | contract | 35 tests | HTTPS client vs fake peer (me/hint/redirect/tickets/capability), identity import flows, NXL WSS client vs fake peer (welcome, lanes, ack watermarks, priorities, reconnect, receipts), Pi native bridge scope/lease gates |
-| integration | 19 tests | daemon composition (IPC auth, runtime lifecycle, two servers isolation, restart/reconcile/lease-clock/journal-full shapes, log-follow independence), real subprocess singleton/stop, honest failure of unqualified binaries |
+| integration | 20 tests | daemon composition (IPC auth, runtime lifecycle, two servers isolation, restart/reconcile/lease-clock/journal-full shapes, log-follow independence), real subprocess singleton/stop, honest failure of unqualified binaries |
 | e2e | 8 tests | real CLI processes against fake peers: identity add/list/show, guided connect with piped protected entries, daemon ensure/stop, doctor, mcp-config plan/apply/remove preserving third parties, clean-venv wheel install with dependency audit |
 
 ## Honest limits
