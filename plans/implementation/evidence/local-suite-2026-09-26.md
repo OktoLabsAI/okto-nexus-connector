@@ -57,8 +57,8 @@ pyproject.)
 
 | Artifact | SHA-256 |
 |---|---|
-| `okto_nexus_connector-0.1.0.dev0-py3-none-any.whl` | `fb209b09948e8da7cedb387c3a7e17adc9414b4b43fa0c616de4c279e1805090` |
-| `okto_nexus_connector-0.1.0.dev0.tar.gz` | `3f6da1d966f4a59a3613891830081f7f9f5f85c2d1456993f25aaed22efc6736` |
+| `okto_nexus_connector-0.1.0.dev0-py3-none-any.whl` | `a3477917f988809c85c69d63a655034fba06f10843b44b6375ab8e01189c29d4` |
+| `okto_nexus_connector-0.1.0.dev0.tar.gz` | `f69862170ad7b90e05f121c8a0d8c1714419426f360b15a81d1b38fd15fa99ed` |
 
 Built with `python tools/build_artifacts.py` (normalized local build);
 not published anywhere.
