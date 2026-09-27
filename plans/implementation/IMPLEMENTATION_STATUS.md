@@ -1,16 +1,15 @@
-# Implementation status — 2026-09-26
+# Implementation status — 2026-09-26 (Core 0.2.0 aligned)
 
-Connector `0.1.0.dev0`. Baseline: this repository (initial commit pending
-review), consuming the Core development wheel
-`nexus_connector_core-0.1.0.dev0` (SHA-256
-`ac376605217bc8236a6306ca303499e1923fd68b56a7b5586799ec95aeb1553f`,
-source HEAD `706b16a`).
+Connector `0.1.0.dev0`. Baseline: this repository, consuming the Core
+development wheel `nexus_connector_core-0.2.0.dev0` (SHA-256
+`633483707aaf7eb7cfebdfee53f57e99ace45ae657017bf4a3dfa91783d8e253`,
+source HEAD `15772d3` — the C1/PC00–PC14 correction campaign).
 
-The full automated suite (unit + contract + integration + e2e incl.
-clean-venv packaging) passes locally on Windows 11 / Python 3.13.1:
-**105 passed** ([evidence](evidence/local-suite-2026-09-26.md)). The
-joint multi-host/real-Server campaign (C11 / J-matrix) is **blocked**
-below — mocks never close those gates.
+The full automated suite passes locally on Windows 11 / Python 3.13.1:
+**114 passed, 1 skipped**
+([alignment evidence](evidence/core02-alignment-2026-09-26.md)). The
+joint multi-host/real-Server campaign (C11 / J-matrix) remains
+**blocked** below — mocks never close those gates.
 
 | Phase | Status | Evidence / next gate |
 |---|---|---|
@@ -24,7 +23,7 @@ below — mocks never close those gates.
 | C07 | DONE | Full CLI table with --json/--non-interactive, stable exit codes, layered doctor (TC-28..TC-30) |
 | C08 | DONE | Restart/reconcile/no-replay, lease clock fence, journal-full honesty, unauthorized-IPC denial, redaction boundary (TC-31..TC-35 shapes; OS-level crash cuts inherit Core K10 evidence) |
 | C09 | DONE | Per-OS service plans with consent + honest survival matrix; state schema guard; owned-fields-only removal (TC-36..TC-39; POSIX boot qualification staged NOT_RUN) |
-| C10 | DONE | Wheel+sdist built and dependency-audited in a clean venv; artifacts hashed; no publication performed (TC-40/TC-42 partial: provider qualification remains blocked) |
+| C10 | DONE | Wheel+sdist built and dependency-audited in a clean venv (against core 0.2.0); artifacts hashed; no publication performed (TC-40/TC-42 partial: provider qualification remains blocked) |
 | C11 | BLOCKED | Requires the adapted Nexus Server (r3 contract: `/v1/connections/*`, `/v1/runtime/*`, WSS link) and authorized hosts A/B/C. All J-cases NOT_RUN. |
 
 ## Explicit blockers (external)

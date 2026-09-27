@@ -13,6 +13,7 @@ operation is dispatched; unknown peers are refused before effects.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import socket as socket_module
 import sys
@@ -22,6 +23,8 @@ from ..errors import ConnectorError
 from ..redaction import redact_mapping
 from .protocol import (MAX_FRAME_BYTES, decode_message, encode_message,
                        parse_request, response_error, response_ok)
+
+logger = logging.getLogger(__name__)
 
 _HAS_UNIX = (sys.platform != "win32"
              and hasattr(socket_module, "AF_UNIX"))
@@ -161,6 +164,7 @@ class IPCServer:
         except (asyncio.CancelledError, GeneratorExit):
             raise
         except Exception:
+            logger.exception("internal error handling op %r", request.op)
             yield response_error(request.seq, ConnectorError(
                 "UNKNOWN", request.op,
                 "internal error; see daemon log"))

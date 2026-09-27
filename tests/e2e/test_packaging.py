@@ -17,8 +17,14 @@ from pathlib import Path
 import pytest
 
 PROJECT = Path(__file__).parents[2]
-CORE_WHEEL = Path(__file__).parents[3] / "okto-nexus-connector-core" / \
-    "dist" / "nexus_connector_core-0.1.0.dev0-py3-none-any.whl"
+CORE_DIST = Path(__file__).parents[3] / "okto-nexus-connector-core" / \
+    "dist"
+
+
+def _core_wheel() -> Path:
+    wheels = sorted(CORE_DIST.glob("nexus_connector_core-*-py3-none-any.whl"))
+    assert wheels, f"no core wheel under {CORE_DIST}"
+    return wheels[-1]
 
 
 @pytest.fixture(scope="module")
@@ -43,7 +49,7 @@ def test_clean_venv_install(built_wheel: Path, tmp_path: Path):
     # pinned Core development wheel
     install = subprocess.run(
         [str(python), "-m", "pip", "install", "--quiet", str(built_wheel),
-         str(CORE_WHEEL)],
+         str(_core_wheel())],
         capture_output=True, timeout=600)
     assert install.returncode == 0, install.stderr.decode()
 

@@ -224,8 +224,8 @@ async def _choose_harness(args, output: Output):
                                  action="Pass --executable explicitly.")
         exact = matches[0]
         candidate = select_explicit(adapter_id, exact.executable)
-    version = await probe_version(candidate)
-    return adapter_id, candidate, version
+    probed = await probe_version(candidate)
+    return adapter_id, probed, probed.version
 
 
 def _remember_server(store: StateStore, base_url: str, server_id: str) -> None:

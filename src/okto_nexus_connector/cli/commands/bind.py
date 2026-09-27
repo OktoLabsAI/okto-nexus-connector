@@ -33,7 +33,8 @@ async def run_bind(args, output: Output, root: Path):
             candidate = pi_candidate(args.pi_node, args.executable)
         else:
             candidate = select_explicit(args.harness, args.executable)
-        version = await probe_version(candidate)
+        candidate = await probe_version(candidate)
+        version = candidate.version
         project = (args.project or Path.cwd()).resolve()
         if args.non_interactive:
             key = (read_secret_stdin() if sys_stdin_piped()

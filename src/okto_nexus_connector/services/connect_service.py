@@ -143,6 +143,8 @@ async def create_binding(http: NexusHTTPClient, store: StateStore,
         candidate_executable=candidate.executable,
         candidate_fingerprint=candidate.fingerprint,
         candidate_version=version or "",
+        candidate_build_identity=candidate.build_identity or "",
+        candidate_launch_script=candidate.launch_script or "",
         created_at=_now(),
     )
 

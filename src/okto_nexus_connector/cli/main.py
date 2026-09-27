@@ -84,9 +84,15 @@ def build_parser() -> argparse.ArgumentParser:
     replace.add_argument("--credential-stdin", action="store_true")
     replace.add_argument("--credential-env", default=None)
 
-    sub.add_parser("discover", help="local harness inventory (redacted)") \
-        .add_argument("--harness", default=None)
-
+    discover = sub.add_parser("discover",
+                              help="local harness inventory (redacted)")
+    discover.add_argument("--harness", default=None)
+    discover.add_argument("--pi-releases-root", default=None,
+                          help="passively enumerate Pi release layouts "
+                               "under this installation root")
+    discover.add_argument("--pi-node", default=None,
+                          help="trusted Node executable pairing the Pi "
+                               "releases")
     bind = sub.add_parser("bind", help="advanced binding management")
     bind_sub = bind.add_subparsers(dest="subcommand", required=True)
     bind_create = bind_sub.add_parser("create")

@@ -16,13 +16,13 @@ import pytest
 
 from nexus_connector_core import (
     CloseOperation, CoreError, EventCursor, ExecutionContext,
-    LaunchIntent, LocalRuntimeCore, OpenOperation, OperationKey,
+    LaunchIntent, OpenOperation, OperationKey, SQLiteOwnedSlotLedger,
     ReconcileRequest, SessionKey, ShutdownPolicy, TurnOperation,
 )
 from nexus_connector_core.journal import SQLiteJournal
 
 from okto_nexus_connector.services.core_host import (
-    CoreRuntimeHost, LaunchOverlay, LaunchSecretResolver,
+    LaunchOverlay, LaunchSecretResolver,
 )
 from okto_nexus_connector.storage.state_store import BindingRecord
 from tests.integration.conftest import RecordingFactory
@@ -52,29 +52,17 @@ def _context(lease: float = 60) -> ExecutionContext:
         frozenset({"runtime.open", "turn.submit", "runtime.close"}))
 
 
-def _make_host(root: Path, tmp_factory=None) -> CoreRuntimeHost:
-    host = CoreRuntimeHost.__new__(CoreRuntimeHost)
-    host.root = root
-    host._vault = None
-    from okto_nexus_connector.platform import paths
-    host._journal_path = paths.journal_path(root)
-    host._ledger_path = paths.owned_slot_ledger_path(root)
-    host._runtimes = {}
-    host._journals = []
-    host._ledgers = []
-    return host
-
-
 def _build_runtime(root: Path, binary: Path, factory: RecordingFactory
                    ) -> LocalRuntimeCore:
+    from nexus_connector_core import create_runtime
     journal = SQLiteJournal(root / "journal.db")
-    ledger_dir = root
-    from nexus_connector_core import SQLiteOwnedSlotLedger
-    ledger = SQLiteOwnedSlotLedger(ledger_dir / "slots.db")
-    return LocalRuntimeCore(
-        journal, factory,
+    ledger = SQLiteOwnedSlotLedger(root / "slots.db")
+    return create_runtime(
+        journal=journal,
+        environment=lambda prepared: {},
         candidates={"codex_app_server": _candidate(binary)},
         workspace_roots={WORKSPACE: str(root)},
+        native_factory=factory,
         owned_slot_ledger=ledger)
 
 
@@ -165,10 +153,12 @@ async def test_lease_clock_rollback_fences_new_work(workspace):
             return value
         def wall_time(self):
             return 0.0
-    runtime = LocalRuntimeCore(
-        journal, RecordingFactory(),
+    from nexus_connector_core import create_runtime
+    runtime = create_runtime(
+        journal=journal, environment=lambda prepared: {},
         candidates={"codex_app_server": _candidate(binary)},
-        workspace_roots={WORKSPACE: str(root)}, clock=RollingBackClock())
+        workspace_roots={WORKSPACE: str(root)},
+        native_factory=RecordingFactory(), clock=RollingBackClock())
     context = ExecutionContext(
         SERVER, EXECUTOR, "bind_r", AGENT, WORKSPACE, 1, 1, 1, 990.0,
         frozenset({"runtime.open", "turn.submit"}))
@@ -188,10 +178,12 @@ async def test_journal_full_blocks_admissions_honestly(workspace):
         server_operation_rows=4, server_reserved_operation_rows=2,
         session_operation_rows=4, session_reserved_operation_rows=2)
     journal = SQLiteJournal(root / "journal.db", limits=limits)
-    runtime = LocalRuntimeCore(
-        journal, RecordingFactory(),
+    from nexus_connector_core import create_runtime
+    runtime = create_runtime(
+        journal=journal, environment=lambda prepared: {},
         candidates={"codex_app_server": _candidate(binary)},
-        workspace_roots={WORKSPACE: str(root)})
+        workspace_roots={WORKSPACE: str(root)},
+        native_factory=RecordingFactory())
     context = _context()
     intent = LaunchIntent(AGENT, WORKSPACE, "codex_app_server")
     prepared = await runtime.prepare(intent, context)

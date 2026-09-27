@@ -89,8 +89,41 @@ The HTTPS client disables environment-proxy trust for loopback targets
 (development and contract peers) while keeping normal proxy behavior
 for remote origins; `NO_PROXY` exclusions are honored.
 
-## D12 — No publication
+## D13 — Core 0.2.0 adoption (C1/PC00–PC14)
+
+The connector consumes `nexus-connector-core==0.2.0.dev0` and follows
+the Core's updated public surface:
+
+- **`create_runtime` is the only composition path (PC06).** The private
+  `CopiedAdapterFactory` import was removed; the daemon builds every
+  runtime through the public factory, keeping the documented
+  `native_factory` seam exclusively for contract tests.
+- **One shared journal + one shared owned-slot ledger per daemon (PC01).**
+  Both now own an off-loop worker thread inside the Core; sharing a
+  single instance per installation avoids per-binding executors and is
+  the shape the Core's own consumer smoke demonstrates.
+- **Portable build identities (PC09) travel with bindings.**
+  `BindingRecord` records `candidate_build_identity` and
+  `candidate_launch_script`; `candidate_for` revalidates both the
+  path-bound fingerprint and the content identity, so moving an
+  installation still breaks the local binding while content drift is
+  caught even at the same path. Bindings created before 0.2.0 keep
+  working (path-bound only).
+- **Passive discovery helpers (PC10/RC-10-03).** `discover` integrates
+  the Core's npm-shim resolver and Pi release-layout enumeration — both
+  purely passive, never executing wrappers; refused shapes yield
+  nothing and explicit `--executable` remains the guaranteed path.
+- **Containment preflight (PC11) surfaced in `doctor`.** The binary layer
+  reports the backend requirements; managed launches refuse closed via
+  the Core's `PROCESS_CONTAINMENT_UNAVAILABLE` when they cannot be
+  honored.
+- Identifier policy (PC05), effect-frontier revalidation (PC03), EOF
+  fencing (PC04), tombstone release (PC07) and lease-containment
+  independence (PC02) are Core-internal and apply automatically.
+
+## D14 — No publication
 
 Wheel/sdist are built and hashed locally; no PyPI publication, no
 remote repository creation — both require explicit authorization per
-plan rules (A.1, A.17).
+plan rules (A.1, A.17). (Also recorded as D12 before the Core-0.2.0
+log insertion above.)

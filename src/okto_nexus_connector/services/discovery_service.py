@@ -1,15 +1,17 @@
 """Local harness inventory via the Core, without executing candidates.
 
 Discovery never authorizes anything and never collects secrets (plan 2.3,
-TC-11): candidates found on PATH or explicit paths are listed redacted;
-selection happens through explicit operator choice at connect time. The
-Core's sealed version probes are used only for explicitly selected
-candidates.
+TC-11): candidates found on PATH, through passive npm-shim resolution
+(Core 0.2.0 / RC-10-03) or from Pi release layouts (PC10) are listed
+redacted; selection happens through explicit operator choice at connect
+time. The Core's sealed version probes are used only for explicitly
+selected candidates and return the portable build identity (PC09).
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +29,11 @@ ADAPTER_LABELS = {
     "pi_rpc": "Pi RPC",
     "claude_stream": "Claude Code stream-json",
 }
+_SHIM_NAMES = {
+    "codex_app_server": "codex",
+    "pi_rpc": "pi",
+    "claude_stream": "claude",
+}
 
 
 @dataclass(slots=True)
@@ -38,6 +45,8 @@ class InventoryEntry:
     fingerprint: str
     version: str | None
     architecture: str | None
+    build_identity: str | None = None
+    launch_script: str | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -49,10 +58,26 @@ class InventoryEntry:
             "fingerprint": self.fingerprint,
             "version": self.version,
             "architecture": self.architecture,
+            "build_identity": self.build_identity,
+            "launch_script": self.launch_script,
         }
 
 
+def _entry_of(found) -> InventoryEntry:
+    return InventoryEntry(
+        adapter_id=found.adapter_id,
+        executable=found.executable,
+        source=found.source,
+        trust=found.trust,
+        fingerprint=found.fingerprint,
+        version=found.version,
+        architecture=found.architecture,
+        build_identity=found.build_identity,
+        launch_script=found.launch_script)
+
+
 async def discover_inventory(adapter_ids=ADAPTERS) -> list[InventoryEntry]:
+    adapter_ids = adapter_ids or ADAPTERS
     entries: list[InventoryEntry] = []
     for adapter_id in adapter_ids:
         try:
@@ -61,15 +86,59 @@ async def discover_inventory(adapter_ids=ADAPTERS) -> list[InventoryEntry]:
         except CoreError:
             continue
         for found in candidates:
-            entries.append(InventoryEntry(
-                adapter_id=found.adapter_id,
-                executable=found.executable,
-                source=found.source,
-                trust=found.trust,
-                fingerprint=found.fingerprint,
-                version=found.version,
-                architecture=found.architecture))
+            entries.append(_entry_of(found))
+    # Passive npm-shim resolution on Windows (Core 0.2.0): .cmd wrappers
+    # are parsed, never executed; only the two documented shim shapes
+    # yield candidates, everything else is refused honestly.
+    if os.name == "nt":
+        for adapter_id in adapter_ids:
+            for found in await asyncio.to_thread(
+                    shim_candidates, adapter_id):
+                if all(entry.executable != found.executable
+                       for entry in entries):
+                    entries.append(_entry_of(found))
     return entries
+
+
+def shim_candidates(adapter_id: str, *,
+                    path_env: str | None = None
+                    ) -> list[object]:
+    """Resolve known npm ``.cmd`` shims into real candidates, passively.
+
+    The wrapper itself is never executed (RC-10-03). Refused shapes —
+    dynamic expansion, non-.js targets, URLs — simply yield nothing;
+    explicit ``--executable`` remains the guaranteed selection path.
+    """
+    from nexus_connector_core.discovery import resolve_windows_npm_shim
+    name = _SHIM_NAMES.get(adapter_id)
+    if os.name != "nt" or name is None:
+        return []
+    found: dict[str, object] = {}
+    for directory in (path_env if path_env is not None else
+                      os.environ.get("PATH", "")).split(os.pathsep):
+        if not directory:
+            continue
+        shim = Path(directory) / f"{name}.cmd"
+        if not shim.is_file():
+            continue
+        try:
+            target = resolve_windows_npm_shim(shim)
+            candidate = make_candidate(adapter_id, target, explicit=True)
+        except (CoreError, OSError):
+            continue
+        found[candidate.executable] = candidate
+    return list(found.values())
+
+
+def pi_release_candidates(install_root: str | Path, node_path: str | Path,
+                          *, trusted_roots: tuple[Path, ...] = ()):
+    """Passive Pi release-layout discovery (Core 0.2.0 / PC10)."""
+    from nexus_connector_core.discovery import discover_pi_releases
+    try:
+        return list(discover_pi_releases(install_root, node_path,
+                                         trusted_roots=trusted_roots))
+    except CoreError as error:
+        raise ConnectorError(error.code, "discovery", str(error)) from None
 
 
 def select_explicit(adapter_id: str, executable: str | Path):
@@ -81,8 +150,12 @@ def select_explicit(adapter_id: str, executable: str | Path):
                              str(error), retry_safe=error.retry_safe) from None
 
 
-async def probe_version(selected) -> str | None:
-    """Sealed, secret-free ``--version`` probe for one selected candidate."""
+async def probe_version(selected):
+    """Sealed, secret-free ``--version`` probe for one selected candidate.
+
+    Returns the Core's updated candidate, carrying the observed version
+    and the portable ``build_identity`` when the layout provides one.
+    """
     import os
     from nexus_connector_core.discovery import (
         probe_selected_claude, probe_selected_codex, probe_selected_pi,
@@ -104,14 +177,14 @@ async def probe_version(selected) -> str | None:
             probed = await probe_selected_pi(selected, cwd=Path.cwd(),
                                              env=env)
         else:
-            return None
-        return probed.version
+            return selected
+        return probed
     except CoreError as error:
         raise ConnectorError(error.code, "probe", str(error)) from None
     except Exception:
         # A probe that cannot run or parse simply yields no version;
         # selection and qualification happen through the Core anyway.
-        return None
+        return selected
 
 
 def pi_candidate(node: str | Path, script: str | Path):
@@ -121,3 +194,9 @@ def pi_candidate(node: str | Path, script: str | Path):
         return candidate_pi_node_cli(node, script, explicit=True)
     except CoreError as error:
         raise ConnectorError(error.code, "selection", str(error)) from None
+
+
+def containment_status() -> dict[str, str]:
+    """Passive containment preflight (Core 0.2.0 / PC11) for doctor."""
+    from nexus_connector_core.native.process import containment_preflight
+    return containment_preflight()

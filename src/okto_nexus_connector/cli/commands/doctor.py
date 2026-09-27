@@ -119,6 +119,10 @@ async def run_doctor(args, output: Output, root: Path):
                                                 executable)
                     check("binary", binding.alias, "ok",
                           f"{candidate.executable} "
+                          f"{candidate.fingerprint[:19]}… "
+                          f"build={candidate.build_identity[:19]}…"
+                          if candidate.build_identity else
+                          f"{candidate.executable} "
                           f"{candidate.fingerprint[:19]}…")
                 except ConnectorError as error:
                     check("binary", binding.alias, "fail", error.message,
@@ -131,7 +135,26 @@ async def run_doctor(args, output: Output, root: Path):
     inventory = await discover_inventory()
     check("discovery", "candidates", "ok" if inventory else "warn",
           f"{len(inventory)} found",
-          "" if inventory else "install Codex/Pi/Claude locally")
+          "" if inventory else "install Codex/Pi/Claude locally or pass "
+          "--executable explicitly")
+
+    # containment preflight (Core 0.2.0 / PC11): productive launches
+    # refuse closed when the backend cannot honor its contract
+    try:
+        from ...services.discovery_service import containment_status
+        preflight = containment_status()
+        missing = [f"{name}: {detail}" for name, detail in
+                   preflight.items() if detail != "ok"]
+        check("containment", "preflight",
+              "ok" if not missing else "fail",
+              "; ".join(missing) if missing else
+              ", ".join(f"{k}=ok" for k in preflight),
+              "" if not missing else
+              "managed launches will be refused "
+              "(PROCESS_CONTAINMENT_UNAVAILABLE); run the daemon on a "
+              "platform with a qualified containment backend")
+    except Exception as exc:
+        check("containment", "preflight", "unknown", str(exc))
 
     # journal
     try:

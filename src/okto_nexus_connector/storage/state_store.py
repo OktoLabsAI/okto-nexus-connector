@@ -67,6 +67,10 @@ class BindingRecord:
     candidate_executable: str = ""
     candidate_fingerprint: str = ""
     candidate_version: str = ""
+    # Core 0.2.0 (PC09/PC12): portable build content identity and the Pi
+    # composite launch script; both travel with the selected candidate.
+    candidate_build_identity: str = ""
+    candidate_launch_script: str = ""
     created_at: str = ""
     mcp_entry_name: str = "nexus"
     tools_only: bool = False

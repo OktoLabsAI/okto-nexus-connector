@@ -7,7 +7,9 @@ identity/harness/project and administers managed runtimes through
 [`nexus-connector-core`](../okto-nexus-connector-core).
 
 - Distribution `okto-nexus-connector`, import `okto_nexus_connector`,
-  Python ≥ 3.11, entry point `okto-nexus-connector`.
+  Python ≥ 3.11, entry point `okto-nexus-connector`, consuming
+  `nexus-connector-core==0.2.0.dev0` (public `create_runtime`
+  composition).
 - **No MCP implementation of any transport.** Harness MCP clients talk
   directly to the Nexus Server over HTTP; the connector only *configures*
   those clients. Stdio of the native runtime protocols is not MCP.
