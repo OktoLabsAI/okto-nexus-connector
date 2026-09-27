@@ -212,7 +212,8 @@ class RuntimeManager:
             overlay.provider_home, overlay.trusted_home = \
                 self._provider_home(state, binding)
             environment = _environment_with(resolver, overlay)
-            runtime = self._host.build(binding, environment=environment)
+            runtime = await self._host.build(binding,
+                                             environment=environment)
 
             intent = LaunchIntent(
                 agent_id=binding.agent_id, workspace_id=binding.workspace_id,

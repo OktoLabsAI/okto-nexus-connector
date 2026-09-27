@@ -121,7 +121,28 @@ the Core's updated public surface:
   fencing (PC04), tombstone release (PC07) and lease-containment
   independence (PC02) are Core-internal and apply automatically.
 
-## D14 — No publication
+## D15 — Core 0.2.1.dev0 adoption (C2 reaudit R01–R10)
+
+- **R06 fix applied:** Pi build identities revalidate against the
+  pi-coding-agent **package** root (`parents[2]`), exactly matching the
+  Core's selection-time computation; a regression seed binds the two so
+  any future root drift fails loudly. Pi now qualifies **only** via the
+  portable identity (fingerprint stays the local binding proof) — the
+  connector already threads `build_identity` end-to-end since D13.
+- **Async journal lifecycle:** the daemon opens the shared journal via
+  `open_journal` (off-loop schema setup) and closes journal/ledger via
+  `aclose()` per the Core's PC01 transition notes.
+- **R08 composed discovery:** `create_runtime(pi_install_root=, pi_node=)`
+  is available for runtime-side discovery; the connector's daemon-less
+  CLI keeps the Core's public standalone helpers
+  (`discover_pi_releases`, `resolve_windows_npm_shim`) — same supported
+  resolver, no wrapper execution either way.
+- R01–R05, R07, R09, R10 are Core-internal or publish surfaces the
+  connector adopts transparently (e.g. `CodexResumeGrant` is now public
+  for the future resume seam; containment-gated probes surface their
+  missing-requirement map through our typed errors).
+
+## D16 — No publication
 
 Wheel/sdist are built and hashed locally; no PyPI publication, no
 remote repository creation — both require explicit authorization per

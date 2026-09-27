@@ -13,8 +13,8 @@ import pytest
 from okto_nexus_connector.errors import ConnectorError
 from okto_nexus_connector.services.core_host import CoreRuntimeHost
 from okto_nexus_connector.services.discovery_service import (
-    containment_status, pi_release_candidates, select_explicit,
-    shim_candidates,
+    containment_status, pi_candidate, pi_release_candidates,
+    select_explicit, shim_candidates,
 )
 from okto_nexus_connector.storage.state_store import BindingRecord
 
@@ -163,10 +163,15 @@ def test_containment_status_reports_backend():
 
 def test_pi_release_layout_discovered_passively(tmp_path: Path):
     node = _make_executable(tmp_path, "node.exe")
-    cli = tmp_path / "releases" / "0.87.1" / "node_modules" / \
-        "@earendil-works" / "pi-coding-agent" / "dist" / "bundle" / "cli.js"
+    package = tmp_path / "releases" / "0.87.1" / "node_modules" / \
+        "@earendil-works" / "pi-coding-agent"
+    cli = package / "dist" / "bundle" / "cli.js"
     cli.parent.mkdir(parents=True)
     cli.write_text("// pi cli", encoding="utf-8")
+    # C2: the package's declared version surfaces passively (no probe)
+    (package / "package.json").write_text(
+        '{"name": "@earendil-works/pi-coding-agent", "version": "0.87.1"}',
+        encoding="utf-8")
     # Outside trusted roots nothing is auto-trusted (passive, by design);
     # inside the approved root the composite candidate binds both parts.
     assert pi_release_candidates(tmp_path, node) == []
@@ -176,6 +181,7 @@ def test_pi_release_layout_discovered_passively(tmp_path: Path):
         assert len(found) == 1
         assert found[0].launch_script == str(cli)
         assert found[0].build_identity is not None
+        assert found[0].version == "0.87.1"
     else:
         assert found == []
 
@@ -185,3 +191,35 @@ def test_select_explicit_returns_core_candidate(tmp_path: Path):
     candidate = select_explicit("codex_app_server", binary)
     assert candidate.trust == "selected"
     assert candidate.build_identity  # PC09 identity attached at selection
+
+
+def test_pi_identity_root_consistent_between_selection_and_revalidation(
+        tmp_path: Path):
+    """C2/R06 regression seed: the revalidator must use the SAME package
+    root the Core uses at selection time (pi-coding-agent dir, parents[2]).
+    A parents[3] recompute yields a different identity → false drift."""
+    if os.name != "nt":
+        pytest.skip("composite selection needs a .exe node on Windows")
+    node = _make_executable(tmp_path, "node.exe")
+    package = tmp_path / "node_modules" / "@earendil-works" / \
+        "pi-coding-agent"
+    cli = package / "dist" / "bundle" / "cli.js"
+    cli.parent.mkdir(parents=True)
+    cli.write_text("// pi cli", encoding="utf-8")
+    (package / "package.json").write_text('{"version": "0.87.1"}',
+                                          encoding="utf-8")
+    selected = pi_candidate(node, cli)
+    assert selected.launch_script == str(cli)
+    assert selected.build_identity is not None
+    binding = BindingRecord(
+        binding_id="bind_pi", alias="pi", server_id="srv",
+        agent_id="ag", adapter_id="pi_rpc", executor_id="conn",
+        workspace_id="ws", workspace_root=str(tmp_path),
+        candidate_executable=str(node),
+        candidate_fingerprint=selected.fingerprint,
+        candidate_version="0.87.1",
+        candidate_build_identity=selected.build_identity,
+        candidate_launch_script=str(cli))
+    host = CoreRuntimeHost.__new__(CoreRuntimeHost)
+    candidate = host.candidate_for(binding)  # must NOT raise PROFILE_DRIFT
+    assert candidate.build_identity == selected.build_identity

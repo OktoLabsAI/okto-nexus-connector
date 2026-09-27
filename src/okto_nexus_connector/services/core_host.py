@@ -22,7 +22,7 @@ from nexus_connector_core import (
 )
 from nexus_connector_core.environment import child_environment
 from nexus_connector_core.harness_config import HarnessHTTPTemplate
-from nexus_connector_core.journal import SQLiteJournal
+from nexus_connector_core.journal import SQLiteJournal, open_journal
 from nexus_connector_core.ports import SecretResolver
 
 from ..errors import ConnectorError
@@ -93,9 +93,20 @@ class CoreRuntimeHost:
 
     @property
     def journal(self) -> SQLiteJournal:
-        """One shared journal (single off-loop worker) for the daemon."""
+        """Synchronous view of the shared journal (diagnostics/tests).
+
+        The daemon's event-loop paths construct through ``ensure_journal``
+        (the Core's async ``open_journal`` entry, C2/PC01.06) so the
+        blocking schema setup never runs on the loop.
+        """
         if self._journal is None:
             self._journal = SQLiteJournal(self._journal_path)
+        return self._journal
+
+    async def ensure_journal(self) -> SQLiteJournal:
+        """Open (once) the shared journal off the event loop."""
+        if self._journal is None:
+            self._journal = await open_journal(self._journal_path)
         return self._journal
 
     @property
@@ -162,11 +173,12 @@ class CoreRuntimeHost:
 
     # -- runtime composition ------------------------------------------------
 
-    def build(self, binding: BindingRecord, *, environment,
-              factory=None) -> LocalRuntimeCore:
+    async def build(self, binding: BindingRecord, *, environment,
+                    factory=None) -> LocalRuntimeCore:
         """Build (or reuse) the runtime instance for one binding.
 
-        Composed through the Core's public ``create_runtime`` (PC06).
+        Composed through the Core's public ``create_runtime`` (PC06),
+        with the journal opened off the loop (C2 async entry).
         ``factory`` is the documented trusted-host injection seam for
         contract tests; production always gets the real copied-adapter
         factory inside the Core.
@@ -175,8 +187,9 @@ class CoreRuntimeHost:
         if existing is not None:
             return existing
         candidate = self.candidate_for(binding)
+        journal = await self.ensure_journal()
         runtime = create_runtime(
-            journal=self.journal,
+            journal=journal,
             environment=environment,
             candidates={binding.adapter_id: candidate},
             workspace_roots={binding.workspace_id: binding.workspace_root},
@@ -204,10 +217,10 @@ class CoreRuntimeHost:
                 outcomes.append((key.session_id, str(outcome)))
             del self._runtimes[binding_id]
         if self._journal is not None:
-            self._journal.close()
+            await self._journal.aclose()
             self._journal = None
         if self._ledger is not None:
-            self._ledger.close()
+            await self._ledger.aclose()
             self._ledger = None
         return outcomes
 
@@ -252,7 +265,10 @@ def _current_build_identity(adapter_id: str, executable: Path,
     )
     try:
         if adapter_id == "pi_rpc" and launch_script is not None:
-            package_root = Path(launch_script).parents[3]
+            # C2/R06: the hashed unit is the pi-coding-agent PACKAGE
+            # directory (parents[2]); selection-time identities use the
+            # same root, so revalidation stays consistent.
+            package_root = Path(launch_script).parents[2]
             return pi_build_identity(executable, package_root)
         return executable_build_identity(executable)
     except (OSError, ValueError):
