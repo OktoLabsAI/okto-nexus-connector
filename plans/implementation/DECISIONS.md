@@ -142,7 +142,22 @@ the Core's updated public surface:
   for the future resume seam; containment-gated probes surface their
   missing-requirement map through our typed errors).
 
-## D16 — No publication
+## D17 — Core 0.2.3.dev0 adoption (C3 S01–S08 + C4 T01–T07)
+
+- The two reaudit campaigns are Core-internal hardening (one effective
+  clock, byte-frontier dispatch guards, lock-free lease CAS, dedicated
+  force pools, force-before-audit containment, bounded v3 manifests).
+  The connector needed only the version pin: `create_runtime` gained
+  the additive `cleanup_budget_seconds`, `CoreError.message` is
+  additive (our wrappers now surface real diagnostics with the stable
+  code), and the DispatchGuards seam leaves legacy contract factories
+  untouched.
+- Build-identity v3: revalidation recomputes through the Core's current
+  functions; pre-v3 recorded bindings drift honestly to `PROFILE_DRIFT`
+  with the re-qualify action — the standing cross-version policy since
+  D13/D15.
+
+## D18 — No publication
 
 Wheel/sdist are built and hashed locally; no PyPI publication, no
 remote repository creation — both require explicit authorization per
