@@ -192,7 +192,19 @@ shutdown, physical close units owned by the late-handle record).
 `composition.py`/`models.py` untouched; `create_runtime`'s signature
 unchanged (verified). Pin only.
 
-## D26 — No publication
+## D27 — Core 0.2.8.dev0 adoption (C9 catalog + Y01/Y02)
+
+**Catalog contract adopted (C9/C01):** the connector keeps no
+host-side adapter arrays — `discovery_service` derives adapters,
+display names, discoverability and npm-shim commands (via the
+catalog's `native_kind`) from `get_runtime_catalog()`; `claude_attach`
+is `registered_unqualified` and never enters managed flows. The only
+retained local table is npm-command naming (npm packaging detail, not
+adapter registry knowledge) and the MCP client-capability
+classification, which the catalog deliberately does not model. Y01/Y02
+are Core-internal.
+
+## D28 — No publication
 
 Wheel/sdist are built and hashed locally; no PyPI publication, no
 remote repository creation — both require explicit authorization per

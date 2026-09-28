@@ -21,7 +21,7 @@ from ...identity.vault import open_vault, vault_backend_names
 from ...platform import paths
 from ...services.connect_service import create_binding
 from ...services.discovery_service import (
-    ADAPTERS, discover_inventory, pi_candidate, probe_version,
+    discover_inventory, known_adapter, pi_candidate, probe_version,
     select_explicit,
 )
 from ...storage.state_store import StateStore
@@ -185,7 +185,7 @@ async def _choose_harness(args, output: Output):
     inventory = await discover_inventory()
     if args.harness:
         adapter_id = args.harness
-        if adapter_id not in ADAPTERS:
+        if not known_adapter(adapter_id):
             raise ConnectorError("VALIDATION_ERROR", "connect",
                                  f"unknown harness {adapter_id!r}")
     elif args.non_interactive:

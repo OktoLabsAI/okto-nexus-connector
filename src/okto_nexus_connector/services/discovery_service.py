@@ -15,7 +15,10 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from nexus_connector_core import CoreError, DiscoveryRequest, Inventory
+from nexus_connector_core import (
+    CoreError, DiscoveryRequest, Inventory, get_runtime_catalog,
+)
+from nexus_connector_core.catalog import RuntimeDescriptor
 from nexus_connector_core.discovery import (
     candidate as make_candidate,
     discover_path,
@@ -23,12 +26,47 @@ from nexus_connector_core.discovery import (
 
 from ..errors import ConnectorError
 
-ADAPTERS = ("codex_app_server", "pi_rpc", "claude_stream")
-ADAPTER_LABELS = {
-    "codex_app_server": "Codex app-server",
-    "pi_rpc": "Pi RPC",
-    "claude_stream": "Claude Code stream-json",
-}
+# C9/C01 contract: the Core's public catalog is the single source for
+# which adapters exist, their display names and whether they admit
+# discovery. The connector keeps NO host-side adapter arrays; the only
+# local table below is npm-shim naming (an npm packaging detail, not
+# adapter registry knowledge).
+
+#: npm command names for Windows shim resolution, keyed by the catalog's
+#: ``native_kind`` ("claude_code" ships as the ``claude`` command).
+_NPM_COMMAND_BY_KIND = {"codex": "codex", "pi": "pi",
+                        "claude_code": "claude"}
+
+
+def catalog_runtimes(*, discoverable_only: bool = False
+                     ) -> tuple[RuntimeDescriptor, ...]:
+    """Managed runtimes this Core build knows (public catalog)."""
+    return tuple(
+        descriptor for descriptor in get_runtime_catalog().runtimes
+        if descriptor.connection_mode == "managed"
+        and descriptor.support_status == "managed_supported"
+        and (not discoverable_only or descriptor.discoverable))
+
+
+def adapter_ids() -> tuple[str, ...]:
+    return tuple(descriptor.adapter_id
+                 for descriptor in catalog_runtimes())
+
+
+def display_name(adapter_id: str) -> str:
+    for descriptor in get_runtime_catalog().runtimes:
+        if descriptor.adapter_id == adapter_id:
+            return descriptor.display_name
+    return adapter_id
+
+
+def known_adapter(adapter_id: str) -> bool:
+    return adapter_id in adapter_ids()
+
+
+# Backwards-compatible module constants (derived from the catalog at
+# import; the catalog is sync, side-effect-free and immutable).
+ADAPTERS = adapter_ids()
 _SHIM_NAMES = {
     "codex_app_server": "codex",
     "pi_rpc": "pi",
@@ -51,7 +89,7 @@ class InventoryEntry:
     def to_json(self) -> dict[str, object]:
         return {
             "adapter_id": self.adapter_id,
-            "label": ADAPTER_LABELS.get(self.adapter_id, self.adapter_id),
+            "label": display_name(self.adapter_id),
             "executable": self.executable,
             "source": self.source,
             "trust": self.trust,
@@ -76,8 +114,16 @@ def _entry_of(found) -> InventoryEntry:
         launch_script=found.launch_script)
 
 
-async def discover_inventory(adapter_ids=ADAPTERS) -> list[InventoryEntry]:
-    adapter_ids = adapter_ids or ADAPTERS
+async def discover_inventory(adapter_ids=None) -> list[InventoryEntry]:
+    """Inventory over the catalog's discoverable managed adapters.
+
+    ``adapter_ids=None`` (the default) asks the catalog — the caller
+    never needs its own adapter array (C9/C01).
+    """
+    if adapter_ids is None:
+        adapter_ids = tuple(
+            descriptor.adapter_id for descriptor in
+            catalog_runtimes(discoverable_only=True))
     entries: list[InventoryEntry] = []
     for adapter_id in adapter_ids:
         try:
@@ -110,15 +156,17 @@ def shim_candidates(adapter_id: str, *,
     explicit ``--executable`` remains the guaranteed selection path.
     """
     from nexus_connector_core.discovery import resolve_windows_npm_shim
-    name = _SHIM_NAMES.get(adapter_id)
-    if os.name != "nt" or name is None:
+    if os.name != "nt" or not known_adapter(adapter_id):
+        return []
+    command = _npm_command(adapter_id)
+    if command is None:
         return []
     found: dict[str, object] = {}
     for directory in (path_env if path_env is not None else
                       os.environ.get("PATH", "")).split(os.pathsep):
         if not directory:
             continue
-        shim = Path(directory) / f"{name}.cmd"
+        shim = Path(directory) / f"{command}.cmd"
         if not shim.is_file():
             continue
         try:
@@ -139,6 +187,14 @@ def pi_release_candidates(install_root: str | Path, node_path: str | Path,
                                          trusted_roots=trusted_roots))
     except CoreError as error:
         raise ConnectorError(error.code, "discovery", str(error)) from None
+
+
+def _npm_command(adapter_id: str) -> str | None:
+    """npm command name for one adapter, via the catalog's native kind."""
+    for descriptor in catalog_runtimes():
+        if descriptor.adapter_id == adapter_id:
+            return _NPM_COMMAND_BY_KIND.get(descriptor.native_kind)
+    return None
 
 
 def select_explicit(adapter_id: str, executable: str | Path):

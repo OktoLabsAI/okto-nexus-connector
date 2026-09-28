@@ -3,8 +3,8 @@
 Statuses: NOT_RUN / PASS / FAIL. "contract" rows ran against the bundled
 fake peers (HTTP A.5 routes + NXL r3 WSS server side); they never close
 the homonymous real-environment cases. Environment for all PASS rows:
-Windows 11, Python 3.13.1, Core wheel 0.2.7.dev0 (SHA-256 ffe92e…b180).
-Evidence: [core027-alignment-2026-09-26](evidence/core027-alignment-2026-09-26.md).
+Windows 11, Python 3.13.1, Core wheel 0.2.8.dev0 (SHA-256 6f4823…e23a).
+Evidence: [core028-alignment-2026-09-26](evidence/core028-alignment-2026-09-26.md).
 
 | ID | Case | Status | Where / note |
 |---|---|---|---|
@@ -18,7 +18,7 @@ Evidence: [core027-alignment-2026-09-26](evidence/core027-alignment-2026-09-26.m
 | TC-08 | IPC unauthorized peer | PASS | tests/integration/test_daemon_app.py (denied before dispatch) |
 | TC-09 | Independent terminal | PASS | process test (CLI exits, daemon alive) + logs-stream follower close |
 | TC-10 | Daemon ≠ runtime | PASS | daemon boots with bindings registered; no harness spawns (suite-wide) |
-| TC-11 | Safe discovery | PASS | discovery never executes candidates; explicit selection only; npm shims resolved passively or refused (Core 0.2.0 shapes) |
+| TC-11 | Safe discovery | PASS | discovery never executes candidates; explicit selection only; npm shims resolved passively or refused; adapter set derived from the Core catalog (0.2.8) |
 | TC-12 | Complete connect | PASS | tests/e2e/test_cli_flows.py (guided, idempotent, no manual IDs) |
 | TC-13 | Setup failure/CAS | PASS | unit mcp-config tests (backup, retry-idempotent, third parties kept) |
 | TC-14 | Remote project paths | PASS | integration root-guard (other cwd refused; drift via fingerprint re-check) |
