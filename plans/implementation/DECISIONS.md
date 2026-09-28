@@ -175,7 +175,15 @@ additive `LEASE_UPDATE_PENDING` code (stable, retry-safe) flows
 through the connector's typed error mapping without change;
 `create_runtime`'s signature is unchanged (verified). Pin only.
 
-## D22 — No publication
+## D23 — Core 0.2.6.dev0 adoption (C7 W01–W04)
+
+Entirely Core-internal (common-model late-handle containment, single
+lease transition function, containment classification for negative
+approval replies, admission fencing before lease reads). `composition.py`
+and `models.py` untouched; `create_runtime`'s signature unchanged
+(verified). Pin only.
+
+## D24 — No publication
 
 Wheel/sdist are built and hashed locally; no PyPI publication, no
 remote repository creation — both require explicit authorization per

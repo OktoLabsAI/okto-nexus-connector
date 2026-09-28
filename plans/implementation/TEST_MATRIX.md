@@ -3,8 +3,8 @@
 Statuses: NOT_RUN / PASS / FAIL. "contract" rows ran against the bundled
 fake peers (HTTP A.5 routes + NXL r3 WSS server side); they never close
 the homonymous real-environment cases. Environment for all PASS rows:
-Windows 11, Python 3.13.1, Core wheel 0.2.5.dev0 (SHA-256 82c97d…7bfa).
-Evidence: [core025-alignment-2026-09-26](evidence/core025-alignment-2026-09-26.md).
+Windows 11, Python 3.13.1, Core wheel 0.2.6.dev0 (SHA-256 4c0987…a55f).
+Evidence: [core026-alignment-2026-09-26](evidence/core026-alignment-2026-09-26.md).
 
 | ID | Case | Status | Where / note |
 |---|---|---|---|
