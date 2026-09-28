@@ -166,7 +166,16 @@ unchanged (verified); the connector needed only the pin. The factory's
 new artifact seal strengthens our binding drift detection from inside
 the Core without any connector change.
 
-## D20 — No publication
+## D21 — Core 0.2.5.dev0 adoption (C6 V01–V03 + M01)
+
+Entirely Core-internal (single lease-update state machine with a
+productive-grant barrier, opening ownership surviving its waiter,
+two-phase approval reservation, enumeration budget boundary). The new
+additive `LEASE_UPDATE_PENDING` code (stable, retry-safe) flows
+through the connector's typed error mapping without change;
+`create_runtime`'s signature is unchanged (verified). Pin only.
+
+## D22 — No publication
 
 Wheel/sdist are built and hashed locally; no PyPI publication, no
 remote repository creation — both require explicit authorization per
