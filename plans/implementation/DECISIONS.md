@@ -183,7 +183,16 @@ approval replies, admission fencing before lease reads). `composition.py`
 and `models.py` untouched; `create_runtime`'s signature unchanged
 (verified). Pin only.
 
-## D24 — No publication
+## D25 — Core 0.2.7.dev0 adoption (C8 X01–X03)
+
+Entirely Core-internal (`runtime.py` only: SUPERSEDED lease
+classification fencing obsolete bindings via `STALE_GENERATION`,
+identifiable release obligations retried idempotently by the next
+shutdown, physical close units owned by the late-handle record).
+`composition.py`/`models.py` untouched; `create_runtime`'s signature
+unchanged (verified). Pin only.
+
+## D26 — No publication
 
 Wheel/sdist are built and hashed locally; no PyPI publication, no
 remote repository creation — both require explicit authorization per
