@@ -157,7 +157,16 @@ the Core's updated public surface:
   with the re-qualify action — the standing cross-version policy since
   D13/D15.
 
-## D18 — No publication
+## D19 — Core 0.2.4.dev0 adoption (C5 U01–U07)
+
+Entirely Core-internal (open-attempt containment, force worker, CAS
+reconciliation, byte-frontier guards for approvals and creators,
+`launch_artifact_signature` seals). `create_runtime`'s signature is
+unchanged (verified); the connector needed only the pin. The factory's
+new artifact seal strengthens our binding drift detection from inside
+the Core without any connector change.
+
+## D20 — No publication
 
 Wheel/sdist are built and hashed locally; no PyPI publication, no
 remote repository creation — both require explicit authorization per

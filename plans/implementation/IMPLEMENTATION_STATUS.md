@@ -1,13 +1,13 @@
-# Implementation status — 2026-09-26 (Core 0.2.3.dev0 aligned)
+# Implementation status — 2026-09-26 (Core 0.2.4.dev0 aligned)
 
 Connector `0.1.0.dev0`. Baseline: this repository, consuming the Core
-development wheel `nexus_connector_core-0.2.3.dev0` (SHA-256
-`128911353f4bd0d673e0390092e569605eaedf0a9e15a834e9c634a49f01dfe1`,
-source HEAD `3d304f9` — C1 + C2 + C3 + C4 reaudit campaigns).
+development wheel `nexus_connector_core-0.2.4.dev0` (SHA-256
+`d1a4d004c35605387d8c01d6b04c2fb5900c6277687966df812078d8265cdb65`,
+source HEAD `df3baaf` — C1 through C5 reaudit campaigns).
 
 The full automated suite passes locally on Windows 11 / Python 3.13.1:
 **115 passed, 1 skipped**
-([alignment evidence](evidence/core023-alignment-2026-09-26.md)). The
+([alignment evidence](evidence/core024-alignment-2026-09-26.md)). The
 joint multi-host/real-Server campaign (C11 / J-matrix) remains
 **blocked** below — mocks never close those gates.
 
