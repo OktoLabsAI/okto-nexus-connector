@@ -360,3 +360,52 @@ async def test_r4_core_turn_receipt_projection_precedes_http_publish():
     assert len(seen) == 1
     assert seen[0]["intent_hash"] == frame["intent_hash"]
     assert seen[0]["intent_hash"] != core_receipt.intent_hash
+
+
+async def test_r4_core_steer_receipt_projection_precedes_http_publish():
+    from nexus_connector_core import (
+        ExecutionContext, Operation, OperationReceipt, R4_PREVIEW_REVISION,
+        intent_hash, r4_submit_intent_hash,
+    )
+
+    frame = {
+        "protocol_major": 1, "contract_revision": R4_PREVIEW_REVISION,
+        "type": "operation.submit", "server_id": "srv",
+        "executor_id": "exe", "binding_id": "binding",
+        "agent_id": "agent", "workspace_id": "ws",
+        "workspace_binding_id": "workspace-binding",
+        "session_id": "session", "session_owner_generation": 1,
+        "authorization_revision": 1, "configuration_revision": 1,
+        "binding_revision": 1, "credential_epoch": 1,
+        "connection_id": "control", "connection_generation": 1,
+        "grant_id": "grant", "operation_id": "op",
+        "action": "turn.steer", "expected_turn_id": "turn-1",
+        "payload": {"text": "Change direction"},
+    }
+    frame["intent_hash"] = r4_submit_intent_hash(frame)
+    context = ExecutionContext("srv", "exe", "binding", "agent", "ws",
+                               1, 1, 1, 100.0,
+                               frozenset({"turn.steer"}))
+    semantic = Operation("op", "session", "turn.steer",
+                         {"text": "Change direction"}, "turn-1")
+    receipt = OperationReceipt(
+        "op", intent_hash(semantic, context), "SUBMITTED",
+        True, False, "session")
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.read()))
+        return httpx.Response(200, headers={
+            "X-Nexus-Connections-Revision": "nexus-connections-2026-09-29-r4",
+        }, json={"operation_id": "op", "receipt_revision": 1,
+                 "stage": "SUBMITTED", "accepted": True, "reused": False})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with client:
+        async with NexusHTTPClient("http://127.0.0.1:8202", client=client) as http:
+            accepted = await http.publish_core_steer_receipt(
+                "nxt4_binding-ticket", submit_frame=frame,
+                core_receipt=receipt, context=context, receipt_revision=1)
+    assert accepted.stage == "SUBMITTED"
+    assert len(seen) == 1
+    assert seen[0]["intent_hash"] == frame["intent_hash"]
