@@ -17,7 +17,9 @@ from urllib.parse import urlsplit
 import httpx
 
 if TYPE_CHECKING:
-    from nexus_connector_core import ExecutionContext, OperationReceipt
+    from nexus_connector_core import (
+        ExecutionContext, OperationReceipt, PreparedLaunch,
+    )
 
 from ..errors import ConnectorError
 from ..redaction import redact_text
@@ -720,6 +722,19 @@ class NexusHTTPClient:
         frame = project_r4_turn_receipt(
             submit_frame, core_receipt, context,
             receipt_revision=receipt_revision)
+        return await self.publish_operation_receipt(ticket, frame=frame)
+
+    async def publish_core_open_receipt(
+            self, ticket: str, *, submit_frame: dict[str, object],
+            core_receipt: OperationReceipt, context: ExecutionContext,
+            prepared: PreparedLaunch, stream_epoch: str,
+            receipt_revision: int) -> ReceiptAccepted:
+        """Verify a Core open receipt and its selected local launch."""
+        from nexus_connector_core import project_r4_open_receipt
+
+        frame = project_r4_open_receipt(
+            submit_frame, core_receipt, context, prepared,
+            stream_epoch=stream_epoch, receipt_revision=receipt_revision)
         return await self.publish_operation_receipt(ticket, frame=frame)
 
     async def publish_core_steer_receipt(
