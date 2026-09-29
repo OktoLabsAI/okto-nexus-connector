@@ -73,6 +73,51 @@ class R4Realization:
 
 
 @dataclass(frozen=True, slots=True)
+class R4BindingProposal:
+    proposal_id: str
+    proposal_revision: int
+    expires_at: str
+    server_id: str
+    executor_id: str
+    agent_id: str
+    binding_id: str
+    endpoint_id: str
+    workspace_id: str
+    workspace_binding_id: str
+    adapter_id: str
+    candidate_ref: str
+    inventory_revision: str
+    realization_ref: str
+    realization_revision: int
+    authorization_revision: int
+    configuration_revision: int
+    approved_diff_hash: str
+    summary: str
+    required_approvals: tuple[str, ...]
+    can_apply: bool
+
+
+@dataclass(frozen=True, slots=True)
+class R4BindingView:
+    binding_id: str
+    server_id: str
+    executor_id: str
+    agent_id: str
+    endpoint_id: str
+    workspace_id: str
+    workspace_binding_id: str
+    adapter_id: str
+    candidate_ref: str
+    inventory_revision: str
+    realization_ref: str
+    realization_revision: int
+    binding_revision: int
+    authorization_revision: int
+    configuration_revision: int
+    state: str
+
+
+@dataclass(frozen=True, slots=True)
 class ReceiptAccepted:
     operation_id: str
     receipt_revision: int
@@ -422,6 +467,108 @@ class NexusHTTPClient:
                                  "Server returned an invalid realization mapping")
         return R4Realization(**{name: payload[name] for name in identity},
                              realization_revision=payload["realization_revision"])
+
+    async def prepare_r4_binding(
+            self, key: str, *, client_intent_id: str,
+            executor_id: str, adapter_id: str, candidate_ref: str,
+            inventory_revision: str, realization_ref: str,
+            workspace_id: str, alias: str,
+            agent_id_hint: str | None = None) -> R4BindingProposal:
+        """Request a reviewable Server proposal without starting a runtime."""
+        body = {
+            "client_intent_id": client_intent_id,
+            "executor_id": executor_id, "adapter_id": adapter_id,
+            "candidate_ref": candidate_ref,
+            "inventory_revision": inventory_revision,
+            "realization_ref": realization_ref,
+            "workspace_id": workspace_id, "alias": alias,
+        }
+        if agent_id_hint is not None:
+            body["agent_id_hint"] = agent_id_hint
+        payload = await self._request(
+            "POST", "/v1/connections/bindings:prepare", key=key,
+            json_body=body, require_revision=True,
+        )
+        names = (
+            "proposal_id", "expires_at", "server_id", "executor_id",
+            "agent_id", "binding_id", "endpoint_id", "workspace_id",
+            "workspace_binding_id", "adapter_id", "candidate_ref",
+            "inventory_revision", "realization_ref",
+        )
+        diff = payload.get("diff")
+        if (any(not isinstance(payload.get(name), str) or not payload[name]
+                for name in names) or
+                any(payload[name] != body[name] for name in (
+                    "executor_id", "adapter_id", "candidate_ref",
+                    "inventory_revision", "realization_ref", "workspace_id")) or
+                (agent_id_hint is not None and payload["agent_id"] != agent_id_hint) or
+                any(type(payload.get(name)) is not int or payload[name] < 1
+                    for name in ("proposal_revision", "realization_revision",
+                                 "authorization_revision",
+                                 "configuration_revision")) or
+                not isinstance(diff, dict) or
+                not isinstance(diff.get("approved_diff_hash"), str) or
+                not diff["approved_diff_hash"].startswith("sha256:") or
+                not isinstance(diff.get("summary"), str) or
+                type(payload.get("can_apply")) is not bool or
+                not isinstance(payload.get("required_approvals"), list) or
+                any(not isinstance(item, str) for item in
+                    payload["required_approvals"])):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "binding_prepare",
+                                 "Server returned an invalid binding proposal")
+        return R4BindingProposal(
+            **{name: payload[name] for name in names},
+            proposal_revision=payload["proposal_revision"],
+            realization_revision=payload["realization_revision"],
+            authorization_revision=payload["authorization_revision"],
+            configuration_revision=payload["configuration_revision"],
+            approved_diff_hash=diff["approved_diff_hash"],
+            summary=diff["summary"],
+            required_approvals=tuple(payload["required_approvals"]),
+            can_apply=payload["can_apply"],
+        )
+
+    async def apply_r4_binding(
+            self, key: str, *, client_intent_id: str,
+            proposal: R4BindingProposal,
+            operator_proof_ref: str | None = None) -> R4BindingView:
+        """Commit only the exact reviewed proposal and check its resolution."""
+        body = {
+            "client_intent_id": client_intent_id,
+            "proposal_id": proposal.proposal_id,
+            "proposal_revision": proposal.proposal_revision,
+            "approved_diff_hash": proposal.approved_diff_hash,
+        }
+        if operator_proof_ref is not None:
+            body["operator_proof_ref"] = operator_proof_ref
+        payload = await self._request(
+            "POST", "/v1/connections/bindings:apply", key=key,
+            json_body=body, require_revision=True,
+        )
+        fields = (
+            "binding_id", "server_id", "executor_id", "agent_id",
+            "endpoint_id", "workspace_id", "workspace_binding_id",
+            "adapter_id", "candidate_ref", "inventory_revision",
+            "realization_ref", "state",
+        )
+        versions = (
+            "realization_revision", "binding_revision",
+            "authorization_revision", "configuration_revision",
+        )
+        if (any(not isinstance(payload.get(name), str) or not payload[name]
+                for name in fields) or
+                any(type(payload.get(name)) is not int or payload[name] < 1
+                    for name in versions) or
+                any(payload[name] != getattr(proposal, name) for name in (
+                    "binding_id", "server_id", "executor_id", "agent_id",
+                    "endpoint_id", "workspace_id", "workspace_binding_id",
+                    "adapter_id", "candidate_ref", "inventory_revision",
+                    "realization_ref", "realization_revision")) or
+                payload["state"] != "APPROVED"):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "binding_apply",
+                                 "Server returned an invalid binding resolution")
+        return R4BindingView(**{name: payload[name] for name in
+                               (*fields, *versions)})
 
     async def publish_operation_receipt(self, ticket: str, *,
                                         frame: dict[str, object]
