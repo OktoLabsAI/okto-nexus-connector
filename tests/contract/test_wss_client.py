@@ -160,14 +160,15 @@ async def test_receipt_roundtrip_for_remote_operation(peer):
     """Server-initiated submit produces a receipt frame back."""
     received: list[dict] = []
 
-    async def on_operation(frame):
-        received.append(dict(frame))
+    async def on_operation(operation):
+        # CN2/N01: the handler receives the ValidatedOperation DTO.
+        received.append(operation)
         from nexus_connector_core import OperationReceipt
         return OperationReceipt(
-            operation_id=str(frame["operation_id"]),
-            intent_hash=str(frame["intent_hash"]),
+            operation_id=operation.operation_id,
+            intent_hash=operation.intent_hash,
             stage="SUBMITTED", possible_effect=True, retry_safe=False,
-            session_id=str(frame["session_id"]))
+            session_id=operation.session_id)
     transport = _transport(peer, on_operation=on_operation)
     # CN1/A02: operations require a live negotiated lane scope.
     async def _lane_ticket():
@@ -213,9 +214,26 @@ async def test_intent_hash_enforced_by_codec_and_handler(peer):
 
     mismatches = []
 
-    async def on_operation(received):
-        if submit_frame_intent_hash(received) != received.get("intent_hash"):
-            mismatches.append(received.get("operation_id"))
+    async def on_operation(operation):
+        payload = {"server_id": operation.server_id,
+                   "executor_id": operation.executor_id,
+                   "binding_id": operation.binding_id,
+                   "agent_id": operation.agent_id,
+                   "workspace_id": operation.workspace_id,
+                   "workspace_binding_id": "wb",
+                   "session_id": operation.session_id,
+                   "operation_id": operation.operation_id,
+                   "action": operation.action,
+                   "connection_generation":
+                       operation.connection_generation,
+                   "authorization_revision":
+                       operation.authorization_revision,
+                   "configuration_revision":
+                       operation.configuration_revision,
+                   "payload": operation.payload,
+                   "intent_hash": operation.intent_hash}
+        if submit_frame_intent_hash(payload) != operation.intent_hash:
+            mismatches.append(operation.operation_id)
             raise ConnectorError("OPERATION_CONFLICT", "wss_submit",
                                  "hash mismatch")
         return None

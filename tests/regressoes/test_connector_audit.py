@@ -475,12 +475,12 @@ async def test_26_blocked_submit_does_not_block_received_control(
     controls: list[dict] = []
     submit_started = asyncio.Event()
 
-    async def on_operation(frame):
-        if frame.get("action") == "turn.submit":
+    async def on_operation(operation):
+        if operation.action == "turn.submit":
             submit_started.set()
             await asyncio.sleep(2.0)  # stuck submit
             return None
-        controls.append(dict(frame))
+        controls.append(operation)
         return None
 
     transport = _audit_transport(audit_peer, on_operation=on_operation)
@@ -848,21 +848,18 @@ async def test_17_reconcile_passes_originating_namespace_not_first_binding(
                 executor_id=f"exe_{srv}", workspace_id="ws",
                 workspace_root=str(tmp_path))))
 
-    async def fake_reconcile(self, request):
-        captured["server_id"] = request.server_id
-        from nexus_connector_core import ReconcileReport
-        return ReconcileReport((), ())
+    class _JournalStub:
+        async def get_receipt(self, key):
+            captured["server_id"] = key.server_id
+            captured["executor_id"] = key.executor_id
+            return None
 
-    from nexus_connector_core import LocalRuntimeCore
-    original = LocalRuntimeCore.reconcile
-    LocalRuntimeCore.reconcile = fake_reconcile
-    try:
-        result = await manager.reconcile(
-            server_id="srv_b", executor_id="exe_b",
-            operation_ids=[], session_ids=["s"])
-    finally:
-        LocalRuntimeCore.reconcile = original
-    assert captured.get("server_id") == "srv_b", \
+    manager._host._journal = _JournalStub()
+    result = await manager.reconcile(
+        server_id="srv_b", executor_id="exe_b",
+        operation_ids=["op_probe"], session_ids=[])
+    assert captured.get("server_id") == "srv_b" and \
+        captured.get("executor_id") == "exe_b", \
         f"reconcile used the wrong namespace: {captured} / {result}"
 
 

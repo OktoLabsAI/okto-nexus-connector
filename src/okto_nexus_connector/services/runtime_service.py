@@ -283,9 +283,21 @@ class RuntimeManager:
                     loopback_reachable=is_loopback,
                     approved_origins={server_origin},
                     format_qualified=True))
+            # CN2/N06.1 (b09): the URL/config reaches the harness
+            # process through an EPHEMERAL per-session provider home —
+            # a fresh directory containing ONLY the generated direct-
+            # HTTP MCP client config (no hooks, no user data). The
+            # token stays env-bound (never in the file); the file
+            # carries the Server URL + bearer env reference.
             overlay = LaunchOverlay(http_templates=tuple(templates))
-            overlay.provider_home, overlay.trusted_home = \
-                self._provider_home(state, binding)
+            ephemeral_home = self._mcp_session_home(
+                binding, resolution.session_id, templates)
+            if ephemeral_home is not None:
+                overlay.provider_home = str(ephemeral_home)
+                overlay.trusted_home = True  # our own fresh directory
+            else:
+                overlay.provider_home, overlay.trusted_home = \
+                    self._provider_home(state, binding)
             resolver = LaunchSecretResolver(self._vault, capabilities)
             environment = _environment_with(resolver, overlay)
             # CN1/A10: ONE runtime per session — each launch resolves
@@ -365,7 +377,8 @@ class RuntimeManager:
                 http, key, receipt, session.binding, "turn.submit",
                 {"text_length": len(text)})
         session.last_receipt = receipt
-        session.lease_deadline = time.monotonic() + 90.0
+        # CN2-01.03: no local lease resurrection on submit completion -
+        # only an authorized renewal advances the deadline.
         return {"session_id": session_id, "receipt": _receipt_json(receipt)}
 
     # -- observation --------------------------------------------------------
@@ -482,18 +495,45 @@ class RuntimeManager:
                     "error": error.to_json(),
                     "note": "close outcome is unknown; the session stays "
                             "managed and a new stop re-contains it"}
-        # Physical result gates removal (CN1/A08, test_14).
-        stage = receipt.stage if receipt else "OUTCOME_UNKNOWN"
-        if stage == "OUTCOME_UNKNOWN":
+        except CoreError as error:
+            # CN2/N05 (b07[core_exception]): typed Core failure during
+            # close. A proven pre-admission/pre-effect refusal releases
+            # only the stop reservation (retryable); anything else is
+            # unknown and keeps the session managed.
+            if error.retry_safe and not error.possible_effect:
+                session.closing = False
+                session.stop_attempt = None
+                raise ConnectorError(error.code, error.stage,
+                                     error.message or error.code,
+                                     retry_safe=True,
+                                     action="The close was refused before "
+                                            "any effect; retry the stop.") \
+                    from None
             session.stop_attempt.phase = "unknown"
-            session.stop_attempt.receipt = receipt
+            session.stop_attempt.receipt = None
+            return {"session_id": session_id,
+                    "receipt": None,
+                    "outcome": "unknown",
+                    "error": {"code": error.code, "stage": error.stage},
+                    "note": "close outcome is unknown; the session stays "
+                            "managed and a new stop re-contains it"}
+        # CN2/N05 (b07[failed_receipt]): typed receipt classification.
+        self._classify_close_receipt(session, receipt)
+        if session.stop_attempt is not None and \
+                session.stop_attempt.phase == "unknown":
             return {"session_id": session_id,
                     "receipt": _receipt_json(receipt),
                     "outcome": "unknown",
                     "note": "close outcome is unknown; the session stays "
                             "managed and a new stop re-contains it"}
-        session.stop_attempt.phase = "resolved"
-        self._cleanup(session)
+        if session.stop_attempt is None:
+            # FAILED pre-effect: released, retryable, session stays.
+            return {"session_id": session_id,
+                    "receipt": _receipt_json(receipt),
+                    "outcome": "failed_pre_effect",
+                    "note": "the close failed before any effect; the "
+                            "session stays managed and the stop can be "
+                            "retried"}
         return {"session_id": session_id,
                 "receipt": _receipt_json(receipt),
                 "semantics": "stop: closes resources owned by this daemon; "
@@ -513,11 +553,23 @@ class RuntimeManager:
         """
         session = self.session(session_id)
         runtime = self._runtime_of(session)
-        context = self._authorized_context(session)
+        # CN2/N06.2 (b08): the action derives from the validated
+        # decision; the DTO is built with NAMED fields (the old
+        # positional call inverted request/decision and the context
+        # lacked its required action argument -> TypeError).
+        action = ("input.provide" if decision.startswith("input")
+                  else "approval.decide")
+        context = self._authorized_context(
+            session, action,
+            containment=decision in ("deny", "decline",
+                                     "input.decline"))
         receipt = await runtime.decide_native_approval(
-            NativeApprovalOperation(operation_id, session_id, decision,
-                                    dict(request) if request else {},
-                                    dict(response) if response else None),
+            NativeApprovalOperation(
+                operation_id=operation_id,
+                session_id=session_id,
+                request=dict(request) if request else {},
+                decision=decision,
+                operator_response=dict(response) if response else None),
             context)
         session.last_receipt = receipt
         return {"session_id": session_id,
@@ -569,85 +621,120 @@ class RuntimeManager:
                                  "runtime instance is gone")
         return runtime
 
-    async def submit_remote(self, session_id: str, operation_id: str,
-                            text: str, binding_id: str, *,
-                            expected_turn_id: str | None = None):
+    def _resolve_remote_session(self, operation) -> ManagedSession:
+        """CN2/N01 (b03): resolve ONLY in the wire's authenticated
+        namespace - a textual session id that happens to exist under
+        ANOTHER Server never matches; the resolved session must agree
+        with the envelope's binding/agent/workspace or the frame is
+        refused with zero effects."""
+        session = self.session_by_key(SessionKey(
+            operation.server_id, operation.executor_id,
+            operation.session_id))
+        binding = session.binding
+        if (binding.binding_id != operation.binding_id or
+                binding.agent_id != operation.agent_id or
+                binding.workspace_id != operation.workspace_id):
+            raise ConnectorError(
+                "BINDING_NOT_AUTHORIZED", "wss_scope",
+                "the authenticated envelope does not match the session "
+                "resolved in its namespace",
+                action="The frame targets a different binding/agent/"
+                       "workspace; the connector refuses to remap it.")
+        return session
+
+    async def submit_remote(self, operation):
         """Apply a Server-initiated turn submit under its operation ID."""
-        session = self.session(session_id)
-        if session.binding.binding_id != binding_id:
-            raise ConnectorError("BINDING_NOT_AUTHORIZED", "wss_submit",
-                                 "session belongs to another binding")
+        session = self._resolve_remote_session(operation)
         runtime = self._runtime_of(session)
         context = self._authorized_context(session, "turn.submit")
         receipt = await runtime.submit(
-            TurnOperation(operation_id, session_id, text,
-                          expected_turn_id=expected_turn_id), context)
+            TurnOperation(operation.operation_id, operation.session_id,
+                          str(operation.payload.get("text", "")),
+                          expected_turn_id=operation.expected_turn_id),
+            context)
         session.last_receipt = receipt
         return receipt
 
-    async def steer_remote(self, session_id: str, operation_id: str,
-                           text: str, binding_id: str, *,
-                           expected_turn_id: str | None = None):
+    async def steer_remote(self, operation):
         """Apply a Server-initiated steer preserving the native turn ID."""
-        session = self.session(session_id)
-        if session.binding.binding_id != binding_id:
-            raise ConnectorError("BINDING_NOT_AUTHORIZED", "wss_steer",
-                                 "session belongs to another binding")
+        session = self._resolve_remote_session(operation)
         runtime = self._runtime_of(session)
         context = self._authorized_context(session, "turn.steer")
         receipt = await runtime.control(
-            ControlOperation(operation_id, session_id, "steer", text,
-                             expected_turn_id=expected_turn_id), context)
+            ControlOperation(operation.operation_id, operation.session_id,
+                             "steer",
+                             str(operation.payload.get("text", "")),
+                             expected_turn_id=operation.expected_turn_id),
+            context)
         session.last_receipt = receipt
         return receipt
 
-    async def interrupt_remote(self, session_id: str, operation_id: str,
-                               binding_id: str, *,
-                               expected_turn_id: str | None = None):
+    async def interrupt_remote(self, operation):
         """Apply a Server-initiated interrupt under its operation ID."""
-        session = self.session(session_id)
-        if session.binding.binding_id != binding_id:
-            raise ConnectorError("BINDING_NOT_AUTHORIZED", "wss_interrupt",
-                                 "session belongs to another binding")
+        session = self._resolve_remote_session(operation)
         runtime = self._runtime_of(session)
-        # Containment is always authorized on the live authorized grant:
-        # deny/interrupt/force stay available past a lease deadline.
+        # Containment of an authorized resource stays available past a
+        # lease deadline (Core semantics); it grants nothing new.
         context = self._authorized_context(session, "turn.interrupt",
                                            containment=True)
         receipt = await runtime.control(
-            ControlOperation(operation_id, session_id, "interrupt",
-                             expected_turn_id=expected_turn_id), context)
+            ControlOperation(operation.operation_id, operation.session_id,
+                             "interrupt",
+                             expected_turn_id=operation.expected_turn_id),
+            context)
         session.last_receipt = receipt
         return receipt
 
-    async def close_remote(self, session_id: str, operation_id: str,
-                           binding_id: str):
+    async def close_remote(self, operation):
         """Close through the SERVER's operation id and return ITS receipt.
 
-        CN1/A11 (test: remote close recebe e devolve o mesmo ID): no
-        second HTTP resolution, no locally-minted stop id.
+        CN1/A11 (same-ID receipt) + CN2/N05 classification: FAILED with
+        no effect releases only the stop reservation; unknown keeps the
+        session under management.
         """
-        session = self.session(session_id)
-        if session.binding.binding_id != binding_id:
-            raise ConnectorError("BINDING_NOT_AUTHORIZED", "wss_close",
-                                 "session belongs to another binding")
+        session = self._resolve_remote_session(operation)
         runtime = self._runtime_of(session)
         session.closing = True
         if session.stop_attempt is None:
-            session.stop_attempt = StopAttempt(operation_id)
+            session.stop_attempt = StopAttempt(operation.operation_id)
         session.stop_attempt.phase = "closing"
         context = self._authorized_context(session, "runtime.close",
                                            containment=True)
-        receipt = await runtime.close(
-            CloseOperation(operation_id, session_id), context)
-        stage = receipt.stage
-        if stage != "OUTCOME_UNKNOWN":
-            session.stop_attempt.phase = "resolved"
-            self._cleanup(session)
-        else:
+        try:
+            receipt = await runtime.close(
+                CloseOperation(operation.operation_id,
+                               operation.session_id), context)
+        except CoreError as error:
+            # CN2/N05: a typed pre-effect refusal releases the stop
+            # reservation (retryable); anything else is unknown.
+            if error.retry_safe and not error.possible_effect:
+                session.closing = False
+                session.stop_attempt = None
+                raise ConnectorError(error.code, error.stage,
+                                     error.message or error.code,
+                                     retry_safe=True) from None
+            session.stop_attempt.phase = "unknown"
+            raise
+        self._classify_close_receipt(session, receipt)
+        return receipt
+
+    def _classify_close_receipt(self, session: ManagedSession,
+                                receipt) -> None:
+        """CN2/N05 (b07): typed receipt classification - only a proven
+        physical/durable completion removes management; FAILED with no
+        effect releases just the stop reservation."""
+        stage = receipt.stage if receipt is not None else "OUTCOME_UNKNOWN"
+        if stage == "OUTCOME_UNKNOWN":
             session.stop_attempt.phase = "unknown"
             session.stop_attempt.receipt = receipt
-        return receipt
+            return
+        if stage == "FAILED" and not receipt.possible_effect:
+            # Proven pre-effect failure: retryable, session stays.
+            session.closing = False
+            session.stop_attempt = None
+            return
+        session.stop_attempt.phase = "resolved"
+        self._cleanup(session)
 
     def _authorized_context(self, session: ManagedSession,
                             action: str, *,
@@ -706,31 +793,62 @@ class RuntimeManager:
         state = self._store.load()
         bindings = ([b for b in state.bindings if b.server_id == server_id]
                     if server_id else list(state.bindings))
+        if not bindings:
+            return {"receipts": [], "snapshots": []}
+        namespace_server = server_id or bindings[0].server_id
+        namespace_executor = executor_id or bindings[0].executor_id
+        # CN2/N04 (b10): durable history comes from the PUBLIC Journal
+        # port — a receipt is answerable even after the executable was
+        # removed; a missing live handle is unknown ownership, never
+        # "operation did not exist".
+        receipts = []
+        snapshots = []
+        journal = self._host.journal_if_open()
+        if journal is not None:
+            from nexus_connector_core import OperationKey
+            for operation_id in operation_ids:
+                durable = await journal.get_receipt(OperationKey(
+                    namespace_server, namespace_executor, operation_id))
+                if durable is not None:
+                    receipts.append({"operation_id": durable.operation_id,
+                                     "stage": durable.stage})
+            for session_id in session_ids:
+                snapshots.append({"session_id": session_id,
+                                  "ownership": "unknown"})
+        if not session_ids:
+            # Live observation only when a live runtime of THIS
+            # namespace exists (its own session runtimes included).
+            runtime = self._live_runtime_for(state, namespace_server)
+            if runtime is not None:
+                report: ReconcileReport = await runtime.reconcile(
+                    ReconcileRequest(namespace_server, namespace_executor,
+                                     operation_ids, session_ids))
+                receipts = [{"operation_id": receipt.operation_id,
+                             "stage": receipt.stage}
+                            for receipt in report.receipts
+                            if receipt is not None]
+                snapshots = [{"session_id": snapshot.session_id,
+                              "ownership": snapshot.ownership}
+                             for snapshot in report.snapshots]
+        return {"receipts": receipts, "snapshots": snapshots}
+
+    def _live_runtime_for(self, state: ConnectorState,
+                          server_id: str):
+        """A LIVE runtime of this namespace (binding-level or any
+        session-scoped instance); None when nothing is live — history
+        still answers via the journal."""
         runtime = None
-        for binding in bindings:
+        for binding in state.bindings:
+            if binding.server_id != server_id:
+                continue
             runtime = self._host.get(binding.binding_id, binding.server_id)
             if runtime is not None:
-                break
-        if runtime is None and bindings:
-            async def _no_environment(prepared):
-                return {}
-            runtime = await self._host.build(
-                bindings[0], environment=_no_environment)
-        if runtime is None:
-            return {"receipts": [], "snapshots": []}
-        report: ReconcileReport = await runtime.reconcile(ReconcileRequest(
-            server_id or bindings[0].server_id,
-            executor_id or bindings[0].executor_id,
-            operation_ids, session_ids))
-        receipts = [{"operation_id": receipt.operation_id,
-                     "stage": receipt.stage}
-                    for receipt in report.receipts if receipt is not None]
-        snapshots = []
-        for snapshot in report.snapshots:
-            snapshots.append({
-                "session_id": snapshot.session_id,
-                "ownership": snapshot.ownership})
-        return {"receipts": receipts, "snapshots": snapshots}
+                return runtime
+        for key, candidate in getattr(self._host, "_runtimes",
+                                       {}).items():
+            if key.server_id == server_id:
+                return candidate
+        return runtime
 
     # -- internals ----------------------------------------------------------
 
@@ -786,6 +904,37 @@ class RuntimeManager:
             raise ConnectorError("SERVER_ID_CHANGED", "transport",
                                  "server profile missing locally")
         return profile.base_url
+
+    def _mcp_session_home(self, binding: BindingRecord, session_id: str,
+                          templates: list) -> Path | None:
+        """CN2/N06.1: ephemeral per-session config directory.
+
+        Contains ONLY the generated MCP client entries (codex TOML /
+        claude JSON via the Core's public renderers). The harness reads
+        its config from HOME (codex: ~/.codex/config.toml; claude:
+        ~/.claude.json), so provider_home points at this fresh tree;
+        provider credentials flow separately through approved secret
+        references, never through this directory.
+        """
+        if not templates:
+            return None
+        home = Path(self._host.root) / "runtime" / "mcp" / session_id
+        home.mkdir(parents=True, exist_ok=True)
+        from nexus_connector_core.harness_config import \
+            render_codex_toml_fragment
+        import json as _json
+        for template in templates:
+            if template.adapter_id == "codex_app_server":
+                codex_dir = home / ".codex"
+                codex_dir.mkdir(exist_ok=True)
+                (codex_dir / "config.toml").write_text(
+                    render_codex_toml_fragment(template), encoding="utf-8")
+            elif template.adapter_id == "claude_stream":
+                document = {"mcpServers": {
+                    template.entry_name: template.entry()}}
+                (home / ".claude.json").write_text(
+                    _json.dumps(document, indent=2), encoding="utf-8")
+        return home
 
     def _provider_home(self, state: ConnectorState, binding: BindingRecord
                        ) -> tuple[str | None, bool]:

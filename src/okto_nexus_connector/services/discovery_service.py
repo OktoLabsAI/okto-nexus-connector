@@ -256,3 +256,49 @@ def containment_status() -> dict[str, str]:
     """Passive containment preflight (Core 0.2.0 / PC11) for doctor."""
     from nexus_connector_core.native.process import containment_preflight
     return containment_preflight()
+
+
+def evaluate_availability(candidates):
+    """CN2/N09 (CN-07.04): the Core's PUBLIC per-candidate technical
+    availability assessment — never a connector-side allowlist."""
+    from nexus_connector_core import evaluate_runtime_availability
+    return evaluate_runtime_availability(candidates)
+
+
+def availability_snapshot(candidates) -> dict[str, object]:
+    """CN2/N09 (CN-07.05): versioned, path-free executor projection.
+
+    The revision derives from the CURRENT evidence (sorted refs +
+    versions), not the state schema version — installing/updating a
+    build changes it. Only the executing host's assessment is
+    published; the Server applies policy, never its own OS view.
+    """
+    import hashlib as _hashlib
+    report = evaluate_availability(candidates)
+    projection = report.to_dict()
+    rows = projection["availability"]
+    evidence = "|".join(sorted(
+        f"{row['candidate_ref']}@{row.get('version') or '?'}"
+        f":{row['state']}" for row in rows))
+    revision = "inv1:" + _hashlib.sha256(
+        evidence.encode("utf-8")).hexdigest()[:16]
+    return {
+        "format_version": projection["format_version"],
+        "platform": projection["platform"],
+        "executor_revision": revision,
+        "rows": rows,
+    }
+
+
+def resolve_selection(candidates, adapter_id: str, candidate_ref: str):
+    """CN2/N09: exact ONE-candidate resolution via the Core's public
+    resolver (typed REF_NOT_FOUND / REF_AMBIGUOUS; never index 0)."""
+    from nexus_connector_core import resolve_installation
+    try:
+        return resolve_installation(candidates, adapter_id, candidate_ref)
+    except CoreError as error:
+        raise ConnectorError(error.code, "selection", error.message or
+                             error.code,
+                             action="Reselect the installation "
+                                    "explicitly; identical copies are "
+                                    "ambiguous by construction.") from None

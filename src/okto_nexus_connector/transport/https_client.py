@@ -19,7 +19,8 @@ from ..errors import ConnectorError
 from ..redaction import redact_text
 
 DEFAULT_TIMEOUT = httpx.Timeout(15.0, connect=10.0)
-_USER_AGENT = "okto-nexus-connector/0.1.0.dev0"
+_USER_AGENT = "okto-nexus-connector/" + __import__(
+    "okto_nexus_connector").__version__
 
 
 @dataclass(frozen=True, slots=True)

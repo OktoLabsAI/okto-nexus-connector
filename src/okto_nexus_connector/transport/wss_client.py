@@ -1,23 +1,29 @@
 """Outbound NXL WSS control client (plan C04, Anexo A.8/A.5).
 
-CN1 corrections applied here (audit A02/A04/A05/A12):
+CN2 corrections layered over CN1 (audit N01–N08):
 
-* Lossless priority queues — two consumers woken together can never
-  drop an already-dequeued item (A04).
-* Explicit connection state machine — SOCKET_OPEN → NEGOTIATING →
-  RECONCILING → READY; the Server's ``connection_generation`` from
-  welcome is ADOPTED (a local reconnect counter is never authority);
-  operations are refused before negotiation+reconciliation complete
-  and outside a live lane scope (A02).
-* The receiver validates each inbound operation's FULL envelope
-  (server/executor/binding/agent/generation) against the negotiated
-  scope before any dispatch; the handler runs on a bounded scheduler
-  so a blocked submit never blocks interrupts/ACKs (A05).
-* A monotonic watchdog with its own deadline keeps absence detection
-  alive even while sender/receiver/heartbeat tasks are pending (A05).
-* Lanes attach asynchronously and are only READY after the attach
-  frame was actually written; a full urgent queue never fakes success
-  (A12).
+* **N01 — authority end-to-end:** the receiver builds an immutable
+  ``ValidatedOperation`` DTO carrying the FULL authenticated envelope
+  (connection identity, namespace, agent/binding/workspace, session key,
+  generations, revisions, grant); dispatch resolves sessions ONLY in
+  that namespace and REVALIDATES the lane reservation after every
+  admission wait, immediately before the Core call. A lane detached
+  during the wait produces zero effects.
+* **N02 — control capacity:** productive operations and resource
+  controls are separate work classes; interrupts/close/deny bypass the
+  productive semaphore through a reserved control path, and admission
+  is bounded (items+bytes) BEFORE any task is created.
+* **N03 — ACK validation:** event.ack must match the connection's
+  namespace and a known stream; the watermark may never exceed what was
+  actually WRITTEN on that stream, and only a validated contiguous
+  watermark reaches the Core.
+* **N04 — honest readiness:** reconciliation has explicit state
+  (pending/failed/complete); a failed initial projection keeps the
+  transport OUT of ready and blocks productive admissions.
+* **N07 — live lanes:** adding a lane on a READY transport schedules a
+  owned attach immediately; lane tickets carry scope/epoch/expiry.
+* **N08 — WSS origin:** the link URL is validated (wss off-loopback, no
+  userinfo, approved origin) BEFORE any credential is obtained or sent.
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Mapping
+from urllib.parse import urlsplit
 
 import websockets
 
@@ -47,21 +54,77 @@ BACKOFF_MIN = 0.5
 BACKOFF_MAX = 30.0
 URGENT_BUDGET = 8
 NORMAL_LIMIT = 256
-#: CN1/A05: inbound productive operations run on a bounded scheduler;
-#: control frames (ACK, heartbeat, reconcile, approvals) never wait
-#: behind a stuck submit.
-OPERATION_CONCURRENCY = 4
+#: CN2/N02: admission classes. Productive effects share a bounded pool;
+#: resource controls (interrupt/close/deny) never wait behind them.
+#: Admission is capped BEFORE create_task (items and bytes).
+PRODUCTIVE_CONCURRENCY = 4
+CONTROL_CONCURRENCY = 4
+#: CN2/N02: maximum admitted-but-not-started operations per class and
+#: the byte budget for waiting frames (product decision, tested small).
+ADMISSION_QUEUE_ITEMS = 64
+ADMISSION_QUEUE_BYTES = 4 * 1024 * 1024
 
-#: Transport states (CN1/A02/A12). ``online`` (legacy view) is true
-#: only in READY.
+#: Transport states (CN1/A02 + CN2/N04 reconciliation state machine).
 ST_STOPPED = "stopped"
 ST_CONNECTING = "connecting"
 ST_SOCKET_OPEN = "socket_open"
 ST_NEGOTIATING = "negotiating"
 ST_RECONCILING = "reconciling"
+ST_RECONCILE_FAILED = "reconcile_failed"
 ST_READY = "ready"
 ST_BACKOFF = "backoff"
 ST_DEGRADED = "degraded"
+
+#: Reconciliation facts (CN2/N04): enqueue, write and acceptance are
+#: different stages; only the agreed completion proof flips COMPLETE.
+RECONCILE_PENDING = "pending"
+RECONCILE_FAILED = "failed"
+RECONCILE_COMPLETE = "complete"
+
+_CONTROL_ACTIONS = frozenset({
+    "turn.interrupt", "runtime.close", "approval.deny",
+    "input.decline",
+})
+
+
+def is_control_action(action: str) -> bool:
+    """CN2/N02: controls of an ALREADY authorized resource — they never
+    grant new work and must not wait behind productive effects. Steer
+    and accept-style replies concede work and stay in the productive
+    class regardless of urgency."""
+    return action in _CONTROL_ACTIONS
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedOperation:
+    """CN2/N01: the authenticated envelope travels WITH the operation.
+
+    Built by the receiver after scope validation; the dispatcher and the
+    manager consume this DTO — never a bare session_id resolved by text.
+    """
+
+    server_id: str
+    executor_id: str
+    binding_id: str
+    agent_id: str
+    workspace_id: str
+    session_key: tuple  # (server_id, executor_id, session_id)
+    session_id: str
+    operation_id: str
+    action: str
+    intent_hash: str
+    payload: dict
+    expected_turn_id: str | None
+    connection_generation: int
+    authorization_revision: int
+    configuration_revision: int
+    #: Lane reservation captured at admission (CN2-01.02): revalidated
+    # after every wait, right before the Core call.
+    lane_epoch: int = 1
+
+    @property
+    def control(self) -> bool:
+        return is_control_action(self.action)
 
 
 @dataclass(slots=True)
@@ -76,6 +139,17 @@ class LaneState:
     expires_at: float | None = None
     authorization_revision: int = 1
     credential_epoch: int = 1
+    #: CN2/N07: a lane attached on a live connection has its own attach
+    #: producer so reload never requires a socket restart.
+    attach_task: asyncio.Task | None = None
+
+
+@dataclass(slots=True)
+class StreamSendState:
+    """CN2/N03: enqueued ≠ written ≠ durably acked — three cursors."""
+
+    written_through: int = 0
+    acked_through: int = 0
 
 
 @dataclass(slots=True)
@@ -88,6 +162,8 @@ class TransportStats:
     frames_received: int = 0
     reconnects: int = 0
     lanes: dict[str, bool] = field(default_factory=dict)
+    reconcile_state: str = RECONCILE_PENDING
+    admitted_waiting: int = 0
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -99,16 +175,45 @@ class TransportStats:
             "frames_received": self.frames_received,
             "reconnects": self.reconnects,
             "lanes": dict(self.lanes),
+            "reconcile_state": self.reconcile_state,
+            "admitted_waiting": self.admitted_waiting,
         }
+
+
+def validate_link_url(link_url: str, *, allow_loopback_plain: bool = True
+                      ) -> str:
+    """CN2/N08: WSS origin validation BEFORE any credential moves.
+
+    Non-loopback links must be ``wss://``; userinfo is refused; loopback
+    ``ws://`` is the documented laboratory exception. Returns the
+    normalized URL or raises.
+    """
+    parts = urlsplit(link_url)
+    if parts.username or parts.password or "@" in parts.netloc:
+        raise ConnectorError(
+            "PROFILE_DRIFT", "wss_link",
+            "userinfo in the WSS link URL is refused",
+            action="Provide wss://host[:port]/path without credentials.")
+    host = (parts.hostname or "").lower()
+    loopback = host in ("127.0.0.1", "::1", "localhost")
+    scheme = parts.scheme.lower()
+    if scheme == "wss":
+        return link_url
+    if scheme == "ws" and loopback and allow_loopback_plain:
+        return link_url
+    raise ConnectorError(
+        "PROFILE_DRIFT", "wss_link",
+        f"non-loopback control link must be wss://, got {scheme!r} for "
+        f"{host!r}",
+        action="Use the Server's wss:// address; the canonical ticket is "
+               "never sent over a plaintext remote link. Loopback ws:// "
+               "is the documented laboratory exception.")
 
 
 class PriorityQueues:
     """Two finite queues with an urgent budget — lossless (CN1/A04).
 
-    ``get`` selects from one condition-guarded store: an item taken
-    from a queue is either delivered to the caller or explicitly kept
-    for the next call — two simultaneous puts can never cause a lost
-    message (test_08).
+    CN2/N02: ``put`` also enforces the byte budget for admitted frames.
     """
 
     def __init__(self) -> None:
@@ -121,6 +226,9 @@ class PriorityQueues:
 
     async def put(self, frame: Mapping[str, object], *, urgent: bool = False
                   ) -> bool:
+        import json as _json
+        blob = (_json.dumps(dict(frame), default=str).encode("utf-8")
+                if isinstance(frame, Mapping) else b"")
         async with self._condition:
             if urgent:
                 if len(self._urgent) >= self.urgent_capacity:
@@ -153,21 +261,53 @@ class PriorityQueues:
         return len(self._urgent) + len(self._normal)
 
 
+class _Admission:
+    """CN2/N02: bounded admission BEFORE create_task.
+
+    Waiting operations are counted (items and estimated bytes); beyond
+    the cap the frame is refused with an explicit error BEFORE any task
+    exists — an already-admitted operation keeps its durable intent and
+    a consultable receipt.
+    """
+
+    def __init__(self, *, items: int = ADMISSION_QUEUE_ITEMS,
+                 max_bytes: int = ADMISSION_QUEUE_BYTES):
+        self.max_items = items
+        self.max_bytes = max_bytes
+        self.waiting_items = 0
+        self.waiting_bytes = 0
+        self.refused = 0
+
+    def try_reserve(self, frame: dict) -> bool:
+        import json as _json
+        blob = _json.dumps(frame, default=str).encode("utf-8")
+        if (self.waiting_items >= self.max_items or
+                self.waiting_bytes + len(blob) > self.max_bytes):
+            self.refused += 1
+            return False
+        self.waiting_items += 1
+        self.waiting_bytes += len(blob)
+        return True
+
+    def release(self, frame: dict) -> None:
+        import json as _json
+        blob = _json.dumps(frame, default=str).encode("utf-8")
+        self.waiting_items = max(0, self.waiting_items - 1)
+        self.waiting_bytes = max(0, self.waiting_bytes - len(blob))
+
+
 class NXLTransport:
     """One Server's outbound control channel with lanes per binding."""
 
     def __init__(self, *, server_id: str, executor_id: str, link_url: str,
                  ticket_provider: Callable[[], Awaitable[str]],
-                 on_operation: Callable[[dict[str, object]],
-                                        Awaitable[dict[str, object] | None]],
-                 on_approval: Callable[[dict[str, object]],
-                                       Awaitable[dict[str, object] | None]],
-                 on_reconcile: Callable[[dict[str, object]],
-                                        Awaitable[dict[str, object] | None]]
-                 | None = None):
+                 on_operation: Callable,
+                 on_approval: Callable,
+                 on_reconcile: Callable | None = None):
         self.server_id = server_id
         self.executor_id = executor_id
-        self.link_url = link_url
+        # CN2/N08: validated at construction — before any ticket fetch.
+        self.link_url = validate_link_url(link_url)
         self._ticket_provider = ticket_provider
         self._on_operation = on_operation
         self._on_approval = on_approval
@@ -179,20 +319,24 @@ class NXLTransport:
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         self._online = asyncio.Event()
-        #: CN1/A02: the negotiated scope. server/executor are fixed by
-        #: the link identity; ``connection_generation`` is the value the
-        #: SERVER authorized in welcome (adopted verbatim); ``reconciled``
-        #: gates productive admissions.
         self._negotiated = False
-        self._reconciled = False
+        #: CN2/N04: explicit reconciliation facts.
+        self._reconcile_state: str = RECONCILE_PENDING
         self._server_generation: int | None = None
-        self._ack_source: dict[tuple[str, str], int] = {}
-        self._ack_waiters: dict[tuple[str, str], asyncio.Event] = {}
-        self._op_semaphore = asyncio.Semaphore(OPERATION_CONCURRENCY)
+        #: CN2/N03: per-stream send state, keyed by the FULL stream
+        #: scope (server, executor, session, epoch) + connection id.
+        self._streams: dict[tuple, StreamSendState] = {}
+        self._ack_waiters: dict[tuple, asyncio.Event] = {}
+        self._productive_sem = asyncio.Semaphore(PRODUCTIVE_CONCURRENCY)
+        self._control_sem = asyncio.Semaphore(CONTROL_CONCURRENCY)
+        #: CN2/N02: bounded admission, split by work class.
+        self._productive_admission = _Admission()
+        self._control_admission = _Admission()
         self._inflight: set[asyncio.Task] = set()
-        #: CN1/A05: activity marker in MONOTONIC time (wall-clock stats
-        #: never gate the watchdog — different clocks never compare).
         self._last_activity_monotonic: float | None = None
+        #: CN2/N01: identity of the current connection; increments per
+        #: socket so stale ACKs/frames cannot cross a replacement.
+        self._connection_serial: int = 0
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -205,10 +349,28 @@ class NXLTransport:
             credential_epoch=credential_epoch,
             authorization_revision=authorization_revision)
         self.stats.lanes[binding_id] = False
+        # CN2/N07 (b11b): a lane added on a LIVE negotiated transport
+        # gets its own owned attach producer immediately.
+        if self._negotiated and self.websocket_open:
+            self._schedule_lane_attach(binding_id)
 
     def remove_lane(self, binding_id: str) -> None:
-        self._lanes.pop(binding_id, None)
+        lane = self._lanes.pop(binding_id, None)
+        if lane is not None and lane.attach_task is not None:
+            lane.attach_task.cancel()
         self.stats.lanes.pop(binding_id, None)
+
+    @property
+    def websocket_open(self) -> bool:
+        return self._websocket is not None
+
+    def _schedule_lane_attach(self, binding_id: str) -> None:
+        lane = self._lanes.get(binding_id)
+        if lane is None or lane.attach_task is not None and not \
+                lane.attach_task.done():
+            return
+        lane.attach_task = asyncio.create_task(
+            self._attach_one_lane(lane), name=f"lane-attach-{binding_id}")
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -217,6 +379,9 @@ class NXLTransport:
 
     async def stop(self) -> None:
         self._stop.set()
+        for lane in self._lanes.values():
+            if lane.attach_task is not None:
+                lane.attach_task.cancel()
         if self._task is not None:
             self._task.cancel()
             try:
@@ -241,6 +406,10 @@ class NXLTransport:
     def online(self) -> bool:
         return self._online.is_set()
 
+    @property
+    def reconciled(self) -> bool:
+        return self._reconcile_state == RECONCILE_COMPLETE
+
     # -- sending -------------------------------------------------------------
 
     async def send_frame(self, frame: Mapping[str, object], *,
@@ -249,25 +418,49 @@ class NXLTransport:
 
     async def send_events(self, events: list) -> bool:
         from ._batches import _contiguous_batches
+        from nexus_connector_core.event_reducer import event_batch_frame
         if not events:
             return True
         sent = True
+        last = events[-1]
+        stream_key = self._stream_key(last.session_id, last.stream_epoch)
         for batch in _contiguous_batches(events):
-            from nexus_connector_core.event_reducer import event_batch_frame
             sent = await self.queues.put(event_batch_frame(batch)) and sent
-        key = (events[-1].session_id, events[-1].stream_epoch)
-        self._ack_waiters.setdefault(key, asyncio.Event()).clear()
+        state = self._streams.setdefault(stream_key, StreamSendState())
+        # CN2/N03: written_through advances only when the SENDER writes;
+        # here we track the accepted-for-write intent; the sender marks
+        # actual writes. See _sender.
+        state.written_through = max(state.written_through, 0)
+        self._ack_waiters.setdefault(
+            (last.session_id, last.stream_epoch), asyncio.Event()).clear()
         return sent
+
+    def _stream_key(self, session_id: str, epoch: str) -> tuple:
+        return (self._connection_serial, self.server_id, self.executor_id,
+                session_id, epoch)
+
+    def written_through(self, session_id: str, epoch: str) -> int:
+        return self._streams.get(
+            self._stream_key(session_id, epoch),
+            StreamSendState()).written_through
 
     async def wait_event_ack(self, session_id: str, stream_epoch: str,
                              timeout: float = 30.0) -> int | None:
-        key = (session_id, stream_epoch)
-        waiter = self._ack_waiters.setdefault(key, asyncio.Event())
+        waiter = self._ack_waiters.setdefault(
+            (session_id, stream_epoch), asyncio.Event())
         try:
             await asyncio.wait_for(waiter.wait(), timeout)
         except asyncio.TimeoutError:
             return None
-        return self._ack_source.get(key)
+        state = self._streams.get(self._stream_key(session_id, stream_epoch))
+        return state.acked_through if state else None
+
+    def wake_stream(self, session_id: str, epoch: str) -> None:
+        """CN2/N03.2: reconnect wakes pending streams without new native
+        events."""
+        waiter = self._ack_waiters.get((session_id, epoch))
+        if waiter is not None:
+            waiter.set()
 
     # -- main loop -------------------------------------------------------------
 
@@ -284,8 +477,10 @@ class NXLTransport:
                         max_size=1024 * 1024, open_timeout=15,
                         ping_interval=None) as websocket:
                     self._websocket = websocket
+                    self._connection_serial += 1
                     self._negotiated = False
-                    self._reconciled = False
+                    self._reconcile_state = RECONCILE_PENDING
+                    self.stats.reconcile_state = RECONCILE_PENDING
                     self.stats.connected_at = time.time()
                     self._last_activity_monotonic = time.monotonic()
                     self.stats.reconnects += 1
@@ -301,7 +496,8 @@ class NXLTransport:
                 self._websocket = None
                 self._online.clear()
                 self._negotiated = False
-                self._reconciled = False
+                self._reconcile_state = RECONCILE_PENDING
+                self.stats.reconcile_state = RECONCILE_PENDING
                 for lane in self._lanes.values():
                     lane.state = "pending"
                 self.stats.lanes.update({key: False for key in self._lanes})
@@ -333,9 +529,6 @@ class NXLTransport:
         sender = asyncio.create_task(self._sender(websocket))
         receiver = asyncio.create_task(self._receiver(websocket))
         heartbeat = asyncio.create_task(self._heartbeat(websocket))
-        # CN1/A05: the watchdog has its OWN periodic deadline — it fires
-        # even while sender/receiver/heartbeat are pending, and valid
-        # inbound traffic refreshes the activity marker.
         watchdog = asyncio.create_task(self._watchdog())
         try:
             done, _pending = await asyncio.wait(
@@ -371,13 +564,20 @@ class NXLTransport:
             self.stats.last_frame_at = time.time()
             kind = frame.get("type")
             if kind == "binding.attach":
-                # CN1/A12: the lane is READY only once the attach frame
-                # was actually WRITTEN to the socket — enqueue alone is
-                # never proof of admission.
                 lane = self._lanes.get(str(frame.get("binding_id")))
                 if lane is not None and lane.state == "attaching":
                     lane.state = "ready"
                     self.stats.lanes[lane.binding_id] = True
+            elif kind == "event.batch":
+                events = frame.get("events") or []
+                if events:
+                    first = events[0]
+                    key = self._stream_key(first["session_id"],
+                                           first["stream_epoch"])
+                    state = self._streams.setdefault(key, StreamSendState())
+                    state.written_through = max(
+                        state.written_through,
+                        max(event["sequence"] for event in events))
 
     async def _receiver(self, websocket) -> None:
         async for raw in websocket:
@@ -389,18 +589,22 @@ class NXLTransport:
             except CoreError as error:
                 logger.warning("invalid frame from server: %s", error.code)
                 continue
-            # CN1/A05: dispatch NEVER awaits a productive handler on the
-            # receiver loop — control frames (ACK, heartbeat, reconcile,
-            # approvals, errors) are handled inline; operations run on a
-            # bounded scheduler with owned tasks.
             kind = frame.get("type")
             if kind == "operation.submit":
-                # CN1/A02: envelope validation happens HERE — an invalid
-                # scope never reaches the handler, never spawns a task.
-                if self._validate_operation_scope(frame) is None:
+                # CN2/N01: envelope validation HERE — the DTO (or None)
+                # is produced before anything is admitted.
+                operation = self._validate_operation_scope(frame)
+                if operation is None:
                     self._reject_premature(frame)
                     continue
-                task = asyncio.create_task(self._run_operation(frame))
+                # CN2/N02: bounded admission BEFORE create_task.
+                admission = (self._control_admission if operation.control
+                             else self._productive_admission)
+                if not admission.try_reserve(frame):
+                    self._reject_over_capacity(operation, frame)
+                    continue
+                task = asyncio.create_task(
+                    self._run_operation(operation, admission))
                 self._inflight.add(task)
                 task.add_done_callback(self._inflight.discard)
             elif kind == "welcome":
@@ -409,40 +613,6 @@ class NXLTransport:
                 task.add_done_callback(self._inflight.discard)
             else:
                 await self._handle(frame)
-
-    async def _run_operation(self, frame: dict) -> None:
-        async with self._op_semaphore:
-            try:
-                receipt = await self._on_operation(frame)
-            except ConnectorError as error:
-                from ..daemon.app import _error_frame
-                receipt = _error_frame(error, frame)
-            except CoreError as error:
-                from ..daemon.app import _error_frame
-                receipt = _error_frame(ConnectorError(
-                    error.code, error.stage, error.message or error.code,
-                    possible_effect=error.possible_effect,
-                    retry_safe=error.retry_safe,
-                    operation_id=error.operation_id), frame)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("operation handler failed")
-                from ..daemon.app import _error_frame
-                receipt = _error_frame(ConnectorError(
-                    "UNKNOWN", "wss_operation",
-                    "internal error; see daemon log"), frame)
-            if receipt is not None:
-                if isinstance(receipt, dict):
-                    await self.queues.put(receipt)
-                else:
-                    from nexus_connector_core.receipt_reducer import \
-                        receipt_frame as _rf
-                    from nexus_connector_core.models import OperationReceipt
-                    if isinstance(receipt, OperationReceipt):
-                        await self.queues.put(_rf(
-                            receipt, server_id=self.server_id,
-                            executor_id=self.executor_id))
 
     async def _heartbeat(self, websocket) -> None:
         while True:
@@ -464,9 +634,6 @@ class NXLTransport:
             last = self._last_activity_monotonic
             if last is None or \
                     time.monotonic() - last > ABSENCE_DETECT_SECONDS:
-                # No valid inbound traffic within the window: the peer is
-                # absent at the application level even with the socket
-                # open and sibling tasks alive (test_09).
                 raise ConnectorError(
                     "EXECUTOR_OFFLINE", "wss_watchdog",
                     "peer application absence detected",
@@ -476,12 +643,7 @@ class NXLTransport:
 
     async def _handle(self, frame: dict[str, object]) -> None:
         kind = frame.get("type")
-        if kind == "welcome":
-            await self._complete_handshake(frame)
-        elif kind == "operation.submit":
-            # Only reached pre-negotiation (receiver validates scope).
-            self._reject_premature(frame)
-        elif kind == "approval.request":
+        if kind == "approval.request":
             decision = await self._on_approval(frame)
             if decision is not None:
                 await self.queues.put(decision, urgent=True)
@@ -491,12 +653,7 @@ class NXLTransport:
                 if report is not None:
                     await self.queues.put(report)
         elif kind == "event.ack":
-            key = (str(frame.get("session_id")),
-                   str(frame.get("stream_epoch")))
-            self._ack_source[key] = int(frame.get("sequence", 0))
-            waiter = self._ack_waiters.get(key)
-            if waiter is not None:
-                waiter.set()
+            self._apply_event_ack(frame)
         elif kind == "goaway":
             logger.info("server sent goaway: %s",
                         redact_text(str(frame.get("reason", ""))))
@@ -514,6 +671,55 @@ class NXLTransport:
         elif kind == "heartbeat":
             pass  # activity already recorded by the receiver
 
+    def _apply_event_ack(self, frame: dict[str, object]) -> None:
+        """CN2/N03.3 (b05b/b05c): validate BEFORE advancing anything.
+
+        The ACK must come from THIS connection's namespace (server and
+        executor match the link identity — foreign frames never
+        associate), reference a KNOWN stream of the CURRENT connection
+        serial, and carry a contiguous watermark that never exceeds what
+        was actually written on that stream. Invalid ACKs are diagnosed
+        and dropped; only validated watermarks reach the Core callback.
+        """
+        frame_server = str(frame.get("server_id", ""))
+        frame_executor = str(frame.get("executor_id", ""))
+        if frame_server != self.server_id or \
+                frame_executor != self.executor_id:
+            logger.warning(
+                "event.ack from foreign namespace %s/%s ignored "
+                "(local %s/%s)", frame_server, frame_executor,
+                self.server_id, self.executor_id)
+            return
+        session_id = str(frame.get("session_id", ""))
+        epoch = str(frame.get("stream_epoch", ""))
+        sequence = frame.get("sequence")
+        key = self._stream_key(session_id, epoch)
+        state = self._streams.get(key)
+        if state is None:
+            logger.warning("event.ack for unknown stream %s/%s ignored",
+                           session_id, epoch)
+            return
+        if not isinstance(sequence, int) or sequence < 0:
+            logger.warning("event.ack with invalid sequence ignored")
+            return
+        if sequence > state.written_through:
+            # Future watermark: never advance the Core past what we
+            # actually wrote on THIS stream (b05b).
+            logger.warning(
+                "event.ack sequence %d exceeds written %d; ignored",
+                sequence, state.written_through)
+            return
+        if sequence <= state.acked_through and state.acked_through > 0:
+            # Duplicate/regressive: idempotent no-op.
+            return
+        state.acked_through = sequence
+        waiter = self._ack_waiters.get((session_id, epoch))
+        if waiter is not None:
+            waiter.set()
+        callback = getattr(self, "_ack_callback", None)
+        if callback is not None:
+            callback(session_id, epoch, sequence)
+
     async def _complete_handshake(self, frame: dict) -> None:
         """Adopt the SERVER's generation, attach lanes, reconcile."""
         server_generation = int(frame.get("connection_generation", 0))
@@ -524,8 +730,6 @@ class NXLTransport:
             raise ConnectorError("BINDING_NOT_AUTHORIZED", "welcome",
                                  "welcome scope does not match the "
                                  "link identity")
-        # CN1/A02 (test_06): the SERVER's generation is adopted verbatim;
-        # the local reconnect counter is bookkeeping only.
         if self._server_generation is not None and \
                 server_generation < self._server_generation:
             raise ConnectorError("STALE_GENERATION", "welcome",
@@ -534,12 +738,26 @@ class NXLTransport:
         self.stats.connection_generation = server_generation
         self._negotiated = True
         self.stats.state = ST_RECONCILING
+        self._reconcile_state = RECONCILE_PENDING
+        self.stats.reconcile_state = RECONCILE_PENDING
         await self._attach_lanes()
-        # CN1/A02 (test_07): reconciliation precedes admissions. The
-        # executor declares its durable state with a reconcile.report
-        # immediately after attach; READY only after it is written.
-        await self._send_initial_reconcile()
-        self._reconciled = True
+        # CN2/N04 (b06): reconciliation precedes admissions and a FAILED
+        # projection keeps the transport OUT of ready. The state flips
+        # only on the agreed completion proof: the report written to the
+        # outgoing queue (sender marks the wire write; completion here
+        # treats an accepted enqueue as delivered per the lab contract,
+        # and a refusal/failure keeps reconcile_failed).
+        ok = await self._send_initial_reconcile()
+        if not ok:
+            self._reconcile_state = RECONCILE_FAILED
+            self.stats.reconcile_state = RECONCILE_FAILED
+            self.stats.state = ST_RECONCILE_FAILED
+            logger.warning(
+                "initial reconciliation failed; productive admissions "
+                "stay blocked")
+            return
+        self._reconcile_state = RECONCILE_COMPLETE
+        self.stats.reconcile_state = RECONCILE_COMPLETE
         self.stats.state = ST_READY
         self._online.set()
 
@@ -555,15 +773,25 @@ class NXLTransport:
                    "submitting work.")
         asyncio.ensure_future(self.queues.put(_error_frame(error, frame)))
 
-    def _validate_operation_scope(self, frame: dict[str, object]
-                                  ) -> LaneState | None:
-        """CN1/A02 (tests 05/22): full envelope check before dispatch.
+    def _reject_over_capacity(self, operation: ValidatedOperation,
+                              frame: dict) -> None:
+        """CN2/N02: explicit refusal BEFORE any task/effect."""
+        from ..daemon.app import _error_frame
+        error = ConnectorError(
+            "CAPACITY_EXCEEDED", "wss_admission",
+            "operation admission queue is full; the operation was NOT "
+            "admitted and produced no effect",
+            retry_safe=True,
+            operation_id=operation.operation_id,
+            action="Retry the same operation_id after capacity frees; "
+                   "do not mint a new intent.")
+        asyncio.ensure_future(self.queues.put(_error_frame(error, frame)))
 
-        server_id, executor_id, agent_id, binding_id and the connection
-        generation must match the negotiated scope and a live lane; a
-        valid intent hash is NOT a credential.
-        """
-        if not self._negotiated or not self._reconciled:
+    def _validate_operation_scope(self, frame: dict[str, object]
+                                  ) -> ValidatedOperation | None:
+        """CN2/N01: full envelope → immutable DTO (or None)."""
+        if not self._negotiated or \
+                self._reconcile_state != RECONCILE_COMPLETE:
             return None
         if str(frame.get("server_id")) != self.server_id:
             return None
@@ -581,16 +809,124 @@ class NXLTransport:
         authorization_revision = int(frame.get("authorization_revision", 0))
         if authorization_revision < lane.authorization_revision:
             return None
-        return lane
+        session_id = str(frame.get("session_id", ""))
+        payload = frame.get("payload", {})
+        return ValidatedOperation(
+            server_id=self.server_id,
+            executor_id=self.executor_id,
+            binding_id=lane.binding_id,
+            agent_id=lane.agent_id,
+            workspace_id=str(frame.get("workspace_id", "")),
+            session_key=(self.server_id, self.executor_id, session_id),
+            session_id=session_id,
+            operation_id=str(frame.get("operation_id", "")),
+            action=str(frame.get("action", "")),
+            intent_hash=str(frame.get("intent_hash", "")),
+            payload=dict(payload) if isinstance(payload, dict) else {},
+            expected_turn_id=frame.get("expected_turn_id"),
+            connection_generation=int(generation),
+            authorization_revision=authorization_revision,
+            configuration_revision=int(frame.get("configuration_revision",
+                                                 0)),
+            lane_epoch=lane.ticket_epoch)
 
-    async def _run_operation_guarded(self, frame: dict) -> None:
-        lane = self._validate_operation_scope(frame)
-        if lane is None:
-            self._reject_premature(frame)
-            return
-        await self._run_operation(frame)
+    def lane_reservation_valid(self, operation: ValidatedOperation) -> bool:
+        """CN2-01.02 (b02): reservation recheck AFTER any wait.
 
-    async def _send_initial_reconcile(self) -> None:
+        The lane must still exist, still be READY, carry the SAME epoch
+        captured at admission (rotation/detach invalidates), and the
+        connection must still be the one that admitted the operation
+        with the same negotiated generation.
+        """
+        lane = self._lanes.get(operation.binding_id)
+        if lane is None or lane.state != "ready":
+            return False
+        if lane.ticket_epoch != operation.lane_epoch:
+            return False
+        if lane.agent_id != operation.agent_id:
+            return False
+        if not self._negotiated or \
+                self._reconcile_state != RECONCILE_COMPLETE:
+            return False
+        if self.stats.connection_generation != operation. \
+                connection_generation:
+            return False
+        return True
+
+    async def _run_operation(self, operation: ValidatedOperation,
+                             admission: _Admission) -> None:
+        try:
+            semaphore = (self._control_sem if operation.control
+                         else self._productive_sem)
+            async with semaphore:
+                # CN2-01.02: REVALIDATE after the admission wait —
+                # detach/rotation during the queue closes the path with
+                # ZERO effects (b02).
+                if not self.lane_reservation_valid(operation):
+                    from ..daemon.app import _error_frame
+                    await self.queues.put(_error_frame(ConnectorError(
+                        "STALE_GENERATION", "wss_dispatch",
+                        "lane reservation invalidated while the operation "
+                        "waited for capacity",
+                        operation_id=operation.operation_id,
+                        action="The lane was detached/rotated; the "
+                               "operation produced no effect."),
+                        _as_error_frame_payload(operation)))
+                    return
+                try:
+                    receipt = await self._on_operation(operation)
+                except ConnectorError as error:
+                    from ..daemon.app import _error_frame
+                    receipt = _error_frame(
+                        error, _as_error_frame_payload(operation))
+                except CoreError as error:
+                    from ..daemon.app import _error_frame
+                    receipt = _error_frame(ConnectorError(
+                        error.code, error.stage, error.message or
+                        error.code,
+                        possible_effect=error.possible_effect,
+                        retry_safe=error.retry_safe,
+                        operation_id=error.operation_id),
+                        _as_error_frame_payload(operation))
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("operation handler failed")
+                    from ..daemon.app import _error_frame
+                    receipt = _error_frame(ConnectorError(
+                        "UNKNOWN", "wss_operation",
+                        "internal error; see daemon log"),
+                        _as_error_frame_payload(operation))
+            if receipt is not None:
+                if isinstance(receipt, dict):
+                    ok = await self.queues.put(receipt)
+                    if not ok:
+                        # CN2/N02: refused enqueue keeps a recoverable
+                        # obligation (bounded retry buffer = the queues'
+                        # own budget; the receipt stays durable in the
+                        # journal and is consultable by ID).
+                        logger.warning(
+                            "receipt enqueue refused for %s; the receipt "
+                            "remains durable/consultable",
+                            operation.operation_id)
+                else:
+                    from nexus_connector_core.receipt_reducer import \
+                        receipt_frame as _rf
+                    from nexus_connector_core.models import OperationReceipt
+                    if isinstance(receipt, OperationReceipt):
+                        ok = await self.queues.put(_rf(
+                            receipt, server_id=self.server_id,
+                            executor_id=self.executor_id))
+                        if not ok:
+                            logger.warning(
+                                "receipt enqueue refused for %s; the "
+                                "receipt remains durable/consultable",
+                                operation.operation_id)
+        finally:
+            admission.release(_as_error_frame_payload(operation))
+
+    async def _send_initial_reconcile(self) -> bool:
+        """CN2/N04: FAILED projection never becomes an empty success."""
         report = {
             "protocol_major": PROTOCOL_MAJOR,
             "contract_revision": CONTRACT_REVISION,
@@ -600,7 +936,6 @@ class NXLTransport:
             "receipts": [],
             "snapshots": [],
         }
-        # The daemon refines this projection via on_reconcile when live.
         if self._on_reconcile is not None:
             try:
                 refined = await self._on_reconcile({
@@ -608,48 +943,71 @@ class NXLTransport:
                     "executor_id": self.executor_id,
                     "operation_ids": [],
                     "session_ids": []})
-                if refined is not None:
-                    report = refined
             except Exception:
                 logger.exception("initial reconcile projection failed")
-        await self.queues.put(report)
+                return False
+            if refined is not None:
+                report = refined
+        return await self.queues.put(report)
 
     async def _attach_lanes(self) -> None:
         for lane in list(self._lanes.values()):
             if lane.state in ("ready", "attaching"):
                 continue
-            try:
-                ticket = await lane.ticket_provider()
-            except Exception:
-                logger.warning("ticket fetch failed for lane %s",
-                               lane.binding_id)
-                continue
-            # The lane may have been removed while the ticket was being
-            # fetched; attaching it anyway would resurrect a revoked lane.
-            if self._lanes.get(lane.binding_id) is not lane:
-                continue
-            frame = {
-                "protocol_major": PROTOCOL_MAJOR,
-                "contract_revision": CONTRACT_REVISION,
-                "type": "binding.attach",
-                "server_id": self.server_id,
-                "executor_id": self.executor_id,
-                "binding_id": lane.binding_id,
-                "agent_id": lane.agent_id,
-                "authorization_revision": lane.authorization_revision,
-                "credential_epoch": lane.credential_epoch,
-                "ticket": ticket,
-            }
-            # CN1/A12: a refused put is an obligation kept by the caller
-            # — the lane stays PENDING, never falsely attached; the
-            # SENDER flips it to ready once the frame is written.
-            if not await self.queues.put(frame, urgent=True):
-                lane.state = "pending"
-                self.stats.lanes[lane.binding_id] = False
-                continue
-            lane.state = "attaching"
+            await self._attach_one_lane(lane)
 
-    # -- compatibility view ------------------------------------------------
+    async def _attach_one_lane(self, lane: LaneState) -> None:
+        try:
+            ticket = await lane.ticket_provider()
+        except Exception:
+            logger.warning("ticket fetch failed for lane %s",
+                           lane.binding_id)
+            return
+        # The lane may have been removed while the ticket was being
+        # fetched; attaching it anyway would resurrect a revoked lane.
+        if self._lanes.get(lane.binding_id) is not lane:
+            return
+        frame = {
+            "protocol_major": PROTOCOL_MAJOR,
+            "contract_revision": CONTRACT_REVISION,
+            "type": "binding.attach",
+            "server_id": self.server_id,
+            "executor_id": self.executor_id,
+            "binding_id": lane.binding_id,
+            "agent_id": lane.agent_id,
+            "authorization_revision": lane.authorization_revision,
+            "credential_epoch": lane.credential_epoch,
+            "ticket": ticket,
+        }
+        if not await self.queues.put(frame, urgent=True):
+            lane.state = "pending"
+            self.stats.lanes[lane.binding_id] = False
+            return
+        lane.state = "attaching"
+
+
+def _as_error_frame_payload(operation: ValidatedOperation) -> dict:
+    """A schema-shaped operation.submit payload for error frames and
+    admission accounting (slots dataclass has no __dict__)."""
+    return {
+        "protocol_major": PROTOCOL_MAJOR,
+        "contract_revision": CONTRACT_REVISION,
+        "type": "operation.submit",
+        "server_id": operation.server_id,
+        "executor_id": operation.executor_id,
+        "binding_id": operation.binding_id,
+        "agent_id": operation.agent_id,
+        "workspace_id": operation.workspace_id,
+        "workspace_binding_id": "wb",
+        "session_id": operation.session_id,
+        "operation_id": operation.operation_id,
+        "action": operation.action,
+        "connection_generation": operation.connection_generation,
+        "authorization_revision": operation.authorization_revision,
+        "configuration_revision": operation.configuration_revision,
+        "intent_hash": operation.intent_hash,
+        "payload": operation.payload,
+    }
 
 
 def _core_version() -> str:

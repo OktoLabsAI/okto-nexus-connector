@@ -159,6 +159,11 @@ class CoreRuntimeHost:
             self._ledger = SQLiteOwnedSlotLedger(self._ledger_path)
         return self._ledger
 
+    def journal_if_open(self):
+        """CN2/N04 (b10): the shared JOURNAL PORT (public) when already
+        open — durable history queries never require the binary."""
+        return self._journal
+
     # -- candidates -------------------------------------------------------
 
     def candidate_for(self, binding: BindingRecord) -> InstallationCandidate:
