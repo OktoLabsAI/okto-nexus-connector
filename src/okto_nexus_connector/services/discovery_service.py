@@ -286,64 +286,36 @@ def evaluate_availability(candidates):
 
 
 def availability_snapshot(candidates) -> dict[str, object]:
-    """CN4-04.02/G01: versioned, path-free executor projection.
+    """Local IPC/CLI preview with the Core's complete R4 evidence revision.
 
-    The revision derives from ALL relevant evidence of the WHOLE
-    candidate set — installation identity (adapter, executable
-    basename, launch_script, installation_ref), fingerprint/build,
-    version/architecture, trust/source AND the Core's readiness
-    state/reasons — in a canonical, ORDER-INDEPENDENT serialization
-    (reordering discovery or touching a publication timestamp does
-    not rotate the revision; changing the CLI's bytes, version,
-    trust or qualification does). Only the executing host's
-    assessment is published; the Server applies policy, never its
-    own OS view.
+    This legacy preview is not the authenticated publication envelope. The
+    producing host supplies its real IDs and sequence when publishing R4.
     """
-    import hashlib as _hashlib
-    import json as _json
-    import nexus_connector_core as _core
+    from nexus_connector_core import calculate_inventory_revision
     report = evaluate_availability(candidates)
     projection = report.to_dict()
     rows = projection["availability"]
-    state_by_ref: dict[str, dict] = {
-        str(row.get("candidate_ref")): row for row in rows}
-    evidence = []
-    for candidate in sorted(
-            candidates,
-            key=lambda c: (c.adapter_id, c.executable,
-                           c.launch_script or "", c.fingerprint)):
-        ref = getattr(candidate, "installation_ref", None) or \
-            str(candidate.executable)
-        row = state_by_ref.get(ref, {})
-        evidence.append({
-            "adapter_id": candidate.adapter_id,
-            "executable": str(candidate.executable),
-            "launch_script": (None if candidate.launch_script is None
-                              else str(candidate.launch_script)),
-            "installation_ref": ref,
-            "fingerprint": candidate.fingerprint,
-            "build_identity": candidate.build_identity,
-            "version": candidate.version,
-            "architecture": candidate.architecture,
-            "trust": candidate.trust,
-            "source": candidate.source,
-            "state": row.get("state"),
-            "reasons": sorted(str(r) for r in (row.get("reasons") or ())),
-        })
-    canonical = _json.dumps(
-        {"core": getattr(_core, "__version__", ""),
-         "format": projection["format_version"],
-         "platform": projection["platform"],
-         "candidates": evidence},
-        sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    revision = "inv2:" + _hashlib.sha256(
-        canonical.encode("utf-8")).hexdigest()[:24]
+    revision = calculate_inventory_revision(candidates, availability=report)
     return {
         "format_version": projection["format_version"],
         "platform": projection["platform"],
         "executor_revision": revision,
         "rows": rows,
     }
+
+
+def executor_inventory_snapshot(candidates, *, server_id: str, executor_id: str,
+                                producer_instance_id: str,
+                                publication_sequence: int,
+                                observation_age_ms: int = 0) -> dict[str, object]:
+    """R4 HTTP publication shape; the caller retains the full candidates."""
+    from nexus_connector_core import build_executor_inventory_snapshot
+    return build_executor_inventory_snapshot(
+        candidates, server_id=server_id, executor_id=executor_id,
+        producer_instance_id=producer_instance_id,
+        publication_sequence=publication_sequence,
+        observation_age_ms=observation_age_ms,
+    )
 
 
 def resolve_selection(candidates, adapter_id: str, candidate_ref: str):
