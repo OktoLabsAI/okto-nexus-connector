@@ -79,7 +79,11 @@ async def test_approval_routing_and_cas(approval_harness):
     frame = {
         "type": "approval.request", "server_id": SERVER_ID,
         "executor_id": "conn_appr", "binding_id": "bind_x",
-        "agent_id": AGENT, "session_id": "rs_1",
+        "agent_id": AGENT,
+        # CN5: an ADMINISTRATIVE request carries no session_id; a
+        # native request whose session is not managed in this namespace
+        # is a typed refusal, never silently administrative.
+        "session_id": None,
         "operation_id": "op_appr_1", "request_id": "req_1",
         "kind": "escalation", "proposal": {"summary": "sudo rm"},
     }

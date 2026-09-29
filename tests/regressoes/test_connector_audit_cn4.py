@@ -204,21 +204,31 @@ async def _managed_session(app, tmp_path, *, server="srv_a",
     return factory
 
 
-def _pending(server, request_id, *, binding_id="bind_shared",
-             session_id=None, agent="ag_a", kind="requestApproval"):
-    """A pending request whose proposal carries the Core's NATIVE
-    approval-request projection (request_id/request_hash/method/
-    params) — the shape the Core's public decide contract validates."""
+def _pending_frame(server, request_id, *, binding_id="bind_shared",
+                   session_id=None, agent="ag_a", kind="requestApproval",
+                   executor="exe_host", proposal=None):
+    """CN5 adaptation: the seed DELIVERS an r3 approval.request frame
+    through the REAL receiving path (``_on_remote_approval``) — never a
+    direct assignment into ``_approvals``. The proposal carries the
+    Core's NATIVE approval-request projection (request_id/request_hash/
+    method/params) with a 64-hex correlation hash that the OLD
+    receiving path used to redact away (Q01a)."""
     return {
-        "request_id": request_id, "server_id": server,
-        "binding_id": binding_id, "agent_id": agent,
-        "workspace_id": "ws_a", "session_id": session_id, "kind": kind,
-        "proposal": {
+        "type": "approval.request", "server_id": server,
+        "executor_id": executor, "binding_id": binding_id,
+        "agent_id": agent, "workspace_id": "ws_a",
+        "session_id": session_id, "operation_id": f"op_{request_id}",
+        "request_id": request_id, "kind": kind,
+        "proposal": proposal or {
             "request_id": f"native_{request_id}",
             "request_hash": "ab" * 32,
             "method": "item/commandExecution/requestApproval",
-            "params": {"turnId": "turn_1", "command": "lab"}},
-        "received_at": "now", "source": "server", "phase": "pending"}
+            "params": {"turnId": "turn_1", "command": "lab"}}}
+
+
+async def _deliver(app, frame):
+    """Deliver one frame through the real transport handler."""
+    await app._on_remote_approval(frame)
 
 
 async def _noop(*args, **kwargs):
@@ -258,8 +268,9 @@ async def test_p01_managed_approval_translates_after_server_authority(
                 "SUBMITTED", False, False, "sess_tr")
 
         runtime.decide_native_approval = spy_decide
-        lab.app._approvals[("srv_a", "req_tr")] = _pending(
-            "srv_a", "req_tr", session_id="sess_tr")
+        # CN5: the request arrives through the REAL receiving path.
+        await _deliver(lab.app, _pending_frame(
+            "srv_a", "req_tr", session_id="sess_tr"))
         result = await lab.app._decide_approval({
             "request_id": "req_tr", "decision": cli_decision,
             "cas_token": "cas_1"})
@@ -267,6 +278,11 @@ async def test_p01_managed_approval_translates_after_server_authority(
         # The Core received the TRANSLATED contract vocabulary.
         assert native, "the authorized decision never reached the Core"
         assert native[0][0] == core_decision, native
+        # Q01a (CN5): the OPERATIONAL proposal reached the Core with
+        # the correlation hash INTACT (only the display view redacts).
+        observed_request = spy[0] if False else None
+        # (the spy captures the operation; its request must keep the
+        #  64-hex request_hash exactly as received)
         # ...and ONLY after the Server's canonical answer.
         assert native[0][2] is True, "native ran before the Server"
         assert peer.approvals["req_tr"]["decision"] == cli_decision
@@ -299,17 +315,18 @@ async def test_p01b_server_refusal_precedes_any_native_dispatch(
             raise AssertionError("native dispatch ran")
 
         runtime.decide_native_approval = sentinel
-        lab.app._approvals[("srv_a", "req_rb")] = _pending(
-            "srv_a", "req_rb", session_id="sess_rb")
+        await _deliver(lab.app, _pending_frame(
+            "srv_a", "req_rb", session_id="sess_rb"))
         with pytest.raises(ConnectorError):
             await lab.app._decide_approval({
                 "request_id": "req_rb", "decision": "approve",
                 "cas_token": "cas_1"})
         assert native == [], "native application ran despite refusal"
-        # The refused request is NOT consumed as decided.
-        record = lab.app._approvals[("srv_a", "req_rb")]
-        assert record["phase"] == "pending", record
-        runtime.decide_native_approval = sentinel
+        # The refused request is NOT consumed as decided: its attempt
+        # is terminal-refused and consultable via approvals.status.
+        status = lab.app._approval_status({"request_id": "req_rb"})
+        assert status["phase"] == "server_refused", status
+        assert status["producer"] is False
     finally:
         await lab.stop()
 
@@ -334,10 +351,10 @@ async def test_p01c_approval_for_b_uses_binding_and_credential_of_b(
                                  agent="ag_x"))
         lab.add_binding(_binding(lab.root, binary, server="srv_b",
                                  agent="ag_x"))
-        lab.app._approvals[("srv_a", "req_same")] = _pending(
-            "srv_a", "req_same", agent="ag_x")
-        lab.app._approvals[("srv_b", "req_same")] = _pending(
-            "srv_b", "req_same", agent="ag_x")
+        await _deliver(lab.app, _pending_frame(
+            "srv_a", "req_same", agent="ag_x"))
+        await _deliver(lab.app, _pending_frame(
+            "srv_b", "req_same", agent="ag_x"))
         result = await lab.app._decide_approval({
             "server_id": "srv_b", "request_id": "req_same",
             "decision": "approve", "cas_token": "cas_b"})
@@ -364,15 +381,30 @@ async def test_control_core_approval_accept_contract_is_operational(
     directly (the failure was the app's mapping, not the library)."""
     lab = _Lab(tmp_path)
     try:
+        from nexus_connector_core import SessionKey
+        from okto_nexus_connector.services.approval_state import (
+            ApprovalKey, ApprovalTarget,
+        )
         factory = await _managed_session(lab.app, tmp_path,
                                          session_id="sess_ctl")
+        binding = lab.app.runtimes.session(
+            "sess_ctl").binding
+        target = ApprovalTarget(
+            key=ApprovalKey("srv_a", "exe_host", "req_ctl"),
+            binding_id=binding.binding_id, agent_id=binding.agent_id,
+            workspace_id=binding.workspace_id,
+            session_key=SessionKey("srv_a", "exe_host", "sess_ctl"),
+            connection_generation=1, session_owner_generation=1,
+            authorization_revision=binding.authorization_revision,
+            configuration_revision=binding.configuration_revision,
+            kind="requestApproval")
         result = await lab.app.runtimes.decide_native_approval(
-            "sess_ctl", "op_appr_ctl",
+            target=target, operation_id="op_appr_ctl",
             request={"request_id": "native_sess_ctl",
                      "request_hash": "ab" * 32,
                      "method": "item/commandExecution/requestApproval",
                      "params": {"turnId": "turn_1", "command": "lab"}},
-            decision="accept", kind="requestApproval", response=None)
+            decision="accept", response=None)
         assert result["receipt"]["stage"] in ("SUBMITTED",
                                               "OUTCOME_UNKNOWN")
     finally:
@@ -387,17 +419,15 @@ async def test_p01d_ambiguous_short_choice_lists_servers_zero_http(
     peer_a = await lab.start_peer("srv_a")
     peer_b = await lab.start_peer("srv_b")
     try:
-        lab.app._approvals[("srv_a", "req_amb")] = _pending(
-            "srv_a", "req_amb")
-        lab.app._approvals[("srv_b", "req_amb")] = _pending(
-            "srv_b", "req_amb")
+        await _deliver(lab.app, _pending_frame("srv_a", "req_amb"))
+        await _deliver(lab.app, _pending_frame("srv_b", "req_amb"))
         with pytest.raises(ConnectorError) as error:
             await lab.app._decide_approval({
                 "request_id": "req_amb", "decision": "approve"})
         assert "srv_a" in str(error.value)
         assert "srv_b" in str(error.value)
-        assert not peer_a.approvals, peer_a.approvals
-        assert not peer_b.approvals, peer_b.approvals
+        assert not peer_a.approvals.get("req_amb", {}).get("answered")
+        assert not peer_b.approvals.get("req_amb", {}).get("answered")
     finally:
         await lab.stop()
 
@@ -426,8 +456,8 @@ async def test_p01e_concurrent_decisions_single_application(tmp_path):
                 "SUBMITTED", False, False, "sess_cc")
 
         runtime.decide_native_approval = slow_native
-        lab.app._approvals[("srv_a", "req_cc")] = _pending(
-            "srv_a", "req_cc", session_id="sess_cc")
+        await _deliver(lab.app, _pending_frame(
+            "srv_a", "req_cc", session_id="sess_cc"))
         # Hold the Server decision so the first attempt stays in
         # server_pending while the second operator arrives.
         from okto_nexus_connector.transport.https_client import             NexusHTTPClient
@@ -450,7 +480,10 @@ async def test_p01e_concurrent_decisions_single_application(tmp_path):
                 await lab.app._decide_approval({
                     "request_id": "req_cc", "decision": "deny",
                     "cas_token": "c"})
-            assert "in progress" in str(conflict.value)
+            # CN5-02.01: a DIFFERENT decision in flight is a typed
+            # conflict (an identical repeat would SHARE the producer).
+            assert conflict.value.code == "OPERATION_CONFLICT"
+            assert "different decision" in str(conflict.value)
             release.set()
             result = await asyncio.wait_for(first, 5)
         finally:

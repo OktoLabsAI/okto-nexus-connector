@@ -139,6 +139,41 @@ class ValidatedOperation:
         return is_control_action(self.action)
 
 
+class _AttachEnvelope:
+    """CN5-03.03: internal queue envelope for attach frames — carries
+    the attempt generation so the sender can discard an OBSOLETE frame
+    before the bytes leave (no invalid extra field on the NXL frame)."""
+
+    __slots__ = ("frame", "binding_id", "generation")
+
+    def __init__(self, frame, binding_id, generation):
+        self.frame = frame
+        self.binding_id = binding_id
+        self.generation = generation
+
+
+class LaneAttachAttempt:
+    """CN5-03.01: the IMMUTABLE snapshot of one attach attempt —
+    captured BEFORE the first await; a late provider result can never
+    be relabelled with the lane's CURRENT mutable values."""
+
+    __slots__ = ("generation", "provider", "agent_id", "binding_id",
+                 "credential_epoch", "authorization_revision",
+                 "ticket_epoch", "connection_serial")
+
+    def __init__(self, *, generation, provider, agent_id, binding_id,
+                 credential_epoch, authorization_revision, ticket_epoch,
+                 connection_serial):
+        self.generation = generation
+        self.provider = provider
+        self.agent_id = agent_id
+        self.binding_id = binding_id
+        self.credential_epoch = credential_epoch
+        self.authorization_revision = authorization_revision
+        self.ticket_epoch = ticket_epoch
+        self.connection_serial = connection_serial
+
+
 @dataclass(slots=True)
 class LaneState:
     binding_id: str
@@ -154,6 +189,14 @@ class LaneState:
     #: CN2/N07: a lane attached on a live connection has its own attach
     #: producer so reload never requires a socket restart.
     attach_task: asyncio.Task | None = None
+    #: CN5-03: monotonic attach generation; rotation bumps it and any
+    #: in-flight attempt of an older generation is discarded.
+    attach_generation: int = 0
+    #: CN5-03.02: set when a rotation arrived while an attempt was in
+    #: flight — the done-callback schedules the successor.
+    reattach_requested: bool = False
+    #: CN5-03.04: the single owned retry timer of the current attempt.
+    retry_timer: object | None = None
 
 
 @dataclass(slots=True)
@@ -400,12 +443,19 @@ class NXLTransport:
                 lane.ticket_provider is ticket_provider)
             if same:
                 return
-            if lane.attach_task is not None and not \
-                    lane.attach_task.done():
-                # CN4-05.02/ACN4-32: the in-flight attach of the OLD
-                # proof is superseded — its late result must not ready
-                # the new epoch.
+            if lane.retry_timer is not None:
+                lane.retry_timer.cancel()
+                lane.retry_timer = None
+            in_flight = (lane.attach_task is not None
+                         and not lane.attach_task.done())
+            if in_flight:
+                # CN4-05.02/ACN4-32 + CN5-03.02: the in-flight attach of
+                # the OLD proof is superseded — cancelled, and its
+                # done-callback schedules the successor generation (the
+                # old task must never remain the only registered work).
+                lane.reattach_requested = True
                 lane.attach_task.cancel()
+            lane.attach_generation += 1
             lane.credential_epoch = credential_epoch
             lane.authorization_revision = authorization_revision
             lane.agent_id = agent_id
@@ -416,7 +466,13 @@ class NXLTransport:
             lane.state = "pending"  # old proof fenced ALWAYS
             self.stats.lanes[binding_id] = False
             if self._negotiated and self.websocket_open:
-                self._schedule_lane_attach(binding_id)
+                if in_flight:
+                    # CN5-03.02: the successor is scheduled by the old
+                    # attempt's completion callback — not lost by a
+                    # scheduler that still sees the cancelled task.
+                    pass
+                else:
+                    self._ensure_lane_attach(binding_id)
             return
         self._lanes[binding_id] = LaneState(
             binding_id, agent_id, ticket_provider,
@@ -431,8 +487,14 @@ class NXLTransport:
 
     def remove_lane(self, binding_id: str) -> None:
         lane = self._lanes.pop(binding_id, None)
-        if lane is not None and lane.attach_task is not None:
-            lane.attach_task.cancel()
+        if lane is not None:
+            # CN5-03.02: removal prevents ANY reattach.
+            lane.reattach_requested = False
+            if lane.retry_timer is not None:
+                lane.retry_timer.cancel()
+                lane.retry_timer = None
+            if lane.attach_task is not None:
+                lane.attach_task.cancel()
         self.stats.lanes.pop(binding_id, None)
 
     def lane_info(self, binding_id: str) -> dict[str, object] | None:
@@ -452,13 +514,49 @@ class NXLTransport:
     def websocket_open(self) -> bool:
         return self._websocket is not None
 
-    def _schedule_lane_attach(self, binding_id: str) -> None:
+    def _ensure_lane_attach(self, binding_id: str) -> None:
+        """CN5-03.02: AT MOST ONE active attach task per lane; a
+        rotation that arrived in flight is honoured by the previous
+        attempt's done-callback (``reattach_requested``)."""
         lane = self._lanes.get(binding_id)
-        if lane is None or lane.attach_task is not None and not \
-                lane.attach_task.done():
+        if lane is None:
             return
-        lane.attach_task = asyncio.create_task(
+        if lane.attach_task is not None and not lane.attach_task.done():
+            lane.reattach_requested = True
+            return
+        if lane.retry_timer is not None:
+            lane.retry_timer.cancel()
+            lane.retry_timer = None
+        task = asyncio.create_task(
             self._attach_one_lane(lane), name=f"lane-attach-{binding_id}")
+        lane.attach_task = task
+        task.add_done_callback(
+            lambda done, binding_id=binding_id:
+            self._attach_done(binding_id, done))
+
+    def _attach_done(self, binding_id: str, task: asyncio.Task) -> None:
+        """CN5-03.02: observe the OLD attempt's completion ONCE and
+        schedule the CURRENT generation's successor when a rotation is
+        pending and the channel is still live."""
+        if not task.cancelled() and task.exception() is not None:
+            try:
+                task.exception()  # retrieved once; logged redacted
+                logger.warning("lane attach attempt failed for %s",
+                               binding_id)
+            except Exception:  # pragma: no cover
+                pass
+        lane = self._lanes.get(binding_id)
+        if lane is None or lane.attach_task is not task:
+            return  # superseded or removed
+        lane.attach_task = None
+        if lane.reattach_requested:
+            lane.reattach_requested = False
+            if self._negotiated and self.websocket_open:
+                self._ensure_lane_attach(binding_id)
+
+    # Backwards-compatible seam for existing callers/tests.
+    def _schedule_lane_attach(self, binding_id: str) -> None:
+        self._ensure_lane_attach(binding_id)
 
     def start(self) -> None:
         if self._task is None or self._task.done():
@@ -468,6 +566,10 @@ class NXLTransport:
     async def stop(self) -> None:
         self._stop.set()
         for lane in self._lanes.values():
+            lane.reattach_requested = False
+            if lane.retry_timer is not None:
+                lane.retry_timer.cancel()
+                lane.retry_timer = None
             if lane.attach_task is not None:
                 lane.attach_task.cancel()
         if self._task is not None:
@@ -671,6 +773,17 @@ class NXLTransport:
     async def _sender(self, websocket) -> None:
         while True:
             frame = await self.queues.get()
+            if isinstance(frame, _AttachEnvelope):
+                # CN5-03.03: an attach frame of an OBSOLETE
+                # generation is discarded BEFORE any byte leaves.
+                lane = self._lanes.get(frame.binding_id)
+                if (lane is None or
+                        lane.attach_generation != frame.generation):
+                    logger.info(
+                        "discarding obsolete attach frame for %s",
+                        frame.binding_id)
+                    continue
+                frame = frame.frame
             await websocket.send(encode_frame(frame))
             self.stats.frames_sent += 1
             self.stats.last_frame_at = time.time()
@@ -685,6 +798,10 @@ class NXLTransport:
                         lane.credential_epoch and \
                         int(frame.get("authorization_revision", 0)) == \
                         lane.authorization_revision:
+                    # CN5-03.03: the ready transition belongs to
+                    # the CURRENT generation's confirmed attach —
+                    # an obsolete envelope was discarded above and
+                    # can never reach this mark.
                     lane.state = "ready"
                     self.stats.lanes[lane.binding_id] = True
             elif kind == "event.batch":
@@ -1146,27 +1263,46 @@ class NXLTransport:
         for lane in list(self._lanes.values()):
             if lane.state in ("ready", "attaching"):
                 continue
-            await self._attach_one_lane(lane)
+            # CN5-03.02: handshake attaches also go through the single
+            # owned coordinator (attach_task + done-callback), so a
+            # rotation during the handshake is scheduled correctly.
+            self._ensure_lane_attach(lane.binding_id)
 
     async def _attach_one_lane(self, lane: LaneState) -> None:
+        # CN5-03.01: the attempt snapshot is captured BEFORE the first
+        # await — a late provider result is never relabelled with the
+        # lane's CURRENT (possibly rotated) values.
+        attempt = LaneAttachAttempt(
+            generation=lane.attach_generation,
+            provider=lane.ticket_provider, agent_id=lane.agent_id,
+            binding_id=lane.binding_id,
+            credential_epoch=lane.credential_epoch,
+            authorization_revision=lane.authorization_revision,
+            ticket_epoch=lane.ticket_epoch,
+            connection_serial=self._connection_serial)
         try:
-            fetched = await lane.ticket_provider()
+            fetched = await attempt.provider()
         except Exception:
             logger.warning("ticket fetch failed for lane %s",
                            lane.binding_id)
+            # CN5-03.04: transient provider failure keeps PENDING and
+            # schedules ONE bounded retry (never a task per frame).
+            self._schedule_lane_retry(lane, attempt.generation)
             return
         # CN4-05.03: providers may return (ticket, expires_in) — the
         # locally observed expiry is recorded on the lane; a plain
         # string stays valid (no contract break for existing seams).
         if isinstance(fetched, tuple):
             ticket, expires_in = fetched
-            lane.expires_at = time.monotonic() + max(
-                1.0, float(expires_in) - _TICKET_EXPIRY_MARGIN)
+            if self._attempt_current(lane, attempt):
+                lane.expires_at = time.monotonic() + max(
+                    1.0, float(expires_in) - _TICKET_EXPIRY_MARGIN)
         else:
             ticket = fetched
-        # The lane may have been removed while the ticket was being
-        # fetched; attaching it anyway would resurrect a revoked lane.
-        if self._lanes.get(lane.binding_id) is not lane:
+        # CN5-03.01: an obsolete result (removed lane or a newer
+        # generation/rotation) is DISCARDED — it never produces a frame
+        # and never marks anything ready.
+        if not self._attempt_current(lane, attempt):
             return
         frame = {
             "protocol_major": PROTOCOL_MAJOR,
@@ -1174,17 +1310,50 @@ class NXLTransport:
             "type": "binding.attach",
             "server_id": self.server_id,
             "executor_id": self.executor_id,
-            "binding_id": lane.binding_id,
-            "agent_id": lane.agent_id,
-            "authorization_revision": lane.authorization_revision,
-            "credential_epoch": lane.credential_epoch,
+            "binding_id": attempt.binding_id,
+            "agent_id": attempt.agent_id,
+            "authorization_revision": attempt.authorization_revision,
+            "credential_epoch": attempt.credential_epoch,
             "ticket": ticket,
         }
-        if not await self.queues.put(frame, urgent=True):
-            lane.state = "pending"
-            self.stats.lanes[lane.binding_id] = False
+        # CN5-03.03: the generation rides in an INTERNAL envelope; the
+        # sender discards an obsolete frame before any byte leaves.
+        envelope = _AttachEnvelope(frame, attempt.binding_id,
+                                   attempt.generation)
+        if not await self.queues.put(envelope, urgent=True):
+            if self._attempt_current(lane, attempt):
+                lane.state = "pending"
+                self.stats.lanes[lane.binding_id] = False
             return
-        lane.state = "attaching"
+        if self._attempt_current(lane, attempt):
+            lane.state = "attaching"
+
+    def _attempt_current(self, lane: LaneState,
+                         attempt: LaneAttachAttempt) -> bool:
+        """The attempt is still the lane's CURRENT generation and this
+        connection's."""
+        return (self._lanes.get(lane.binding_id) is lane
+                and lane.attach_generation == attempt.generation
+                and self._connection_serial == attempt.connection_serial)
+
+    def _schedule_lane_retry(self, lane: LaneState, generation: int
+                             ) -> None:
+        if self._stop.is_set():
+            return
+        if lane.retry_timer is not None:
+            return  # one owned retry at a time
+        lane.state = "pending"
+        self.stats.lanes[lane.binding_id] = False
+        loop = asyncio.get_event_loop()
+
+        def _retry():
+            lane.retry_timer = None
+            if (self._lanes.get(lane.binding_id) is lane
+                    and lane.attach_generation == generation
+                    and not self._stop.is_set()):
+                self._ensure_lane_attach(lane.binding_id)
+
+        lane.retry_timer = loop.call_later(1.0, _retry)
 
     def _check_lane_expiry(self) -> None:
         """CN4-05.03: an expired ticket never leaves a lane READY

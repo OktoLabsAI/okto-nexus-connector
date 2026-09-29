@@ -873,8 +873,27 @@ async def test_b08_approval_manager_reaches_public_core_api(tmp_path):
             False, False, "session_a")
 
     runtime.decide_native_approval = spy
+    # CN5 adaptation: the manager port is target-scoped (full
+    # SessionKey namespace) — same causal condition: the request and
+    # the decision reach the Core's public decide port.
+    from nexus_connector_core import SessionKey as _SessionKey
+    from okto_nexus_connector.services.approval_state import (
+        ApprovalKey as _AKey, ApprovalTarget as _ATarget,
+    )
+    _rec = session.binding
+    _target = _ATarget(
+        key=_AKey(_rec.server_id, _rec.executor_id, "req_1"),
+        binding_id=_rec.binding_id, agent_id=_rec.agent_id,
+        workspace_id=_rec.workspace_id,
+        session_key=_SessionKey(_rec.server_id, _rec.executor_id,
+                               "session_a"),
+        connection_generation=session.connection_generation,
+        session_owner_generation=session.session_owner_generation,
+        authorization_revision=_rec.authorization_revision,
+        configuration_revision=_rec.configuration_revision,
+        kind="requestApproval")
     result = await manager.decide_native_approval(
-        "session_a", "op_appr_1",
+        target=_target, operation_id="op_appr_1",
         request={"kind": "commandExecution",
                  "native_request": {"id": "req_1"}},
         decision="deny", response=None)

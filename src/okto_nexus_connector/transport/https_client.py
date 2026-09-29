@@ -373,7 +373,18 @@ class NexusHTTPClient:
             }, expect=(200, 409))
         if payload.get("error") is not None:
             raise _error_payload(payload, "approval-decisions")
-        return bool(payload.get("applied", False))
+        applied = payload.get("applied")
+        # CN5-01.04: ONLY a strictly boolean True authorizes the native
+        # application — a string, object or absent value never becomes
+        # authorization by truthiness, and False stays an explicit
+        # refusal.
+        if not isinstance(applied, bool):
+            raise ConnectorError(
+                "VERSION_INCOMPATIBLE", "approval-decisions",
+                f"server returned non-boolean applied={applied!r}",
+                action="The Server contract requires a boolean "
+                       "confirmation; treat this reply as unknown.")
+        return applied
 
     def link_url(self, executor_id: str) -> str:
         base = self.base_url

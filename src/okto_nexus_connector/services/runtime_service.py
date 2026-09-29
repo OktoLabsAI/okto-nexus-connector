@@ -539,25 +539,68 @@ class RuntimeManager:
                 "semantics": "stop: closes resources owned by this daemon; "
                              "external attach targets are only detached"}
 
-    async def decide_native_approval(self, session_id: str,
-                                     operation_id: str, request: Mapping,
+    async def decide_native_approval(self, *, target,
+                                     operation_id: str,
+                                     request: Mapping,
                                      decision: str,
-                                     response: Mapping | None,
-                                     kind: str | None = None
+                                     response: Mapping | None
                                      ) -> dict[str, object]:
         """Answer one pending native approval/input through the Core.
 
-        CN1/A11+CN-06.05: the decision travels the Core's public
-        ``decide_native_approval`` with the pending request projection;
-        containment-reply semantics (deny allowed while closing) belong
-        to the Core. CN4-01.03: the ACTION derives from the observed
-        REQUEST KIND (never ``decision.startswith``), the decision is
-        the Core's public vocabulary (accept/decline/cancel) and the
-        context comes from the grant already validated at open.
+        CN5-01.03: the application is MANDATORILY scoped — the session
+        resolves by its FULL ``SessionKey`` (never a bare session id,
+        which could select another Server's Core), the target's
+        namespace/agent/workspace and its captured generation/revision
+        snapshot are compared against the session's authorized state
+        BEFORE the Core is called, and a divergence is a typed
+        ``BINDING_NOT_AUTHORIZED``/``STALE_GENERATION`` refusal with
+        zero effects (never repaired from a foreign session).
+
+        CN4-01.03: the ACTION derives from the observed request KIND
+        (never ``decision.startswith``); the decision is the Core's
+        public vocabulary (accept/decline/cancel); the context carries
+        exactly the grant's authorized actions.
         """
-        session = self.session(session_id)
+        from nexus_connector_core import CoreError  # noqa: F401
+        if target.session_key is None:
+            # An administrative request never reaches this port.
+            raise ConnectorError(
+                "VALIDATION_ERROR", "approval",
+                "administrative request has no native application")
+        key = target.session_key
+        session = self.session_by_key(key)
+        binding = session.binding
+        if (binding.server_id != key.server_id
+                or binding.executor_id != key.executor_id
+                or binding.binding_id != target.binding_id
+                or binding.agent_id != target.agent_id
+                or binding.workspace_id != target.workspace_id):
+            raise ConnectorError(
+                "BINDING_NOT_AUTHORIZED", "approval",
+                "approval target does not match the session's "
+                "namespace")
+        if (target.connection_generation is not None
+                and target.connection_generation !=
+                session.connection_generation):
+            raise ConnectorError(
+                "STALE_GENERATION", "approval",
+                "approval captured an outdated connection generation")
+        if (target.session_owner_generation is not None
+                and target.session_owner_generation !=
+                session.session_owner_generation):
+            raise ConnectorError(
+                "STALE_GENERATION", "approval",
+                "approval captured an outdated session owner "
+                "generation")
+        if (target.authorization_revision !=
+                binding.authorization_revision
+                or target.configuration_revision !=
+                binding.configuration_revision):
+            raise ConnectorError(
+                "STALE_GENERATION", "approval",
+                "approval captured an outdated revision snapshot")
         runtime = self._runtime_of(session)
-        action = ("input.provide" if kind == "input.request"
+        action = ("input.provide" if target.kind == "input.request"
                   else "approval.decide")
         context = self._authorized_context(
             session, action,
@@ -566,13 +609,13 @@ class RuntimeManager:
         receipt = await runtime.decide_native_approval(
             NativeApprovalOperation(
                 operation_id=operation_id,
-                session_id=session_id,
+                session_id=key.session_id,
                 request=dict(request) if request else {},
                 decision=decision,
                 operator_response=dict(response) if response else None),
             context)
         session.last_receipt = receipt
-        return {"session_id": session_id,
+        return {"session_id": key.session_id,
                 "receipt": _receipt_json(receipt)}
 
     async def shutdown(self) -> list[dict[str, object]]:

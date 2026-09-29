@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "okto-nexus-connector"
-version = "0.4.0.dev0"
+version = "0.5.0.dev0"
 description = "Remote harness connector application for Okto Nexus (CLI, daemon, outbound WSS control)"
 readme = "README.md"
 requires-python = ">=3.11"

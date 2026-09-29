@@ -28,6 +28,7 @@ from ..ipc.protocol import response_error, response_ok, response_stream
 from ..ipc.server import IPCServer
 from ..platform import paths
 from ..redaction import redact_mapping, redact_text
+from ..services.approval_state import PendingApproval
 from ..services.core_host import CoreRuntimeHost
 from ..services.runtime_service import RuntimeManager, receipt_nxl_frame
 from ..storage.state_store import StateStore
@@ -60,6 +61,8 @@ class EventBridge:
     _MAX_INFLIGHT_PER_STREAM = 128
     _WAKE_COALESCE_SECONDS = 0.02
     _ACK_RETRY_SECONDS = 5.0
+    #: CN5-04.02: progressive retry backoff (seconds, capped).
+    _RETRY_BACKOFF = (0.25, 0.5, 1.0, 2.0, 5.0)
 
     def __init__(self, ack_source, core_ack, journal_page):
         self._ack_source = ack_source      # transport provider by server
@@ -75,37 +78,88 @@ class EventBridge:
         # failed stays pending here — the retry re-applies the SAME
         # confirmation without re-reading/re-sending the batch.
         self._pending_core_ack: dict[tuple[str, str, str], int] = {}
+        # CN5-04: the bridge's OWN lifecycle (drain) is separate from
+        # transport offline; owned retry timers per stream with
+        # progressive backoff.
+        self._closed = False
+        self._retry_timers: dict[tuple[str, str, str], object] = {}
+        self._retry_rounds: dict[tuple[str, str, str], int] = {}
+
+    def _ensure_stream_task(self, key: tuple[str, str, str]) -> None:
+        """CN5-04.01: exactly one publisher task per stream — created
+        (or re-created after a transient death) by EVERY entry point:
+        publish, ack_arrived, transport_online_again. A finished task's
+        exception is retrieved ONCE for a redacted diagnostic."""
+        if self._closed:
+            return
+        task = self._tasks.get(key)
+        if task is not None and not task.done():
+            return
+        if task is not None and task.done() and not task.cancelled():
+            exc = task.exception()
+            if exc is not None:
+                logger.warning(
+                    "event publisher for %s died (%s); recreating",
+                    key, redact_text(repr(exc)))
+        wake = self._wakeups.get(key)
+        if wake is None:
+            wake = self._wakeups[key] = asyncio.Event()
+        self._tasks[key] = asyncio.create_task(self._flush_loop(*key))
+
+    def _schedule_stream_retry(self, key: tuple[str, str, str]) -> None:
+        """CN5-04.02: ONE owned retry timer per stream with progressive
+        backoff 0.25/0.5/1/2/5s (cap 5); reset on progress."""
+        if self._closed:
+            return
+        if self._retry_timers.get(key) is not None:
+            return  # coalesced: a timer is already armed
+        delay = self._RETRY_BACKOFF[
+            min(self._retry_rounds.get(key, 0),
+                len(self._RETRY_BACKOFF) - 1)]
+        loop = asyncio.get_event_loop()
+        wake = self._wakeups.get(key)
+        if wake is None:
+            return
+
+        def _fire():
+            self._retry_timers.pop(key, None)
+            if not self._closed:
+                wake.set()
+
+        self._retry_timers[key] = loop.call_later(delay, _fire)
 
     def ack_arrived(self, server_id: str, session_id: str,
                     epoch: str) -> None:
         """CN4-02.01: a NEW validated watermark wakes the parked
         publisher of that stream — a batch-2 wait is satisfied by
         ACK2's arrival, never by re-sending under an old watermark."""
-        wake = self._wakeups.get((server_id, session_id, epoch))
+        key = (server_id, session_id, epoch)
+        self._ensure_stream_task(key)
+        wake = self._wakeups.get(key)
         if wake is not None:
             wake.set()
-            key = (server_id, session_id, epoch)
-            if key not in self._tasks or self._tasks[key].done():
-                self._tasks[key] = asyncio.create_task(
-                    self._flush_loop(*key))
 
     def publisher_for(self, server_id: str):
         def publish(event: RuntimeEvent) -> None:
             key = (server_id, event.session_id, event.stream_epoch)
+            self._ensure_stream_task(key)
             wake = self._wakeups.get(key)
             if wake is None:
                 wake = self._wakeups[key] = asyncio.Event()
             wake.set()
-            if key not in self._tasks or self._tasks[key].done():
-                self._tasks[key] = asyncio.create_task(
-                    self._flush_loop(*key))
         return publish
 
     def transport_online_again(self, server_id: str) -> None:
-        """CN2/N03.2: reconnect wakes every stream of the server —
-        pending journal records drain without new native events."""
+        """CN2/N03.2 + CN5-04.01: reconnect wakes every stream of the
+        server — pending journal records drain without new native
+        events, and a stream whose publisher died on a TRANSIENT error
+        is re-created HERE (the Event alone proves nothing)."""
         for key in list(self._wakeups):
             if key[0] == server_id:
+                timer = self._retry_timers.pop(key, None)
+                if timer is not None:
+                    timer.cancel()  # reconnection anticipates the retry
+                self._ensure_stream_task(key)
                 self._wakeups[key].set()
 
     async def _flush_loop(self, server_id: str, session_id: str,
@@ -128,19 +182,42 @@ class EventBridge:
                         await self._core_ack(server_id, session_id,
                                              epoch, pending_watermark)
                     except Exception:
-                        self._wake_retry_later(key)
+                        self._retry_rounds[key] = (
+                            self._retry_rounds.get(key, 0) + 1)
+                        self._schedule_stream_retry(key)
                         break
                     self._acked_through[key] = max(
                         self._acked_through.get(key, 0), pending_watermark)
                     del self._pending_core_ack[key]
                 # b05: resume after the VALIDATED ACK, never after sent.
                 after = self._acked_through.get(key, 0)
-                batch = await self._journal_page(
-                    server_id, session_id, epoch, after,
-                    self._MAX_INFLIGHT_PER_STREAM)
+                # CN5-04.02: a TRANSIENT page read failure no longer
+                # kills the publisher — cursors stay and ONE owned
+                # retry is scheduled (ACN5-Q04/ACN5-30).
+                try:
+                    batch = await self._journal_page(
+                        server_id, session_id, epoch, after,
+                        self._MAX_INFLIGHT_PER_STREAM)
+                except Exception as error:
+                    logger.warning(
+                        "journal page read failed for %s (%s); retrying",
+                        key, redact_text(repr(error)))
+                    self._retry_rounds[key] = (
+                        self._retry_rounds.get(key, 0) + 1)
+                    self._schedule_stream_retry(key)
+                    break
                 if not batch:
                     break  # b04: end of snapshot — no waiting for future
-                sent = await transport.send_events(list(batch))
+                try:
+                    sent = await transport.send_events(list(batch))
+                except Exception as error:
+                    logger.warning(
+                        "event send failed for %s (%s); retrying",
+                        key, redact_text(repr(error)))
+                    self._retry_rounds[key] = (
+                        self._retry_rounds.get(key, 0) + 1)
+                    self._schedule_stream_retry(key)
+                    break
                 if not sent:
                     break  # backpressure: retry without losing events
                 # CN4-02.01: the wait targets THE BATCH'S OWN last
@@ -160,29 +237,34 @@ class EventBridge:
                     await self._core_ack(server_id, session_id, epoch,
                                          watermark)
                 except Exception:
-                    # CN4-02.02/ACN4-21: remote progress exists but the
+                    # CN4-02.02/ACN5-31: remote progress exists but the
                     # Core application failed — keep the obligation and
-                    # retry the SAME confirmation later (bounded),
-                    # never the agent's task.
+                    # retry the SAME confirmation later (owned,
+                    # progressive), never the agent's task.
                     self._pending_core_ack[key] = watermark
-                    self._wake_retry_later(key)
+                    self._retry_rounds[key] = (
+                        self._retry_rounds.get(key, 0) + 1)
+                    self._schedule_stream_retry(key)
                     break
                 self._acked_through[key] = watermark
+                self._retry_rounds[key] = 0  # progress resets backoff
                 if batch[-1].sequence > watermark:
                     # Partial contiguous ack: replay the remainder.
                     continue
                 if len(batch) < self._MAX_INFLIGHT_PER_STREAM:
                     break
 
-    def _wake_retry_later(self, key: tuple[str, str, str]) -> None:
-        """CN4-02.02: one coalesced bounded retry per obligation."""
-        wake = self._wakeups.get(key)
-        if wake is None:
-            return
-        loop = asyncio.get_event_loop()
         loop.call_later(self._ACK_RETRY_SECONDS, wake.set)
 
     async def drain(self) -> None:
+        """CN5-04.03: drain closes the BRIDGE (its own lifecycle): the
+        timers are cancelled, `_closed` forbids resurrection, and only
+        the bridge-owned observers end — runtime operations and the
+        journal are never touched."""
+        self._closed = True
+        for timer in list(self._retry_timers.values()):
+            timer.cancel()
+        self._retry_timers.clear()
         for task in list(self._tasks.values()):
             task.cancel()
             try:
@@ -191,6 +273,7 @@ class EventBridge:
                 pass
         self._tasks.clear()
         self._wakeups.clear()
+        self._retry_rounds.clear()
 
 
 class DaemonApp:
@@ -217,8 +300,9 @@ class DaemonApp:
         self._draining = False
         # CN3/G02: approvals keyed by (server_id, request_id); CN4-01
         # keeps a bounded terminal history so repeats consult the same
-        # outcome instead of re-deciding.
-        self._approvals: dict[tuple[str, str], dict[str, object]] = {}
+        # outcome instead of re-deciding; CN5 stores PendingApproval
+        # records (operational copy + redacted display projection).
+        self._approvals: dict[tuple[str, str], PendingApproval] = {}
         self._approval_history: dict[tuple[str, str], dict] = {}
         self._approval_channel: str | None = None
 
@@ -493,30 +577,47 @@ class DaemonApp:
                                   ) -> dict[str, object] | None:
         """Surface a pending HITL request; the authority stays server-side.
 
-        The connector never auto-approves with the agent's own key
-        (TC-29): the request is queued for the CLI/TUI operator and the
-        decision is forwarded through the Server's authorized mechanism.
+        CN5-01.02: the OPERATIONAL proposal is stored as an immutable
+        deep copy — the correlation evidence (request_hash etc.) reaches
+        the Core exactly as observed — while ONLY the display projection
+        is redacted. The channel's executor namespace is preserved (a
+        foreign frame never reaches this point; the transport validates
+        the namespace before the callback).
         """
-        # CN3-01.03/G02: approvals are keyed by the FULL authenticated
-        # namespace — a foreign frame never reaches this point (the
-        # transport validates), and same-text request ids of two
-        # Servers never collide.
+        from ..services.approval_state import (
+            ApprovalKey, ApprovalTarget, PendingApproval,
+        )
         request_id = str(frame.get("request_id", ""))
         server_id = str(frame.get("server_id", self._approval_channel or
                                   ""))
-        self._approvals[(server_id, request_id)] = {
-            "request_id": request_id,
-            "server_id": server_id,
-            "binding_id": frame.get("binding_id"),
-            "agent_id": frame.get("agent_id"),
-            "workspace_id": frame.get("workspace_id"),
-            "session_id": frame.get("session_id"),
-            "kind": frame.get("kind"),
-            "proposal": redact_mapping(frame.get("proposal", {})),
-            "received_at": _now(),
-            "source": "server",
-            "phase": "pending",  # CN4-01 state machine starts here
-        }
+        executor_id = str(frame.get("executor_id", ""))
+        binding_id = str(frame.get("binding_id", "") or "")
+        key_tuple = (server_id, request_id)
+        target = ApprovalTarget(
+            key=ApprovalKey(server_id, executor_id, request_id),
+            binding_id=binding_id,
+            agent_id=str(frame.get("agent_id", "") or ""),
+            workspace_id=str(frame.get("workspace_id", "") or ""),
+            session_key=None, kind=str(frame.get("kind", "") or ""))
+        incoming = PendingApproval.receive(
+            target=target, proposal=frame.get("proposal", {}),
+            kind=str(frame.get("kind", "") or "") or None,
+            received_at=_now(),
+            frame_session_id=(str(frame["session_id"]) if
+                              frame.get("session_id") else None))
+        existing = self._approvals.get(key_tuple)
+        if existing is not None:
+            # CN5-01.02: a replay of the SAME request (same key, same
+            # operational proposal) keeps the record, its attempt and
+            # its phase untouched; a DIFFERENT proposal under the same
+            # key is a typed conflict — never an overwrite.
+            if existing.proposal_digest() == incoming.proposal_digest():
+                return None
+            raise ConnectorError(
+                "OPERATION_CONFLICT", "approval",
+                "a different proposal arrived under the same request "
+                "key; the in-flight record was preserved")
+        self._approvals[key_tuple] = incoming
         return None
 
     async def _on_reconcile(self, frame: dict[str, object]
@@ -661,11 +762,19 @@ class DaemonApp:
                 yield response_stream(request.seq, record)
             yield response_ok(request.seq, {"closed": True})
         elif op == "approvals.pending":
-            yield response_ok(request.seq, {"approvals": list(
-                self._approvals.values())})
+            # CN5-01.01: the ONLY projection served outward is the
+            # redacted public dict — never the internal DTO.
+            yield response_ok(request.seq, {"approvals": [
+                record.to_public_dict()
+                for record in self._approvals.values()]})
         elif op == "approvals.decide":
             decision = await self._decide_approval(params)
             yield response_ok(request.seq, decision)
+        elif op == "approvals.status":
+            # CN5-02.03: local consultation of one attempt — phase,
+            # real producer presence and the allowed next action;
+            # never proposal bytes or raw sensitive responses.
+            yield response_ok(request.seq, self._approval_status(params))
         elif op == "availability.snapshot":
             # CN4-04.01/G01: the daemon publishes the versioned technical
             # availability snapshot through its real API — over the FULL
@@ -695,19 +804,23 @@ class DaemonApp:
 
     async def _decide_approval(self, params: dict[str, object]
                                ) -> dict[str, object]:
-        """CN4-01: the decision flows Server-authority → Core effect.
+        """CN5-01/02: reserve ONE attempt, run it in an OWNED producer.
 
-        Full key to the last resource (ApprovalKey = server/request,
-        resolved to binding by server+executor+binding_id with agent/
-        workspace compared — never by short binding_id alone and never
-        via split()); the FIRST external operation of the permissive
-        flow is the CANONICAL Server decision; only a confirmed result
-        authorizes the Core application, with the vocabulary translated
-        by the Core's public contract (approve→accept, deny→decline).
-        Phases: pending → server_pending → server_confirmed →
-        native_pending → applied (terminal records go to a bounded
-        tombstone history so a repeat consults the same outcome).
+        The waiter (IPC) never owns the Server POST or the Core call:
+        ``_run_decision`` is a task registered on the attempt BEFORE the
+        first await, and the waiter ``shield``s it - cancelling the
+        waiter does not cancel an accepted Server decision, and a
+        repeated identical request SHARES the same producer/result while
+        a different decision in flight is a typed conflict. The first
+        external operation of the permissive flow remains the canonical
+        Server decision; the vocabulary is translated (approve-accept,
+        deny-decline) only after a strictly-boolean True confirmation.
         """
+        from ..services.approval_state import (
+            PENDING, SERVER_REFUSED, SERVER_UNKNOWN, NATIVE_REFUSED,
+            NATIVE_UNKNOWN, DecisionAttempt, native_operation_id,
+            canonical_proposal_digest,
+        )
         request_id = str(params.get("request_id", ""))
         decision = str(params.get("decision", ""))
         server_hint = str(params.get("server_id", ""))
@@ -715,7 +828,7 @@ class DaemonApp:
             raise ConnectorError("VALIDATION_ERROR", "approval",
                                  "decision must be approve or deny")
         # CN4-01.01/ACN4-19: a short CLI choice resolves EXACTLY one
-        # request — ambiguity is a typed error listing the servers,
+        # request - ambiguity is a typed error listing the servers,
         # with ZERO HTTP requests issued.
         matches = [key for key in list(self._approvals) +
                    list(self._approval_history)
@@ -733,64 +846,164 @@ class DaemonApp:
         approval_key = matches[0]
         history = self._approval_history.get(approval_key)
         if history is not None:
-            # ACN4-16/20: a terminal attempt is idempotent — the repeat
+            # ACN4-16/20: a terminal attempt is idempotent - the repeat
             # consults the SAME recorded outcome, never re-decides.
             return dict(history["result"])
         pending = self._approvals.get(approval_key)
         if pending is None:
             raise ConnectorError("VALIDATION_ERROR", "approval",
                                  "unknown request")
-        phase = str(pending.get("phase", "pending"))
-        if phase in ("server_pending", "server_confirmed",
-                     "native_pending"):
-            # CN4-01.04/ACN4-15: one attempt owns the request; a second
-            # concurrent operator gets an explicit conflict — never a
-            # second canonical decision or native application.
-            raise ConnectorError(
-                "OPERATION_CONFLICT", "approval",
-                f"a decision for this request is already in progress "
-                f"(phase {phase})")
-        if phase == "result_unknown":
-            raise ConnectorError(
-                "OUTCOME_UNKNOWN", "approval",
-                "a previous decision attempt may have reached the "
-                "Server; its outcome is being reconciled — do not "
-                "re-send a new intent for the same work",
-                possible_effect=True,
-                action="Query the request by its id on the Server; the "
-                       "record stays consultable here.")
-        if decision not in ("approve", "deny"):
-            raise ConnectorError("VALIDATION_ERROR", "approval",
-                                 "decision must be approve or deny")
-        # CN4-01.01: resolve the FULL key — the server comes from the
-        # AUTHENTICATED request namespace (approval_key), never from
-        # split(binding_id); the binding matches server + binding_id
-        # and the frame's agent/workspace are compared when present.
-        server_id = approval_key[0]
+        # CN5-02.01: an existing attempt is shared/consulted - never
+        # re-created (no second POST, no second native application).
+        attempt = pending.attempt
+        if attempt is not None:
+            producer = attempt.producer_task
+            if producer is not None and not producer.done():
+                if attempt.local_decision != decision:
+                    raise ConnectorError(
+                        "OPERATION_CONFLICT", "approval",
+                        f"a different decision ({attempt.local_decision}) "
+                        "is already in flight for this request")
+                return await asyncio.shield(producer)
+            if attempt.result is not None:
+                if attempt.phase in (SERVER_REFUSED, NATIVE_REFUSED,
+                                     SERVER_UNKNOWN, NATIVE_UNKNOWN):
+                    raise ConnectorError(
+                        attempt.error_code or "OPERATION_CONFLICT",
+                        "approval",
+                        f"attempt ended in {attempt.phase}"
+                        + (f": {attempt.error_stage}" if
+                           attempt.error_stage else ""),
+                        possible_effect=attempt.phase in (SERVER_UNKNOWN,
+                                                          NATIVE_UNKNOWN))
+                return dict(attempt.result)
+            if attempt.phase != PENDING:
+                # A finished producer with no result and no phase change
+                # must never claim to be "in progress" again.
+                raise ConnectorError(
+                    "OPERATION_CONFLICT", "approval",
+                    f"previous attempt ended in {attempt.phase} without "
+                    "a consultable result")
+        # CN5-01.01/03: resolve the FULL target before reserving.
+        target = self._resolve_approval_target(pending)
+        attempt = DecisionAttempt(
+            attempt_id=f"{approval_key[0]}:{approval_key[1]}:{decision}",
+            key=target.key, target=target,
+            local_decision=decision,
+            core_decision=("accept" if decision == "approve"
+                           else "decline"),
+            intent_digest=canonical_proposal_digest(pending.proposal),
+            native_operation_id=native_operation_id(
+                target.key, decision))
+        pending.attempt = attempt
+        # CN5-02.01: the producer is created AND registered BEFORE the
+        # first await; the waiter shields it.
+        attempt.producer_task = asyncio.create_task(
+            self._run_decision(attempt, pending, dict(params)),
+            name=f"approval-decision-{approval_key[0]}-"
+                 f"{approval_key[1]}")
+        return await asyncio.shield(attempt.producer_task)
+
+    def _resolve_approval_target(self, pending):
+        """CN5-01.03: the full resource scope, resolved by its key."""
+        from nexus_connector_core import SessionKey
+        from ..services.approval_state import ApprovalTarget
+        key = pending.target.key
         state = self.store.load()
-        binding = next(
-            (b for b in state.bindings
-             if b.server_id == server_id
-             and b.binding_id == pending.get("binding_id")), None)
-        if binding is None:
+        bindings = [b for b in state.bindings
+                    if b.server_id == key.server_id
+                    and b.executor_id == key.executor_id
+                    and b.binding_id == pending.target.binding_id]
+        if not bindings:
+            bindings = [b for b in state.bindings
+                        if b.server_id == key.server_id
+                        and b.binding_id == pending.target.binding_id]
+        if not bindings:
             raise ConnectorError("VALIDATION_ERROR", "approval",
                                  "binding for this request is gone")
-        frame_agent = pending.get("agent_id")
-        if isinstance(frame_agent, str) and frame_agent and \
-                frame_agent != binding.agent_id:
+        if len(bindings) > 1:
+            raise ConnectorError("VALIDATION_ERROR", "approval",
+                                 "binding id is ambiguous in this "
+                                 "namespace")
+        binding = bindings[0]
+        agent_id = pending.target.agent_id or binding.agent_id
+        workspace_id = pending.target.workspace_id or \
+            binding.workspace_id
+        if pending.target.agent_id and \
+                pending.target.agent_id != binding.agent_id:
             raise ConnectorError(
                 "BINDING_NOT_AUTHORIZED", "approval",
                 "request agent does not match the binding in this "
                 "namespace")
+        if pending.target.workspace_id and \
+                pending.target.workspace_id != binding.workspace_id:
+            raise ConnectorError(
+                "BINDING_NOT_AUTHORIZED", "approval",
+                "request workspace does not match the binding in this "
+                "namespace")
+        session_key = None
+        connection_generation = None
+        owner_generation = None
+        frame_session = pending.frame_session_id
+        if frame_session:
+            # CN5-01.03: a NATIVE request carries a session - it must
+            # resolve in THIS namespace; absence is a typed refusal,
+            # never silently "administrative".
+            session_key = SessionKey(key.server_id, key.executor_id,
+                                     frame_session)
+            try:
+                session = self.runtimes.session_by_key(session_key)
+            except ConnectorError:
+                raise ConnectorError(
+                    "BINDING_NOT_AUTHORIZED", "approval",
+                    f"native approval targets session {frame_session!r} "
+                    "which is not managed in this namespace",
+                    action="The request cannot be applied to another "
+                           "Server's session; refusing.") from None
+            connection_generation = session.connection_generation
+            owner_generation = session.session_owner_generation
+        return ApprovalTarget(
+            key=key, binding_id=binding.binding_id,
+            agent_id=agent_id, workspace_id=workspace_id,
+            session_key=session_key,
+            connection_generation=connection_generation,
+            session_owner_generation=owner_generation,
+            authorization_revision=binding.authorization_revision,
+            configuration_revision=binding.configuration_revision,
+            kind=pending.kind)
+
+    async def _run_decision(self, attempt, pending,
+                            params: dict[str, object]
+                            ) -> dict[str, object]:
+        """CN5-02: the OWNED producer of one decision attempt.
+
+        Runs the canonical Server POST and (only after a strictly
+        positive confirmation and a re-validated target) the native
+        application. Every exit is explicit (the plan's phase table);
+        nothing here is cancelled by the waiter that merely awaits.
+        """
+        from ..services.approval_state import (
+            APPLIED, NATIVE_PENDING, NATIVE_REFUSED, NATIVE_UNKNOWN,
+            SERVER_CONFIRMED, SERVER_PENDING, SERVER_REFUSED,
+            SERVER_UNKNOWN,
+        )
+        from nexus_connector_core import CoreError
+        target = attempt.target
+        request_id = target.key.request_id
+        decision = attempt.local_decision
+        server_id = target.key.server_id
+        state = self.store.load()
         profile = state.servers.get(server_id)
-        identity = state.identity_for(server_id, binding.agent_id)
+        identity = state.identity_for(server_id, target.agent_id)
         if profile is None or identity is None:
+            attempt.phase = SERVER_REFUSED
+            attempt.error_code = "AGENT_AUTH_REQUIRED"
+            attempt.result = None
             raise ConnectorError("AGENT_AUTH_REQUIRED", "approval")
         agent_key = self.vault.resolve(identity.secret_handle)
-        # CN4-01.02: FIRST EXTERNAL OPERATION = canonical Server
-        # decision. The local operator proposal is intent, not
-        # authority; nothing native may run before this confirms.
-        pending["phase"] = "server_pending"
+        # CN5-01.04: target validated before the POST; the client
+        # belongs to the PRODUCER, never to the waiter.
+        attempt.phase = SERVER_PENDING
         try:
             async with NexusHTTPClient(profile.base_url) as http:
                 applied = await http.approval_decision(
@@ -800,76 +1013,172 @@ class DaemonApp:
                         params.get("response"), dict) else None)
         except ConnectorError as error:
             if getattr(error, "possible_effect", False):
-                # CN4-01.05: a possible write is never undone and never
-                # restored as a fresh pending invitation.
-                pending["phase"] = "result_unknown"
-                raise
-            # Definitive refusal / not delivered: the Server did not
-            # consume the decision; the request stays pending for a
-            # corrected retry.
-            pending["phase"] = "pending"
+                # CN5-02.02: possible write - unknown, consultable, no
+                # automatic re-POST and no native application.
+                attempt.phase = SERVER_UNKNOWN
+            else:
+                attempt.phase = SERVER_REFUSED
+            attempt.error_code = error.code
+            attempt.error_stage = error.stage
+            attempt.result = None
             raise
-        if not applied:
-            # 200-but-not-applied (conflict/already decided): the
-            # Server's canonical answer exists — record it as the
-            # outcome; NO native application is authorized.
-            result = {"request_id": request_id, "decision": decision,
-                      "applied": False, "native": None,
-                      "authority": "server-side CAS answered; the Core "
-                                   "was not touched"}
-            self._record_terminal(approval_key, result)
-            return result
-        pending["phase"] = "server_confirmed"
-        # CN4-01.03: translate the CONFIRMED decision through the Core's
-        # public vocabulary and apply it only for a LIVE MANAGED
-        # session of this namespace; an administrative (Server-side)
-        # request ends at the CAS.
-        native_result = None
-        session_id = pending.get("session_id")
-        managed = (isinstance(session_id, str) and session_id
-                   and session_id in self.runtimes.session_ids())
-        if managed:
-            pending["phase"] = "native_pending"
-            core_decision = ("accept" if decision == "approve"
-                             else "decline")
-            try:
-                native_result = await self.runtimes.decide_native_approval(
-                    session_id, f"op_appr_{request_id}",
-                    request=pending.get("proposal", {})
-                    if isinstance(pending.get("proposal"), dict) else {},
-                    decision=core_decision,
-                    kind=pending.get("kind"),
-                    response=params.get("response") if isinstance(
-                        params.get("response"), dict) else None)
-            except ConnectorError as error:
-                if getattr(error, "possible_effect", False):
-                    pending["phase"] = "result_unknown"
-                else:
-                    # Pre-effect refusal of the authorized application:
-                    # terminal and distinct — never back to pending.
-                    pending["phase"] = "native_refused"
-                    pending["native_error"] = error.code
-                raise
-        result = {"request_id": request_id, "decision": decision,
-                  "applied": applied,
-                  "native": native_result,
-                  "authority": "canonical Server decision confirmed "
-                               "before any native application"}
-        self._record_terminal(approval_key, result)
-        return result
+        if applied is not True:
+            # Strictly-boolean gate upstream; False is the Server's
+            # canonical "not applied" - terminal refusal, zero native.
+            attempt.phase = SERVER_REFUSED
+            attempt.result = {"request_id": request_id,
+                              "decision": decision, "applied": False,
+                              "native": None,
+                              "authority": "server-side CAS answered; "
+                                           "the Core was not touched"}
+            self._record_terminal((server_id, request_id),
+                                  attempt.result)
+            return attempt.result
+        attempt.server_confirmed = True
+        attempt.phase = SERVER_CONFIRMED
+        if target.session_key is None:
+            # Administrative request: the canonical CAS decision IS the
+            # whole authorized effect.
+            attempt.phase = APPLIED
+            attempt.result = {
+                "request_id": request_id, "decision": decision,
+                "applied": True, "native": None,
+                "authority": "canonical Server decision confirmed "
+                             "(administrative request)"}
+            self._record_terminal((server_id, request_id),
+                                  attempt.result)
+            return attempt.result
+        # CN5-01.04: re-validate the target AFTER the POST - a target
+        # that changed during the confirmation keeps the canonical
+        # answer (no second POST) and records a typed refusal with ZERO
+        # effect on the new target.
+        try:
+            current = self._resolve_approval_target(pending)
+        except ConnectorError:
+            current = None
+        target_changed = not (
+            current is not None
+            and current.binding_id == target.binding_id
+            and current.agent_id == target.agent_id
+            and current.workspace_id == target.workspace_id
+            and current.session_key == target.session_key
+            and current.connection_generation ==
+            target.connection_generation
+            and current.session_owner_generation ==
+            target.session_owner_generation
+            and current.authorization_revision ==
+            target.authorization_revision)
+        if target_changed:
+            attempt.phase = NATIVE_REFUSED
+            attempt.error_code = "STALE_GENERATION"
+            attempt.error_stage = ("approval target changed during "
+                                   "confirmation")
+            attempt.result = None
+            raise ConnectorError(
+                "STALE_GENERATION", "approval",
+                "the approval target changed while the Server "
+                "confirmed; the canonical answer is kept and no "
+                "native effect was issued",
+                action="Do not re-POST: the confirmation is durable; "
+                       "reconcile the target before a new request.")
+        # CN5-01.03: the native application is MANDATORILY scoped by
+        # the full target (SessionKey namespace + captured snapshot).
+        attempt.phase = NATIVE_PENDING
+        try:
+            native_result = await self.runtimes.decide_native_approval(
+                target=target,
+                operation_id=attempt.native_operation_id,
+                request=pending.proposal,
+                decision=attempt.core_decision,
+                response=params.get("response") if isinstance(
+                    params.get("response"), dict) else None)
+        except ConnectorError as error:
+            if getattr(error, "possible_effect", False):
+                attempt.phase = NATIVE_UNKNOWN
+            else:
+                # CN5-02.02/ACN5-25: a typed pre-effect refusal keeps
+                # the canonical confirmation and stays consultable -
+                # never a false "in progress", never a re-POST.
+                attempt.phase = NATIVE_REFUSED
+            attempt.error_code = error.code
+            attempt.error_stage = error.stage
+            attempt.result = None
+            raise
+        except CoreError as error:
+            # The Core's own contract refusals (hash mismatch, journal,
+            # correlation) are typed, terminal and consultable.
+            attempt.phase = NATIVE_REFUSED
+            attempt.error_code = str(getattr(error, "code",
+                                             "CORE_ERROR"))
+            attempt.error_stage = "core:" + str(
+                getattr(error, "stage", "approval_decide"))
+            attempt.result = None
+            raise ConnectorError(
+                attempt.error_code, "approval",
+                f"the Core refused the native application: "
+                f"{getattr(error, 'message', error)}",
+                action="The Server confirmation is durable; consult "
+                       "this attempt via approvals.status.") from None
+        attempt.phase = APPLIED
+        attempt.result = {
+            "request_id": request_id, "decision": decision,
+            "applied": True, "native": native_result,
+            "authority": "canonical Server decision confirmed before "
+                         "any native application"}
+        self._record_terminal((server_id, request_id), attempt.result)
+        return attempt.result
+
+    def _approval_status(self, params: dict[str, object]
+                         ) -> dict[str, object]:
+        """CN5-02.03: consult one attempt without side effects."""
+        request_id = str(params.get("request_id", ""))
+        server_hint = str(params.get("server_id", ""))
+        matches = [key for key in list(self._approvals) +
+                   list(self._approval_history)
+                   if key[1] == request_id
+                   and (not server_hint or key[0] == server_hint)]
+        if len(matches) != 1:
+            raise ConnectorError("VALIDATION_ERROR", "approval",
+                                 "unknown or ambiguous request")
+        key = matches[0]
+        history = self._approval_history.get(key)
+        if history is not None:
+            return {"request_id": request_id, "phase": "terminal",
+                    "producer": False,
+                    "result": history["result"],
+                    "allowed": "consult (terminal outcome recorded)"}
+        pending = self._approvals[key]
+        attempt = pending.attempt
+        if attempt is None:
+            return {"request_id": request_id, "phase": "pending",
+                    "producer": False,
+                    "allowed": "decide (awaiting operator)"}
+        producer_alive = (attempt.producer_task is not None
+                          and not attempt.producer_task.done())
+        allowed = ("share/await the running attempt" if producer_alive
+                   else "consult the recorded outcome" if
+                   attempt.result is not None else
+                   f"inspect (ended in {attempt.phase})")
+        return {"request_id": request_id, "phase": attempt.phase,
+                "producer": producer_alive,
+                "result": attempt.result,
+                "error": {"code": attempt.error_code,
+                          "stage": attempt.error_stage}
+                if attempt.error_code else None,
+                "allowed": allowed}
 
     def _record_terminal(self, approval_key: tuple[str, str],
                          result: dict[str, object]) -> None:
-        """CN4-01.04/ACN4-20: retire the request BY ITS OWN KEY (the
+        """CN4-01.04/ACN5-02.04: retire the request BY ITS OWN KEY (the
         agent secret never substitutes the dictionary key) and keep a
         bounded tombstone so repeats consult the same outcome."""
+        from ..services.approval_state import TOMBSTONE_LIMIT
         self._approvals.pop(approval_key, None)
         self._approval_history[approval_key] = {
             "result": result, "at": _now()}
-        while len(self._approval_history) > 128:
+        while len(self._approval_history) > TOMBSTONE_LIMIT:
             self._approval_history.pop(next(iter(
                 self._approval_history)))
-
 
 def _error_frame(error: ConnectorError, frame: dict[str, object]
                  ) -> dict[str, object]:
