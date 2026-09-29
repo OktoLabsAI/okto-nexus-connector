@@ -302,3 +302,61 @@ async def test_r4_binding_ticket_request_uses_canonical_key_and_replacement_id()
     body = json.loads(seen[0][1])
     assert body["credential_request_id"] == "request-2"
     assert body["replaces_ticket_id"] == "ept_old"
+
+
+async def test_r4_core_turn_receipt_projection_precedes_http_publish():
+    from dataclasses import replace
+    from nexus_connector_core import (
+        CoreError, ExecutionContext, Operation, OperationReceipt,
+        R4_PREVIEW_REVISION,
+        intent_hash, r4_submit_intent_hash,
+    )
+
+    frame = {
+        "protocol_major": 1, "contract_revision": R4_PREVIEW_REVISION,
+        "type": "operation.submit", "server_id": "srv",
+        "executor_id": "exe", "binding_id": "binding",
+        "agent_id": "agent", "workspace_id": "ws",
+        "workspace_binding_id": "workspace-binding",
+        "session_id": "session", "session_owner_generation": 1,
+        "authorization_revision": 1, "configuration_revision": 1,
+        "binding_revision": 1, "credential_epoch": 1,
+        "connection_id": "control", "connection_generation": 1,
+        "grant_id": "grant", "operation_id": "op",
+        "action": "turn.submit", "payload": {"text": "Hello"},
+    }
+    frame["intent_hash"] = r4_submit_intent_hash(frame)
+    context = ExecutionContext("srv", "exe", "binding", "agent", "ws",
+                               1, 1, 1, 100.0,
+                               frozenset({"turn.submit"}))
+    semantic = Operation("op", "session", "turn.submit", {"text": "Hello"})
+    core_receipt = OperationReceipt(
+        "op", intent_hash(semantic, context), "RECEIVED_DURABLE",
+        False, True, "session")
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.read())
+        seen.append(body)
+        return httpx.Response(200, headers={
+            "X-Nexus-Connections-Revision": "nexus-connections-2026-09-29-r4",
+        }, json={"operation_id": "op", "receipt_revision": 1,
+                 "stage": "RECEIVED_DURABLE", "accepted": True,
+                 "reused": False})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with client:
+        async with NexusHTTPClient("http://127.0.0.1:8202", client=client) as http:
+            accepted = await http.publish_core_turn_receipt(
+                "nxt4_binding-ticket", submit_frame=frame,
+                core_receipt=core_receipt, context=context,
+                receipt_revision=1)
+            with pytest.raises(CoreError):
+                await http.publish_core_turn_receipt(
+                    "nxt4_binding-ticket", submit_frame=frame,
+                    core_receipt=replace(core_receipt, intent_hash="sha256:" + "a" * 64),
+                    context=context, receipt_revision=1)
+    assert accepted.operation_id == "op"
+    assert len(seen) == 1
+    assert seen[0]["intent_hash"] == frame["intent_hash"]
+    assert seen[0]["intent_hash"] != core_receipt.intent_hash

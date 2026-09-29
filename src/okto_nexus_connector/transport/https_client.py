@@ -11,9 +11,13 @@ from __future__ import annotations
 
 import ipaddress
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 import httpx
+
+if TYPE_CHECKING:
+    from nexus_connector_core import ExecutionContext, OperationReceipt
 
 from ..errors import ConnectorError
 from ..redaction import redact_text
@@ -401,6 +405,18 @@ class NexusHTTPClient:
                                  "Server returned an invalid receipt acknowledgment")
         return ReceiptAccepted(operation_id, parsed["receipt_revision"],
                                parsed["stage"], payload["reused"])
+
+    async def publish_core_turn_receipt(
+            self, ticket: str, *, submit_frame: dict[str, object],
+            core_receipt: OperationReceipt, context: ExecutionContext,
+            receipt_revision: int) -> ReceiptAccepted:
+        """Verify a Core turn receipt before publishing its R4 wire fact."""
+        from nexus_connector_core import project_r4_turn_receipt
+
+        frame = project_r4_turn_receipt(
+            submit_frame, core_receipt, context,
+            receipt_revision=receipt_revision)
+        return await self.publish_operation_receipt(ticket, frame=frame)
 
     async def request_r4_binding_ticket(
             self, key: str, *, binding_id: str, client_intent_id: str,
