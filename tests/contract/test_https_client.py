@@ -7,6 +7,7 @@ integration remains J-gated.
 
 from __future__ import annotations
 
+import json
 import pytest
 import httpx
 
@@ -270,3 +271,34 @@ async def test_r4_receipt_publication_uses_binding_ticket_and_exact_ack():
     assert seen[0][0] == "/v1/runtime/operations/op/receipts"
     assert seen[0][1] == "Bearer nxt4_binding-ticket"
     assert len(seen) == 1
+
+
+async def test_r4_binding_ticket_request_uses_canonical_key_and_replacement_id():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.headers.get("authorization"), request.read()))
+        return httpx.Response(200, headers={
+            "X-Nexus-Connections-Revision": "nexus-connections-2026-09-29-r4",
+        }, json={
+            "ticket_id": "ept_new", "ticket": "nxt4_secret",
+            "executor_id": "exe", "binding_id": "binding",
+            "agent_id": "agent", "expires_in": 300,
+            "credential_epoch": 2, "authorization_revision": 3,
+            "audience": "nexus-executor-control",
+            "scopes": ["receipt:publish"],
+        })
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with client:
+        async with NexusHTTPClient("http://127.0.0.1:8202", client=client) as http:
+            issued = await http.request_r4_binding_ticket(
+                "canonical-agent-key", binding_id="binding",
+                client_intent_id="intent", credential_request_id="request-2",
+                replaces_ticket_id="ept_old", scopes=("receipt:publish",),
+                expires_in=300)
+    assert issued.ticket_id == "ept_new" and issued.credential_epoch == 2
+    assert seen[0][0] == "Bearer canonical-agent-key"
+    body = json.loads(seen[0][1])
+    assert body["credential_request_id"] == "request-2"
+    assert body["replaces_ticket_id"] == "ept_old"

@@ -63,6 +63,19 @@ class ReceiptAccepted:
 
 
 @dataclass(frozen=True, slots=True)
+class R4BindingTicket:
+    ticket_id: str
+    ticket: str
+    executor_id: str
+    binding_id: str
+    agent_id: str
+    expires_in: int
+    credential_epoch: int
+    authorization_revision: int
+    scopes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class BindingProposal:
     proposal_id: str
     proposal_revision: int
@@ -388,6 +401,47 @@ class NexusHTTPClient:
                                  "Server returned an invalid receipt acknowledgment")
         return ReceiptAccepted(operation_id, parsed["receipt_revision"],
                                parsed["stage"], payload["reused"])
+
+    async def request_r4_binding_ticket(
+            self, key: str, *, binding_id: str, client_intent_id: str,
+            credential_request_id: str, scopes: tuple[str, ...],
+            replaces_ticket_id: str | None = None,
+            expires_in: int = 600) -> R4BindingTicket:
+        """Issue one scoped derivative; a lost secret requires a new request ID."""
+        payload = await self._request(
+            "POST", f"/v1/connections/bindings/{binding_id}/ticket",
+            key=key, json_body={
+                "client_intent_id": client_intent_id,
+                "credential_request_id": credential_request_id,
+                "replaces_ticket_id": replaces_ticket_id,
+                "audience": "nexus-executor-control",
+                "scopes": list(scopes), "expires_in": expires_in,
+            }, require_revision=True,
+        )
+        if (payload.get("audience") != "nexus-executor-control" or
+                payload.get("binding_id") != binding_id or
+                not isinstance(payload.get("ticket_id"), str) or
+                not payload["ticket_id"].startswith("ept_") or
+                not isinstance(payload.get("ticket"), str) or
+                not payload["ticket"].startswith("nxt4_") or
+                not isinstance(payload.get("executor_id"), str) or
+                not payload["executor_id"] or
+                not isinstance(payload.get("agent_id"), str) or
+                not payload["agent_id"] or
+                payload.get("scopes") != sorted(scopes) or
+                any(type(payload.get(name)) is not int or payload[name] < 1
+                    for name in ("credential_epoch", "authorization_revision")) or
+                payload.get("expires_in") != expires_in):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "binding_ticket",
+                                 "Server returned an invalid R4 binding ticket")
+        return R4BindingTicket(
+            ticket_id=payload["ticket_id"], ticket=payload["ticket"],
+            executor_id=payload["executor_id"], binding_id=binding_id,
+            agent_id=payload["agent_id"], expires_in=expires_in,
+            credential_epoch=payload["credential_epoch"],
+            authorization_revision=payload["authorization_revision"],
+            scopes=tuple(payload["scopes"]),
+        )
 
     async def prepare_binding(self, key: str, *, agent_id_hint: str,
                               connector_id: str, adapter_id: str,
