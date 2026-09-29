@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -91,12 +91,47 @@ class BindingRecord:
 
 
 @dataclass(slots=True)
+class LocalRealizationRecord:
+    """Executor-only root and candidate mapping; never sent as a whole."""
+
+    client_intent_id: str
+    server_id: str
+    executor_id: str
+    agent_id: str
+    local_realization_ref: str
+    realization_revision: int
+    workspace_id: str | None
+    workspace_label: str
+    workspace_root: str
+    adapter_id: str
+    candidate_ref: str
+    candidate_executable: str
+    candidate_fingerprint: str
+    candidate_source: str
+    candidate_trust: str
+    candidate_launch_script: str | None
+    candidate_build_identity: str | None
+    candidate_version: str | None
+    candidate_architecture: str | None
+    inventory_revision: str
+    local_root_proof_digest: str
+    root_proof_nonce: str
+    configuration_digest: str
+    local_consent_id: str
+    canonical_workspace_id: str = ""
+    realization_ref: str = ""
+    workspace_binding_id: str = ""
+    status: str = "LOCAL_VALIDATED"
+
+
+@dataclass(slots=True)
 class ConnectorState:
     schema_version: int = SCHEMA_VERSION
     connector_id: str = ""
     servers: dict[str, ServerProfileRecord] = field(default_factory=dict)
     identities: list[IdentityRecord] = field(default_factory=list)
     bindings: list[BindingRecord] = field(default_factory=list)
+    realizations: list[LocalRealizationRecord] = field(default_factory=list)
     preferences: dict[str, Any] = field(default_factory=dict)
 
     # -- lookups ---------------------------------------------------------
@@ -221,6 +256,8 @@ def state_from_json(payload: dict[str, Any]) -> ConnectorState:
         if not record.candidate_architecture:
             record.needs_rediscovery = True
         state.bindings.append(record)
+    for item in payload.get("realizations", []):
+        state.realizations.append(LocalRealizationRecord(**item))
     preferences = payload.get("preferences", {})
     if isinstance(preferences, dict):
         state.preferences = preferences
@@ -235,6 +272,7 @@ def state_to_json(state: ConnectorState) -> dict[str, Any]:
                     for key, value in state.servers.items()},
         "identities": [asdict(value) for value in state.identities],
         "bindings": [asdict(value) for value in state.bindings],
+        "realizations": [asdict(value) for value in state.realizations],
         "preferences": state.preferences,
     }
 
