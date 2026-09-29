@@ -1,10 +1,10 @@
 # Wheel Core fixado para R4
 
-Current: `nexus_connector_core-0.2.13.dev0-py3-none-any.whl`
+Current: `nexus_connector_core-0.2.14.dev0-py3-none-any.whl`
 
-SHA-256: `be0d974b036d6384e69655cff5556d6f5ee853f991a913087fe947c56fa2be96`
+SHA-256: `759cdee946037ed5e215f901cdfb09b31baf350c7fde69e4d5f79bd41f515bee`
 
 É o mesmo artefato usado pelo Nexus. Para instalar o Connector via pip antes
 de publicar o Core em um índice, use `pip install --find-links vendor/wheels .`
 na raiz deste repositório. O NXL ainda é R3; o artefato não habilita execução
-remota R4. O wheel 0.2.12 permanece apenas para rastreabilidade.
+remota R4. Os wheels 0.2.12 e 0.2.13 permanecem apenas para rastreabilidade.
