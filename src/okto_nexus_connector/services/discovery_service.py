@@ -318,6 +318,23 @@ def executor_inventory_snapshot(candidates, *, server_id: str, executor_id: str,
     )
 
 
+def resolve_executor_installation(candidates, *, adapter_id: str,
+                                  candidate_ref: str,
+                                  expected_inventory_revision: str):
+    """Select only within this executor's current, full Core inventory."""
+    from nexus_connector_core import calculate_inventory_revision, resolve_installation
+
+    items = tuple(candidates)
+    if calculate_inventory_revision(items) != expected_inventory_revision:
+        raise ConnectorError("STALE_GENERATION", "inventory_selection",
+                             "The selected inventory revision is stale")
+    try:
+        return resolve_installation(items, adapter_id, candidate_ref)
+    except CoreError as error:
+        raise ConnectorError(error.code, "inventory_selection", str(error),
+                             retry_safe=error.retry_safe) from None
+
+
 def resolve_selection(candidates, adapter_id: str, candidate_ref: str):
     """CN2/N09: exact ONE-candidate resolution via the Core's public
     resolver (typed REF_NOT_FOUND / REF_AMBIGUOUS; never index 0)."""
