@@ -118,6 +118,22 @@ class R4BindingView:
 
 
 @dataclass(frozen=True, slots=True)
+class R4IntentResolution:
+    client_intent_id: str
+    intent_id: str
+    operation_id: str
+    session_id: str
+    reuse: bool
+    scope: dict[str, object]
+    semantic_intent: dict[str, object]
+    intent_hash: str
+    resolution_revision: int
+    expires_at: str
+    can_submit: bool
+    blockers: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ReceiptAccepted:
     operation_id: str
     receipt_revision: int
@@ -569,6 +585,55 @@ class NexusHTTPClient:
                                  "Server returned an invalid binding resolution")
         return R4BindingView(**{name: payload[name] for name in
                                (*fields, *versions)})
+
+    async def resolve_r4_intent(
+            self, key: str, *, client_intent_id: str,
+            intent: str, binding_id: str, workspace_binding_id: str,
+            session_id: str | None = None, new_session: bool | None = None,
+            text: str | None = None) -> R4IntentResolution:
+        """Reserve a Server intent without admitting an effect."""
+        body: dict[str, object] = {
+            "client_intent_id": client_intent_id,
+            "intent": intent, "binding_id": binding_id,
+            "workspace_binding_id": workspace_binding_id,
+        }
+        if session_id is not None:
+            body["session_id"] = session_id
+        if new_session is not None:
+            body["new_session"] = new_session
+        if text is not None:
+            body["text"] = text
+        payload = await self._request(
+            "POST", "/v1/runtime/intents:resolve", key=key,
+            json_body=body, require_revision=True,
+        )
+        names = ("client_intent_id", "intent_id", "operation_id",
+                 "session_id", "intent_hash", "expires_at")
+        if (any(not isinstance(payload.get(name), str) or not payload[name]
+                for name in names) or
+                payload["client_intent_id"] != client_intent_id or
+                type(payload.get("reuse")) is not bool or
+                not isinstance(payload.get("scope"), dict) or
+                payload["scope"].get("binding_id") != binding_id or
+                payload["scope"].get("workspace_binding_id") !=
+                workspace_binding_id or
+                not isinstance(payload.get("semantic_intent"), dict) or
+                type(payload.get("resolution_revision")) is not int or
+                payload["resolution_revision"] < 1 or
+                type(payload.get("can_submit")) is not bool or
+                not isinstance(payload.get("blockers"), list) or
+                any(not isinstance(item, str) for item in payload["blockers"]) or
+                payload.get("dispatch_owner") != "server"):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "intent_resolve",
+                                 "Server returned an invalid intent resolution")
+        return R4IntentResolution(
+            **{name: payload[name] for name in names},
+            reuse=payload["reuse"], scope=payload["scope"],
+            semantic_intent=payload["semantic_intent"],
+            resolution_revision=payload["resolution_revision"],
+            can_submit=payload["can_submit"],
+            blockers=tuple(payload["blockers"]),
+        )
 
     async def publish_operation_receipt(self, ticket: str, *,
                                         frame: dict[str, object]
