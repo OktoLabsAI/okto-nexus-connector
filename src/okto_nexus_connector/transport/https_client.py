@@ -21,6 +21,7 @@ from ..redaction import redact_text
 DEFAULT_TIMEOUT = httpx.Timeout(15.0, connect=10.0)
 _USER_AGENT = "okto-nexus-connector/" + __import__(
     "okto_nexus_connector").__version__
+MANAGEMENT_REVISION = "nexus-connections-2026-09-29-r4"
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +32,26 @@ class MeInfo:
     permissions: tuple[str, ...]
     authorization_revision: int
     configuration_revision: int
+    credential_epoch: int
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutorRegistration:
+    server_id: str
+    executor_id: str
+    connector_id: str
+    state: str
+    bootstrap_ticket: str
+    ticket_expires_in: int
+
+
+@dataclass(frozen=True, slots=True)
+class InventoryAccepted:
+    server_id: str
+    executor_id: str
+    publication_sequence: int
+    inventory_revision: str
+    fresh_for_ms: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,7 +187,8 @@ class NexusHTTPClient:
 
     async def _request(self, method: str, path: str, *, key: str | None,
                         json_body: dict[str, object] | None = None,
-                        expect: int | tuple[int, ...] = 200) -> dict[str, object]:
+                        expect: int | tuple[int, ...] = 200,
+                        require_revision: bool = False) -> dict[str, object]:
         assert self._client is not None, "use 'async with NexusHTTPClient'"
         headers: dict[str, str] = {}
         if key is not None:
@@ -210,6 +232,10 @@ class NexusHTTPClient:
                     "credential redirect to another origin refused",
                     action="Verify the approved Server origin; "
                            "cross-origin redirects are refused.")
+        if (require_revision and response.headers.get(
+                "X-Nexus-Connections-Revision") != MANAGEMENT_REVISION):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "http",
+                                 "Server management revision is incompatible")
         if isinstance(expect, int):
             expect = (expect,)
         if response.status_code not in expect:
@@ -227,10 +253,11 @@ class NexusHTTPClient:
     # -- contract routes (plan A.5) ---------------------------------------
 
     async def me(self, key: str) -> MeInfo:
-        payload = await self._request("GET", "/v1/connections/me", key=key)
+        payload = await self._request("GET", "/v1/connections/me", key=key,
+                                      require_revision=True)
         agent_id = payload.get("agent_id")
         server_id = payload.get("server_id")
-        if not isinstance(agent_id, str) or not agent_id.startswith("ag_"):
+        if not isinstance(agent_id, str) or not 1 <= len(agent_id) <= 160:
             raise ConnectorError("VERSION_INCOMPATIBLE", "me",
                                  "Server /me did not return an agent identity")
         if not isinstance(server_id, str) or not server_id:
@@ -238,18 +265,91 @@ class NexusHTTPClient:
                                  "Server /me did not identify itself",
                                  action="Confirm the Server installation "
                                         "identity and update the profile.")
-        permissions = payload.get("permissions", [])
-        revisions = payload.get("revisions", {})
+        permissions = payload.get("permissions")
+        revisions = payload.get("revisions")
+        display_name = payload.get("display_name")
+        if (not isinstance(display_name, str) or len(display_name) > 4096 or
+                not isinstance(permissions, list) or
+                any(not isinstance(item, str) or not 1 <= len(item) <= 160
+                    for item in permissions) or
+                not isinstance(revisions, dict) or
+                any(type(revisions.get(name)) is not int or revisions[name] < 1
+                    for name in ("authorization", "configuration",
+                                 "credential_epoch"))):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "me",
+                                 "Server /me returned invalid permissions or revisions")
         return MeInfo(
             server_id=server_id,
             agent_id=agent_id,
-            display_name=str(payload.get("display_name", "")),
-            permissions=tuple(str(item) for item in permissions
-                              if isinstance(item, str)),
-            authorization_revision=int(
-                revisions.get("authorization", 1)),
-            configuration_revision=int(
-                revisions.get("configuration", 1)),
+            display_name=display_name,
+            permissions=tuple(permissions),
+            authorization_revision=revisions["authorization"],
+            configuration_revision=revisions["configuration"],
+            credential_epoch=revisions["credential_epoch"],
+        )
+
+    async def register_executor(self, key: str, *, client_intent_id: str,
+                                connector_id: str, label: str,
+                                control_capabilities: tuple[str, ...] = (
+                                )) -> ExecutorRegistration:
+        payload = await self._request(
+            "POST", "/v1/connections/executors:register", key=key,
+            json_body={"client_intent_id": client_intent_id,
+                       "connector_id": connector_id, "label": label,
+                       "control_capabilities": list(control_capabilities)},
+            expect=(200, 201), require_revision=True,
+        )
+        ticket = payload.get("bootstrap_ticket")
+        if (not isinstance(ticket, dict) or
+                ticket.get("audience") != "nexus-executor-control" or
+                not isinstance(ticket.get("scopes"), list) or
+                any(not isinstance(item, str) for item in ticket["scopes"]) or
+                set(ticket["scopes"]) != {
+                    "link:connect", "inventory:publish"} or
+                not isinstance(ticket.get("ticket"), str) or
+                not ticket["ticket"].startswith("nxt4_") or
+                type(ticket.get("expires_in")) is not int or
+                not 1 <= ticket["expires_in"] <= 600 or
+                not all(isinstance(payload.get(name), str) and payload[name]
+                        for name in ("server_id", "executor_id", "connector_id")) or
+                ticket.get("executor_id") != payload.get("executor_id") or
+                ticket.get("binding_id") is not None or
+                not isinstance(ticket.get("agent_id"), str) or
+                not ticket["agent_id"] or
+                any(type(ticket.get(name)) is not int or ticket[name] < 1
+                    for name in ("credential_epoch", "authorization_revision")) or
+                payload.get("connector_id") != connector_id or
+                payload.get("state") != "AWAITING_INVENTORY"):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "register_executor",
+                                 "Server returned an invalid executor registration")
+        return ExecutorRegistration(
+            server_id=payload["server_id"], executor_id=payload["executor_id"],
+            connector_id=payload["connector_id"], state=payload["state"],
+            bootstrap_ticket=ticket["ticket"],
+            ticket_expires_in=ticket["expires_in"],
+        )
+
+    async def publish_inventory(self, ticket: str, *, executor_id: str,
+                                snapshot: dict[str, object]) -> InventoryAccepted:
+        payload = await self._request(
+            "PUT", f"/v1/runtime/executors/{executor_id}/inventory", key=ticket,
+            json_body=snapshot, require_revision=True,
+        )
+        if (payload.get("accepted") is not True or
+                payload.get("executor_id") != executor_id or
+                payload.get("server_id") != snapshot.get("server_id") or
+                payload.get("inventory_revision") != snapshot.get("inventory_revision") or
+                payload.get("publication_sequence") != snapshot.get(
+                    "publication_sequence") or
+                type(payload.get("fresh_for_ms")) is not int or
+                not 0 <= payload["fresh_for_ms"] <= 120_000):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "inventory",
+                                 "Server returned an invalid inventory receipt")
+        return InventoryAccepted(
+            server_id=payload["server_id"], executor_id=executor_id,
+            publication_sequence=payload["publication_sequence"],
+            inventory_revision=payload["inventory_revision"],
+            fresh_for_ms=payload["fresh_for_ms"],
         )
 
     async def prepare_binding(self, key: str, *, agent_id_hint: str,

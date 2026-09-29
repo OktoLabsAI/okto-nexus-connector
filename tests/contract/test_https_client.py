@@ -8,6 +8,7 @@ integration remains J-gated.
 from __future__ import annotations
 
 import pytest
+import httpx
 
 from okto_nexus_connector.errors import ConnectorError
 from okto_nexus_connector.transport.https_client import (
@@ -168,3 +169,67 @@ async def test_origin_normalization():
     assert origin_of("https://Nexus.Example:443/x") == \
         "https://nexus.example"
     assert origin_of("http://127.0.0.1:9000/x") == "http://127.0.0.1:9000"
+
+
+async def test_r4_registration_and_inventory_use_distinct_bearers():
+    seen = []
+    revision = "nexus-connections-2026-09-29-r4"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, request.headers.get("authorization")))
+        if request.url.path.endswith("executors:register"):
+            return httpx.Response(201, headers={
+                "X-Nexus-Connections-Revision": revision}, json={
+                    "server_id": "srv", "executor_id": "exe",
+                    "connector_id": "connector", "state": "AWAITING_INVENTORY",
+                    "bootstrap_ticket": {
+                        "ticket_id": "ticket", "ticket": "nxt4_" + "x" * 48,
+                        "executor_id": "exe", "binding_id": None,
+                        "agent_id": "agent", "expires_in": 300,
+                        "credential_epoch": 1, "authorization_revision": 1,
+                        "audience": "nexus-executor-control",
+                        "scopes": ["inventory:publish", "link:connect"],
+                    },
+                })
+        assert request.url.path == "/v1/runtime/executors/exe/inventory"
+        return httpx.Response(200, headers={
+            "X-Nexus-Connections-Revision": revision}, json={
+                "server_id": "srv", "executor_id": "exe",
+                "publication_sequence": 1,
+                "inventory_revision": "sha256:" + "a" * 64,
+                "fresh_for_ms": 120000, "accepted": True,
+            })
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with client:
+        async with NexusHTTPClient("http://127.0.0.1:8202", client=client) as http:
+            registered = await http.register_executor(
+                "nxs_agent", client_intent_id="intent", connector_id="connector",
+                label="Remote host")
+            accepted = await http.publish_inventory(
+                registered.bootstrap_ticket, executor_id=registered.executor_id,
+                snapshot={"server_id": "srv", "executor_id": "exe",
+                          "publication_sequence": 1,
+                          "inventory_revision": "sha256:" + "a" * 64},
+            )
+    assert accepted.fresh_for_ms == 120000
+    assert seen == [
+        ("/v1/connections/executors:register", "Bearer nxs_agent"),
+        ("/v1/runtime/executors/exe/inventory", "Bearer nxt4_" + "x" * 48),
+    ]
+
+
+async def test_r4_management_revision_is_required():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "agent_id": "agent", "server_id": "srv", "display_name": "Agent",
+            "permissions": [], "revisions": {
+                "authorization": 1, "configuration": 1, "credential_epoch": 1},
+        })
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with client:
+        async with NexusHTTPClient("http://127.0.0.1:8202", client=client) as http:
+            with pytest.raises(ConnectorError) as error:
+                await http.me("nxs_agent")
+    assert error.value.code == "VERSION_INCOMPATIBLE"
