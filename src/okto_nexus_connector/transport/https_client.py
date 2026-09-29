@@ -59,6 +59,20 @@ class InventoryAccepted:
 
 
 @dataclass(frozen=True, slots=True)
+class R4Realization:
+    server_id: str
+    executor_id: str
+    realization_ref: str
+    local_realization_ref: str
+    realization_revision: int
+    agent_id: str
+    workspace_id: str
+    workspace_binding_id: str
+    inventory_revision: str
+    configuration_digest: str
+
+
+@dataclass(frozen=True, slots=True)
 class ReceiptAccepted:
     operation_id: str
     receipt_revision: int
@@ -329,8 +343,9 @@ class NexusHTTPClient:
                 ticket.get("audience") != "nexus-executor-control" or
                 not isinstance(ticket.get("scopes"), list) or
                 any(not isinstance(item, str) for item in ticket["scopes"]) or
-                set(ticket["scopes"]) != {
-                    "link:connect", "inventory:publish"} or
+                 set(ticket["scopes"]) != {
+                     "link:connect", "inventory:publish",
+                     "realization:publish"} or
                 not isinstance(ticket.get("ticket"), str) or
                 not ticket["ticket"].startswith("nxt4_") or
                 type(ticket.get("expires_in")) is not int or
@@ -376,6 +391,37 @@ class NexusHTTPClient:
             inventory_revision=payload["inventory_revision"],
             fresh_for_ms=payload["fresh_for_ms"],
         )
+
+    async def publish_r4_realization(
+            self, ticket: str, *, executor_id: str,
+            request: dict[str, object]) -> R4Realization:
+        """Publish executor-owned opaque evidence after local validation."""
+        payload = await self._request(
+            "POST", f"/v1/runtime/executors/{executor_id}/realizations",
+            key=ticket, json_body=request, expect=(200, 201),
+            require_revision=True,
+        )
+        identity = (
+            "server_id", "executor_id", "realization_ref",
+            "local_realization_ref", "agent_id", "workspace_id",
+            "workspace_binding_id", "inventory_revision",
+            "configuration_digest",
+        )
+        if (any(not isinstance(payload.get(name), str) or not payload[name]
+                for name in identity) or
+                payload["executor_id"] != executor_id or
+                any(payload[name] != request[name] for name in (
+                    "local_realization_ref", "agent_id",
+                    "inventory_revision", "configuration_digest")) or
+                (request.get("workspace_id") is not None and
+                 payload["workspace_id"] != request["workspace_id"]) or
+                type(payload.get("realization_revision")) is not int or
+                payload["realization_revision"] != request.get(
+                    "realization_revision")):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "realization",
+                                 "Server returned an invalid realization mapping")
+        return R4Realization(**{name: payload[name] for name in identity},
+                             realization_revision=payload["realization_revision"])
 
     async def publish_operation_receipt(self, ticket: str, *,
                                         frame: dict[str, object]

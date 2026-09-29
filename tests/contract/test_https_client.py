@@ -189,7 +189,8 @@ async def test_r4_registration_and_inventory_use_distinct_bearers():
                         "agent_id": "agent", "expires_in": 300,
                         "credential_epoch": 1, "authorization_revision": 1,
                         "audience": "nexus-executor-control",
-                        "scopes": ["inventory:publish", "link:connect"],
+                        "scopes": ["inventory:publish", "link:connect",
+                                   "realization:publish"],
                     },
                 })
         assert request.url.path == "/v1/runtime/executors/exe/inventory"
@@ -409,3 +410,49 @@ async def test_r4_core_steer_receipt_projection_precedes_http_publish():
     assert accepted.stage == "SUBMITTED"
     assert len(seen) == 1
     assert seen[0]["intent_hash"] == frame["intent_hash"]
+
+
+async def test_r4_realization_client_rejects_a_different_mapping():
+    request_body = {
+        "client_intent_id": "intent", "agent_id": "agent",
+        "local_realization_ref": "root_local_1234567890123456",
+        "realization_revision": 1, "workspace_id": "ws",
+        "workspace_label": "Project Alpha", "adapter_id": "codex_app_server",
+        "candidate_ref": "nexus-install-v1:" + "a" * 64,
+        "inventory_revision": "sha256:" + "b" * 64,
+        "local_root_proof_digest": "sha256:" + "c" * 64,
+        "configuration_digest": "sha256:" + "d" * 64,
+        "local_consent_id": "consent",
+    }
+    view = {
+        "server_id": "srv", "executor_id": "exe",
+        "realization_ref": "real_123", "local_realization_ref":
+        request_body["local_realization_ref"],
+        "realization_revision": 1, "agent_id": "agent",
+        "workspace_id": "ws", "workspace_binding_id": "wxb_123",
+        "inventory_revision": request_body["inventory_revision"],
+        "configuration_digest": request_body["configuration_digest"],
+    }
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, json.loads(request.read())))
+        return httpx.Response(201, headers={
+            "X-Nexus-Connections-Revision": "nexus-connections-2026-09-29-r4",
+        }, json=view)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with client:
+        async with NexusHTTPClient("http://127.0.0.1:8202", client=client) as http:
+            published = await http.publish_r4_realization(
+                "nxt4_ticket", executor_id="exe", request=request_body)
+    assert published.workspace_binding_id == "wxb_123"
+    assert seen == [("/v1/runtime/executors/exe/realizations", request_body)]
+
+    view["agent_id"] = "other-agent"
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with client:
+        async with NexusHTTPClient("http://127.0.0.1:8202", client=client) as http:
+            with pytest.raises(ConnectorError):
+                await http.publish_r4_realization(
+                    "nxt4_ticket", executor_id="exe", request=request_body)
