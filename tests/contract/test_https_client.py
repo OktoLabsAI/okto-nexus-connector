@@ -13,7 +13,7 @@ import httpx
 
 from okto_nexus_connector.errors import ConnectorError
 from okto_nexus_connector.transport.https_client import (
-    NexusHTTPClient, is_loopback_origin, origin_of,
+    NexusHTTPClient, R4IntentResolution, is_loopback_origin, origin_of,
 )
 from tests.fakes.http_peer import FakeAgent, FakeNexusHTTPPeer
 
@@ -456,3 +456,54 @@ async def test_r4_realization_client_rejects_a_different_mapping():
             with pytest.raises(ConnectorError):
                 await http.publish_r4_realization(
                     "nxt4_ticket", executor_id="exe", request=request_body)
+
+
+async def test_r4_operation_admission_requires_eligible_exact_resolution():
+    scope = {"server_id": "srv", "executor_id": "exe",
+             "binding_id": "binding", "agent_id": "agent",
+             "workspace_id": "ws", "session_id": "session"}
+    resolution = R4IntentResolution(
+        "intent", "resolved", "op", "session", False, scope,
+        {"action": "runtime.open"}, "sha256:" + "a" * 64,
+        1, "2026-09-29T00:00:00Z", False,
+        ("remote_execution_unavailable",),
+    )
+    seen = []
+    view = {
+        "operation_id": "op", "client_intent_id": "intent",
+        "scope": scope, "action": "runtime.open",
+        "intent_hash": resolution.intent_hash,
+        "admission_state": "ACCEPTED", "executor_stage": None,
+        "possible_effect": False, "retry_safe": False,
+        "receipt_revision": 0, "last_observed_at":
+        "2026-09-29T00:00:00Z", "error": None,
+        "follow_up_operation_ids": [],
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, json.loads(request.read())))
+        return httpx.Response(202, headers={
+            "X-Nexus-Connections-Revision": "nexus-connections-2026-09-29-r4",
+        }, json=view)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with client:
+        async with NexusHTTPClient("http://127.0.0.1:8202", client=client) as http:
+            with pytest.raises(ConnectorError) as blocked:
+                await http.submit_r4_operation("key", resolution)
+            assert blocked.value.code == "EXECUTOR_OFFLINE"
+            assert seen == []
+            from dataclasses import replace
+            eligible = replace(resolution, can_submit=True, blockers=())
+            admitted = await http.submit_r4_operation("key", eligible)
+            assert admitted == view
+            assert seen == [("/v1/runtime/operations", {
+                "client_intent_id": "intent", "operation_id": "op",
+                "resolution_revision": 1,
+                "intent_hash": resolution.intent_hash,
+            })]
+            view["operation_id"] = "different"
+            with pytest.raises(ConnectorError) as mismatch:
+                await http.submit_r4_operation("key", eligible)
+            assert mismatch.value.code == "VERSION_INCOMPATIBLE"
+            assert mismatch.value.possible_effect

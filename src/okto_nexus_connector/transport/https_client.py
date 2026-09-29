@@ -635,6 +635,52 @@ class NexusHTTPClient:
             blockers=tuple(payload["blockers"]),
         )
 
+    async def submit_r4_operation(
+            self, key: str, resolution: R4IntentResolution
+            ) -> dict[str, object]:
+        """Admit an exact Server resolution, then return its operation view."""
+        if not resolution.can_submit or resolution.blockers:
+            raise ConnectorError(
+                "EXECUTOR_OFFLINE", "operation_admission",
+                "The resolved intent is not eligible for execution.",
+                operation_id=resolution.operation_id,
+                action="Resolve a new intent after the Server reports a ready "
+                       "executor and binding.")
+        payload = await self._request(
+            "POST", "/v1/runtime/operations", key=key,
+            json_body={
+                "client_intent_id": resolution.client_intent_id,
+                "operation_id": resolution.operation_id,
+                "resolution_revision": resolution.resolution_revision,
+                "intent_hash": resolution.intent_hash,
+            }, expect=(200, 202), require_revision=True,
+        )
+        scope = payload.get("scope")
+        if (payload.get("operation_id") != resolution.operation_id or
+                payload.get("client_intent_id") !=
+                resolution.client_intent_id or
+                payload.get("intent_hash") != resolution.intent_hash or
+                not isinstance(scope, dict) or
+                any(scope.get(name) != resolution.scope.get(name)
+                    for name in ("server_id", "executor_id", "binding_id",
+                                 "agent_id", "workspace_id", "session_id")) or
+                payload.get("action") !=
+                resolution.semantic_intent.get("action") or
+                payload.get("admission_state") not in {
+                    "ACCEPTED", "DISPATCH_PENDING", "DISPATCHED",
+                    "RECONCILING", "RESOLVED_TERMINAL"} or
+                type(payload.get("possible_effect")) is not bool or
+                type(payload.get("retry_safe")) is not bool or
+                type(payload.get("receipt_revision")) is not int or
+                payload["receipt_revision"] < 0):
+            raise ConnectorError(
+                "VERSION_INCOMPATIBLE", "operation_admission",
+                "Server returned an invalid operation view.",
+                possible_effect=True, retry_safe=False,
+                operation_id=resolution.operation_id,
+                action="Query the operation by its ID before taking another action.")
+        return payload
+
     async def publish_operation_receipt(self, ticket: str, *,
                                         frame: dict[str, object]
                                         ) -> ReceiptAccepted:
