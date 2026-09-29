@@ -233,3 +233,40 @@ async def test_r4_management_revision_is_required():
             with pytest.raises(ConnectorError) as error:
                 await http.me("nxs_agent")
     assert error.value.code == "VERSION_INCOMPATIBLE"
+
+
+async def test_r4_receipt_publication_uses_binding_ticket_and_exact_ack():
+    from nexus_connector_core import R4_PREVIEW_REVISION
+
+    frame = {
+        "protocol_major": 1, "contract_revision": R4_PREVIEW_REVISION,
+        "type": "operation.receipt", "server_id": "srv",
+        "executor_id": "exe", "binding_id": "binding", "agent_id": "agent",
+        "session_id": "session", "connection_id": "control",
+        "connection_generation": 1, "operation_id": "op",
+        "intent_hash": "sha256:" + "a" * 64, "receipt_revision": 1,
+        "stage": "RECEIVED_DURABLE", "possible_effect": False,
+        "retry_safe": True,
+    }
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((request.url.path, request.headers.get("authorization"),
+                     request.read()))
+        return httpx.Response(200, headers={
+            "X-Nexus-Connections-Revision": "nexus-connections-2026-09-29-r4",
+        }, json={"operation_id": "op", "receipt_revision": 1,
+                 "stage": "RECEIVED_DURABLE", "accepted": True, "reused": False})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async with client:
+        async with NexusHTTPClient("http://127.0.0.1:8202", client=client) as http:
+            accepted = await http.publish_operation_receipt(
+                "nxt4_binding-ticket", frame=frame)
+            with pytest.raises(ConnectorError):
+                await http.publish_operation_receipt(
+                    "nxt4_binding-ticket", frame={**frame, "stage": "unknown"})
+    assert accepted.operation_id == "op" and not accepted.reused
+    assert seen[0][0] == "/v1/runtime/operations/op/receipts"
+    assert seen[0][1] == "Bearer nxt4_binding-ticket"
+    assert len(seen) == 1

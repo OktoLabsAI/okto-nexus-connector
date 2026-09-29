@@ -55,6 +55,14 @@ class InventoryAccepted:
 
 
 @dataclass(frozen=True, slots=True)
+class ReceiptAccepted:
+    operation_id: str
+    receipt_revision: int
+    stage: str
+    reused: bool
+
+
+@dataclass(frozen=True, slots=True)
 class BindingProposal:
     proposal_id: str
     proposal_revision: int
@@ -351,6 +359,35 @@ class NexusHTTPClient:
             inventory_revision=payload["inventory_revision"],
             fresh_for_ms=payload["fresh_for_ms"],
         )
+
+    async def publish_operation_receipt(self, ticket: str, *,
+                                        frame: dict[str, object]
+                                        ) -> ReceiptAccepted:
+        from nexus_connector_core import CoreError, decode_r4_frame
+        from nexus_connector_core.protocol import canonical_json
+
+        try:
+            parsed = decode_r4_frame(canonical_json(frame))
+        except (CoreError, ValueError, TypeError) as exc:
+            raise ConnectorError("VERSION_INCOMPATIBLE", "receipt",
+                                 "Invalid Core operation receipt") from exc
+        if parsed["type"] != "operation.receipt":
+            raise ConnectorError("VERSION_INCOMPATIBLE", "receipt",
+                                 "A Core operation receipt is required")
+        operation_id = parsed["operation_id"]
+        payload = await self._request(
+            "POST", f"/v1/runtime/operations/{operation_id}/receipts",
+            key=ticket, json_body=parsed, require_revision=True,
+        )
+        if (payload.get("accepted") is not True or
+                payload.get("operation_id") != operation_id or
+                payload.get("receipt_revision") != parsed["receipt_revision"] or
+                payload.get("stage") != parsed["stage"] or
+                type(payload.get("reused")) is not bool):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "receipt",
+                                 "Server returned an invalid receipt acknowledgment")
+        return ReceiptAccepted(operation_id, parsed["receipt_revision"],
+                               parsed["stage"], payload["reused"])
 
     async def prepare_binding(self, key: str, *, agent_id_hint: str,
                               connector_id: str, adapter_id: str,
