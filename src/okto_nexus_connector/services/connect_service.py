@@ -96,24 +96,44 @@ async def create_binding(http: NexusHTTPClient, store: StateStore,
                           workspace_root: Path,
                           server_url: str) -> ConnectSummary:
     """Prepare/apply the binding on the Server and persist it locally."""
+    from nexus_connector_core.installation import \
+        effective_installation_ref
     state = store.load()
     connector_id = state.connector_id
     workspace_str = str(workspace_root.resolve())
+    installation_ref = effective_installation_ref(candidate)
     existing = [b for b in state.bindings
                 if b.server_id == identity.server_id
                 and b.agent_id == identity.me_agent_id
                 and b.adapter_id == adapter_id
                 and b.workspace_root == workspace_str]
     if existing and existing[0].alias == alias:
-        return ConnectSummary(identity, existing[0], False, version,
-                              aggregated_confirmation(
-                                  server_url=server_url,
-                                  me_agent_id=identity.me_agent_id,
-                                  identity_alias=identity.identity.alias,
-                                  adapter_id=adapter_id,
-                                  executable=candidate.executable,
-                                  version=version,
-                                  workspace_root=workspace_str))
+        # CN1/CN-01.05: reuse requires the SAME selected installation —
+        # returning the old record while claiming the new candidate was
+        # applied is a lie. A different target needs an explicit,
+        # approved rebind (diff surfaced, never silent).
+        prior = existing[0]
+        prior_ref = prior.installation_ref or ""
+        if prior_ref and prior_ref == installation_ref and \
+                prior.candidate_fingerprint == candidate.fingerprint:
+            return ConnectSummary(identity, prior, False, version,
+                                  aggregated_confirmation(
+                                      server_url=server_url,
+                                      me_agent_id=identity.me_agent_id,
+                                      identity_alias=(identity.identity
+                                                      .alias),
+                                      adapter_id=adapter_id,
+                                      executable=candidate.executable,
+                                      version=version,
+                                      workspace_root=workspace_str))
+        raise ConnectorError(
+            "PROFILE_DRIFT", "bind",
+            f"alias {alias!r} already selects a different installation "
+            f"({prior.candidate_executable}); the new selection "
+            f"({candidate.executable}) was NOT applied",
+            action="Remove the binding ('bind remove " + alias + "') or "
+                   "choose another alias; an approved rebind is an "
+                   "explicit decision, never a silent overwrite.")
     if any(b.alias == alias for b in state.bindings):
         raise ConnectorError("AMBIGUOUS_BINDING", "bind",
                              f"binding alias {alias!r} already exists",
@@ -143,8 +163,12 @@ async def create_binding(http: NexusHTTPClient, store: StateStore,
         candidate_executable=candidate.executable,
         candidate_fingerprint=candidate.fingerprint,
         candidate_version=version or "",
+        # CN1/A01: the COMPLETE observed candidate evidence persists.
+        candidate_architecture=candidate.architecture or "",
         candidate_build_identity=candidate.build_identity or "",
         candidate_launch_script=candidate.launch_script or "",
+        installation_ref=installation_ref,
+        inventory_revision=(state.schema_version << 8) | 1,
         created_at=_now(),
     )
 

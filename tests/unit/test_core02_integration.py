@@ -96,6 +96,7 @@ def test_shim_resolution_never_runs_outside_windows(tmp_path: Path):
 
 def _binding(root: Path, binary: Path, *, build_identity: str = "",
              launch_script: str = "") -> BindingRecord:
+    from nexus_connector_core.discovery import binary_architecture
     digest = hashlib.sha256(binary.read_bytes()).hexdigest()
     return BindingRecord(
         binding_id="bind_b", alias="codex", server_id="srv",
@@ -105,6 +106,7 @@ def _binding(root: Path, binary: Path, *, build_identity: str = "",
         candidate_executable=str(binary),
         candidate_fingerprint="sha256:" + digest,
         candidate_version="0.157.0",
+        candidate_architecture=binary_architecture(binary) or "synthetic",
         candidate_build_identity=build_identity,
         candidate_launch_script=launch_script)
 
@@ -218,6 +220,7 @@ def test_pi_identity_root_consistent_between_selection_and_revalidation(
         candidate_executable=str(node),
         candidate_fingerprint=selected.fingerprint,
         candidate_version="0.87.1",
+        candidate_architecture=selected.architecture or "synthetic",
         candidate_build_identity=selected.build_identity,
         candidate_launch_script=str(cli))
     host = CoreRuntimeHost.__new__(CoreRuntimeHost)

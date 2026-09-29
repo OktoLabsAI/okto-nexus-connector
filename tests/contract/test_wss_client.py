@@ -169,10 +169,16 @@ async def test_receipt_roundtrip_for_remote_operation(peer):
             stage="SUBMITTED", possible_effect=True, retry_safe=False,
             session_id=str(frame["session_id"]))
     transport = _transport(peer, on_operation=on_operation)
+    # CN1/A02: operations require a live negotiated lane scope.
+    async def _lane_ticket():
+        return TICKET_A
+    transport.add_lane("bind_x", "ag_1", _lane_ticket)
     transport.start()
     await transport.wait_online(10)
     session = peer.latest
-    await _wait_for(lambda: session.welcomed)
+    await _wait_for(lambda: transport.stats.state == "ready" and
+                    session.welcomed and
+                    session.lanes.get("bind_x") == "ag_1")
     await peer.send_operation(
         session, binding_id="bind_x", agent_id="ag_1", session_id="rs_9",
         operation_id="op_1", action="turn.submit")

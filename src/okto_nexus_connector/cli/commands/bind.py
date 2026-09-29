@@ -46,14 +46,16 @@ async def run_bind(args, output: Output, root: Path):
         vault = open_vault(paths.vault_dir(root),
                            approved_fallback=bool(state.preferences.get(
                                "vault.fallback_file.approved", False)))
-        class _ImportStub:
-            agent_id = identity.agent_id
-            server_id = identity.server_id
-            me_agent_id = identity.agent_id
-            identity = identity
+        # CN1/A14 (test_25): use the REAL ImportResult DTO — the old
+        # local stub class body referenced `identity` before assignment
+        # (NameError) and never reached the service.
+        from ...identity.import_flow import ImportResult
+        identity_result = ImportResult(
+            identity=identity, created=False,
+            me_agent_id=identity.agent_id, server_id=identity.server_id)
         async with NexusHTTPClient(profile.base_url) as http:
             summary = await create_binding(
-                http, store, identity=_ImportStub(), key=key,
+                http, store, identity=identity_result, key=key,
                 alias=args.alias, adapter_id=args.harness,
                 candidate=candidate, version=version,
                 workspace_root=project, server_url=profile.base_url)

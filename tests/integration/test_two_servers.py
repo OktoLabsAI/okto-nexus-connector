@@ -19,6 +19,7 @@ from okto_nexus_connector.platform import paths
 from okto_nexus_connector.storage.state_store import (
     BindingRecord, IdentityRecord, ServerProfileRecord, StateStore,
 )
+from nexus_connector_core.discovery import binary_architecture
 from tests.fakes.http_peer import FakeAgent, FakeBinding, FakeNexusHTTPPeer
 from tests.fakes.wss_peer import FakeNXLPeer
 from tests.integration.test_daemon_app import DaemonHarness
@@ -79,7 +80,10 @@ async def _prepare(root: Path, http_a: str, http_b: str, wss_a: str,
                 profile_id="prof_1", candidate_executable=str(binary),
                 candidate_fingerprint="sha256:" + hashlib.sha256(
                     binary.read_bytes()).hexdigest(),
-                candidate_version="0.157.0", created_at="now"))
+                candidate_version="0.157.0",
+                candidate_architecture=binary_architecture(
+                    binaries[server]) or "x86_64",
+                created_at="now"))
     store.update(mutate)
 
 
@@ -120,9 +124,11 @@ async def two_server_harness(tmp_path: Path):
     recording_factory = RecordingFactory()
     original_host_build = app.host.build
 
-    def build_with_fake_factory(binding, *, environment):
-        return original_host_build(binding, environment=environment,
-                                   factory=recording_factory)
+    async def build_with_fake_factory(binding, *, environment,
+                                      factory=None, session_id=None):
+        return await original_host_build(binding, environment=environment,
+                                         factory=recording_factory,
+                                         session_id=session_id)
     app.host.build = build_with_fake_factory
     harness = DaemonHarness(app, tmp_path)
     harness.http_a, harness.http_b = http_a, http_b

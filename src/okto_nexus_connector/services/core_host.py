@@ -11,6 +11,7 @@ candidate and workspace root.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,12 +23,29 @@ from nexus_connector_core import (
 )
 from nexus_connector_core.environment import child_environment
 from nexus_connector_core.harness_config import HarnessHTTPTemplate
+from nexus_connector_core.installation import (
+    REF_AMBIGUOUS, REF_NOT_FOUND, effective_installation_ref,
+    resolve_installation,
+)
 from nexus_connector_core.journal import SQLiteJournal, open_journal
 from nexus_connector_core.ports import SecretResolver
 
 from ..errors import ConnectorError
 from ..platform import paths
 from ..storage.state_store import BindingRecord
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class BindingKey:
+    """CN1/A03: a binding is scoped by (server, binding id).
+
+    Two independent Server installations may mint the SAME textual
+    binding id; a bare ``binding_id`` key silently shares the wrong
+    runtime. Every host-side registry uses this typed key.
+    """
+
+    server_id: str
+    binding_id: str
 
 
 class LaunchSecretResolver:
@@ -85,9 +103,15 @@ class CoreRuntimeHost:
         self._vault = vault
         self._journal_path = paths.journal_path(root)
         self._ledger_path = paths.owned_slot_ledger_path(root)
-        self._runtimes: dict[str, LocalRuntimeCore] = {}
+        # CN1/A03: keyed by the typed BindingKey — two Servers with the
+        # same textual binding id never share an instance.
+        self._runtimes: dict[BindingKey, LocalRuntimeCore] = {}
         self._journal: SQLiteJournal | None = None
         self._ledger: SQLiteOwnedSlotLedger | None = None
+        # CN1/CN-05.05: single-flight initialization for the shared
+        # stores under concurrent starts.
+        self._journal_gate: asyncio.Lock | None = None
+        self._ledger_gate: asyncio.Lock | None = None
 
     # -- shared installation stores -------------------------------------
 
@@ -104,10 +128,30 @@ class CoreRuntimeHost:
         return self._journal
 
     async def ensure_journal(self) -> SQLiteJournal:
-        """Open (once) the shared journal off the event loop."""
-        if self._journal is None:
-            self._journal = await open_journal(self._journal_path)
+        """Open (once) the shared journal off the event loop.
+
+        CN1/CN-05.05: creation is single-flight — two concurrent starts
+        share exactly one store, never orphan workers.
+        """
+        if self._journal is not None:
+            return self._journal
+        if self._journal_gate is None:
+            self._journal_gate = asyncio.Lock()
+        async with self._journal_gate:
+            if self._journal is None:
+                self._journal = await open_journal(self._journal_path)
         return self._journal
+
+    async def ensure_ledger(self) -> SQLiteOwnedSlotLedger:
+        if self._ledger is not None:
+            return self._ledger
+        if self._ledger_gate is None:
+            self._ledger_gate = asyncio.Lock()
+        async with self._ledger_gate:
+            if self._ledger is None:
+                self._ledger = await asyncio.to_thread(
+                    SQLiteOwnedSlotLedger, self._ledger_path)
+        return self._ledger
 
     @property
     def ledger(self) -> SQLiteOwnedSlotLedger:
@@ -118,15 +162,29 @@ class CoreRuntimeHost:
     # -- candidates -------------------------------------------------------
 
     def candidate_for(self, binding: BindingRecord) -> InstallationCandidate:
-        """Revalidate the selected binary before every launch (A.6).
+        """Revalidate the selected installation before every launch (A.6).
 
-        Checks the path-bound fingerprint AND, when recorded, the portable
-        ``build_identity`` (Core 0.2.0 / PC09): moving the installation
-        still invalidates the local binding, while content drift is caught
-        even when the path stays.
+        CN1/A01: the COMPLETE observed candidate evidence survives the
+        persistence round-trip — architecture included (indispensable to
+        the Core's exact-build qualification), plus the Core C11
+        installation ref when recorded. Checks the path-bound fingerprint
+        AND, when recorded, the portable ``build_identity``; moving the
+        installation still invalidates the local binding, while content
+        drift is caught even when the path stays. Legacy records without
+        architecture evidence are NEEDS_REDISCOVERY — the host never
+        guesses the host's own architecture to make an allowlist pass.
         """
         from nexus_connector_core.discovery import fingerprint
 
+        if binding.needs_rediscovery or not binding.candidate_architecture:
+            raise ConnectorError(
+                "NEEDS_REDISCOVERY", "candidate",
+                "this binding predates complete candidate evidence "
+                "(no recorded architecture)",
+                action="Re-run 'okto-nexus-connector connect' (or "
+                       "'bind create') from the project to rediscover "
+                       "and reselect the installation; the agent, key "
+                       "and history are preserved.")
         executable = Path(binding.candidate_executable)
         try:
             info = executable.stat()
@@ -160,6 +218,32 @@ class CoreRuntimeHost:
                     "created (portable build identity mismatch)",
                     action="Re-qualify the build explicitly; identical "
                            "bytes in another directory are still accepted.")
+        architecture = binding.candidate_architecture or None
+        # CN1/A01: when the binary exposes a parsable architecture it must
+        # match the recorded evidence — never adopt the host's own.
+        from nexus_connector_core.discovery import binary_architecture
+        observed = binary_architecture(executable)
+        if observed is not None and architecture is not None \
+                and observed != architecture:
+            raise ConnectorError(
+                "PROFILE_DRIFT", "candidate",
+                f"recorded architecture {architecture} but the binary "
+                f"parses as {observed}",
+                action="Rediscover and reselect the installation; the "
+                       "recorded evidence no longer matches this host.")
+        installation_ref = binding.installation_ref or None
+        if installation_ref:
+            from nexus_connector_core.installation import installation_ref \
+                as derive_ref
+            current_ref = derive_ref(binding.adapter_id, str(executable),
+                                     launch_script)
+            if current_ref != installation_ref:
+                raise ConnectorError(
+                    REF_NOT_FOUND, "candidate",
+                    "the selected installation moved since the binding "
+                    "was created (installation ref is stale)",
+                    action="Reselect the installation explicitly; the old "
+                           "reference no longer resolves to this target.")
         return InstallationCandidate(
             adapter_id=binding.adapter_id,
             executable=str(executable),
@@ -167,39 +251,63 @@ class CoreRuntimeHost:
             source="explicit",
             trust="selected",
             version=binding.candidate_version or None,
+            architecture=architecture,
             launch_script=launch_script,
             build_identity=build_identity,
+            installation_ref=installation_ref,
         )
 
     # -- runtime composition ------------------------------------------------
 
     async def build(self, binding: BindingRecord, *, environment,
-                    factory=None) -> LocalRuntimeCore:
+                    factory=None, session_id: str | None = None
+                    ) -> LocalRuntimeCore:
         """Build (or reuse) the runtime instance for one binding.
 
         Composed through the Core's public ``create_runtime`` (PC06),
-        with the journal opened off the loop (C2 async entry).
+        with the journal opened off the loop (C2 async entry). Keyed by
+        the typed ``BindingKey`` (CN1/A03): a second Server with the
+        same textual binding id gets its OWN instance and full
+        candidate revalidation. ``session_id`` scopes the cache to ONE
+        session so per-session credentials (CN1/A10, MCP capabilities)
+        are never shared across launches of the same binding.
         ``factory`` is the documented trusted-host injection seam for
         contract tests; production always gets the real copied-adapter
         factory inside the Core.
         """
-        existing = self._runtimes.get(binding.binding_id)
+        key = BindingKey(binding.server_id, binding.binding_id)
+        if session_id is not None:
+            key = BindingKey(key.server_id,
+                             f"{key.binding_id}#{session_id}")
+        existing = self._runtimes.get(key)
         if existing is not None:
             return existing
         candidate = self.candidate_for(binding)
         journal = await self.ensure_journal()
+        ledger = await self.ensure_ledger()
         runtime = create_runtime(
             journal=journal,
             environment=environment,
             candidates={binding.adapter_id: candidate},
             workspace_roots={binding.workspace_id: binding.workspace_root},
             native_factory=factory,
-            owned_slot_ledger=self.ledger)
-        self._runtimes[binding.binding_id] = runtime
+            owned_slot_ledger=ledger)
+        self._runtimes[key] = runtime
         return runtime
 
-    def get(self, binding_id: str) -> LocalRuntimeCore | None:
-        return self._runtimes.get(binding_id)
+    def get(self, binding_id: str,
+            server_id: str | None = None) -> LocalRuntimeCore | None:
+        """Fetch one runtime by binding id (optionally server-qualified).
+
+        CN1/A03: without ``server_id`` a UNIQUE textual id resolves;
+        ambiguity between Servers returns None rather than the wrong
+        namespace's instance. Session-scoped entries never match.
+        """
+        if server_id is not None:
+            return self._runtimes.get(BindingKey(server_id, binding_id))
+        matches = [runtime for key, runtime in self._runtimes.items()
+                   if key.binding_id == binding_id]
+        return matches[0] if len(matches) == 1 else None
 
     @property
     def _journals(self) -> list[SQLiteJournal]:
@@ -207,21 +315,47 @@ class CoreRuntimeHost:
         return [self._journal] if self._journal is not None else []
 
     async def shutdown_all(self) -> list[tuple[str, str]]:
-        """Bounded shutdown of every runtime this daemon built (C02.5)."""
+        """Bounded shutdown; unknown outcomes are never discarded.
+
+        CN1/A08+CN-05.03: an instance whose report leaves any session
+        with UNKNOWN ownership keeps BOTH the instance and the shared
+        stores alive — the next public lifecycle call re-contains the
+        same resources (the Core's late-handle machinery converges
+        them). Only fully-resolved instances are dropped, and the
+        journal/ledger close exclusively when every obligation is
+        resolved.
+        """
         from nexus_connector_core import ShutdownPolicy
 
         outcomes: list[tuple[str, str]] = []
-        for binding_id, runtime in list(self._runtimes.items()):
+        any_pending = False
+        for key, runtime in list(self._runtimes.items()):
             report = await runtime.shutdown(ShutdownPolicy(30.0, 15.0))
-            for key, outcome in report.session_outcomes.items():
-                outcomes.append((key.session_id, str(outcome)))
-            del self._runtimes[binding_id]
-        if self._journal is not None:
-            await self._journal.aclose()
-            self._journal = None
-        if self._ledger is not None:
-            await self._ledger.aclose()
-            self._ledger = None
+            resolved = True
+            for session_key, outcome in report.session_outcomes.items():
+                sid = getattr(session_key, "session_id", None)
+                if sid is None and isinstance(session_key, tuple)                         and session_key:
+                    sid = session_key[-1]
+                outcomes.append((sid, str(outcome)))
+                if str(outcome) not in ("graceful", "already_closed",
+                                        "forced"):
+                    resolved = False
+            if resolved:
+                del self._runtimes[key]
+            else:
+                any_pending = True
+        if self._runtimes or not any_pending:
+            # Stores stay open while any instance (or its obligations)
+            # survives; with everything resolved, close through the
+            # Core's public async lifecycle.
+            pass
+        if not self._runtimes:
+            if self._journal is not None:
+                await self._journal.aclose()
+                self._journal = None
+            if self._ledger is not None:
+                await self._ledger.aclose()
+                self._ledger = None
         return outcomes
 
     def storage_status(self):

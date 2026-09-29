@@ -40,55 +40,79 @@ logger = logging.getLogger(__name__)
 
 
 class EventBridge:
-    """Batches events per session; Core ACK only after Server ACK."""
+    """Journal-sourced event publication with bounded memory (CN1/A13).
 
-    def __init__(self, ack_source, core_ack):
-        self._ack_source = ack_source  # transport provider by server_id
-        self._core_ack = core_ack      # (session_key, epoch, seq) -> await
-        self._pending: dict[tuple[str, str, str], list[RuntimeEvent]] = \
-            defaultdict(list)
-        self._tasks: dict[str, asyncio.Task] = {}
+    RAM holds ONLY cursors and one in-flight batch per stream: the
+    pump's publish() is a wake-up signal, and the flusher re-reads
+    bounded batches from the durable journal (the Core's replay
+    source) starting after the last sequence the Server durably
+    ACKed. A long offline period grows the bounded journal, not a
+    Python list; ACKs are matched per (server, session, epoch) and
+    only a contiguous watermark advances the Core-side ack.
+    """
+
+    _MAX_INFLIGHT_PER_STREAM = 128
+    _WAKE_COALESCE_SECONDS = 0.05
+
+    def __init__(self, ack_source, core_ack, journal_reader):
+        self._ack_source = ack_source    # transport provider by server_id
+        self._core_ack = core_ack        # (server, session, epoch, seq)
+        self._journal_reader = journal_reader  # bounded replay reader
+        # cursor: (server, session, epoch) -> last SENT sequence
+        self._sent_through: dict[tuple[str, str, str], int] = {}
+        self._acked_through: dict[tuple[str, str, str], int] = {}
+        self._wakeups: dict[tuple[str, str, str], asyncio.Event] = {}
+        self._tasks: dict[tuple[str, str, str], asyncio.Task] = {}
 
     def publisher_for(self, server_id: str):
         def publish(event: RuntimeEvent) -> None:
-            key = (event.session_id, event.stream_epoch)
-            self._pending[(server_id,) + key].append(event)
-            task_key = f"{server_id}:{event.session_id}:{event.stream_epoch}"
-            if task_key not in self._tasks or self._tasks[task_key].done():
-                self._tasks[task_key] = asyncio.create_task(
-                    self._flush(server_id, event.session_id,
-                                event.stream_epoch))
+            key = (server_id, event.session_id, event.stream_epoch)
+            if key not in self._sent_through:
+                self._sent_through[key] = 0
+            wake = self._wakeups.get(key)
+            if wake is None:
+                wake = self._wakeups[key] = asyncio.Event()
+            wake.set()
+            if key not in self._tasks or self._tasks[key].done():
+                self._tasks[key] = asyncio.create_task(
+                    self._flush_loop(*key))
         return publish
 
-    async def _flush(self, server_id: str, session_id: str, epoch: str
-                     ) -> None:
+    async def _flush_loop(self, server_id: str, session_id: str,
+                          epoch: str) -> None:
         key = (server_id, session_id, epoch)
-        while self._pending.get(key):
-            await asyncio.sleep(0.05)  # micro-batch window
-            batch = self._pending.get(key, [])[:128]
-            if not batch:
-                return
-            transport = self._ack_source(server_id)
-            if transport is None or not transport.online:
-                await asyncio.sleep(1.0)
-                continue
-            sent = await transport.send_events(list(batch))
-            if not sent:
-                await asyncio.sleep(1.0)
-                continue
-            watermark = await transport.wait_event_ack(
-                session_id, epoch, timeout=30.0)
-            if watermark is None:
-                # Server did not ACK durably; keep journal un-acked so a
-                # reconnect replays (dedup is server-side).
-                continue
-            await self._core_ack(server_id, session_id, epoch, watermark)
-            for event in batch:
-                if event.sequence <= watermark and \
-                        event in self._pending.get(key, []):
-                    self._pending[key].remove(event)
-            if not self._pending.get(key):
-                return
+        wake = self._wakeups[key]
+        while True:
+            await wake.wait()
+            await asyncio.sleep(self._WAKE_COALESCE_SECONDS)
+            wake.clear()
+            while True:
+                transport = self._ack_source(server_id)
+                if transport is None or not transport.online:
+                    break  # journal keeps everything; retry on wake
+                after = self._sent_through.get(key, 0)
+                batch = await self._journal_reader(
+                    server_id, session_id, epoch, after,
+                    self._MAX_INFLIGHT_PER_STREAM)
+                if not batch:
+                    break
+                sent = await transport.send_events(list(batch))
+                if not sent:
+                    break  # backpressure: retry without losing events
+                self._sent_through[key] = batch[-1].sequence
+                watermark = await transport.wait_event_ack(
+                    session_id, epoch, timeout=30.0)
+                if watermark is None:
+                    # No durable ACK yet: the journal stays un-acked so a
+                    # reconnect replays from the acked cursor (dedup is
+                    # server-side). Stop this round; the next wake retries.
+                    break
+                await self._core_ack(server_id, session_id, epoch,
+                                     watermark)
+                self._acked_through[key] = watermark
+                if batch[-1].sequence <= watermark:
+                    continue
+                break
 
     async def drain(self) -> None:
         for task in list(self._tasks.values()):
@@ -98,7 +122,7 @@ class EventBridge:
             except (asyncio.CancelledError, Exception):
                 pass
         self._tasks.clear()
-        self._pending.clear()
+        self._wakeups.clear()
 
 
 class DaemonApp:
@@ -111,7 +135,8 @@ class DaemonApp:
             approved_fallback=bool(state.preferences.get(
                 "vault.fallback_file.approved", False)))
         self.host = CoreRuntimeHost(root, self.vault)
-        self.bridge = EventBridge(self._transport_for, self._core_ack)
+        self.bridge = EventBridge(self._transport_for, self._core_ack,
+                                  self._journal_batch)
         self.runtimes = RuntimeManager(
             self.store, self.vault, self.host,
             event_publisher=self.bridge.publisher_for,
@@ -156,7 +181,10 @@ class DaemonApp:
         self._stopped.set()
 
     async def _shutdown(self) -> int:
+        # CN1/A08+CN-05.01: draining blocks NEW admissions at the edge
+        # FIRST; queries and containment remain available.
         self._draining = True
+        self.runtimes.begin_drain()
         reports: list[dict[str, object]] = []
         try:
             reports = await self.runtimes.shutdown()
@@ -168,10 +196,18 @@ class DaemonApp:
         self.transports.clear()
         await self.ipc.stop()
         outcomes = defaultdict(int)
+        pending = 0
         for report in reports:
-            outcomes[str(report.get("outcome", "unknown"))] += 1
-        logger.info("daemon stopped: %s", dict(outcomes))
-        return 0
+            outcome = str(report.get("outcome", "unknown"))
+            outcomes[outcome] += 1
+            if outcome in ("unknown", "error"):
+                pending += 1
+        logger.info("daemon stopped: %s (pending=%d)", dict(outcomes),
+                    pending)
+        # CN1/CN-05.04: a nonzero exit reports unresolved ownership —
+        # the Core's guardian/containment retains the resources and the
+        # next lifecycle call converges them; we never claim success.
+        return 1 if pending else 0
 
     # -- transports ------------------------------------------------------------
 
@@ -277,35 +313,59 @@ class DaemonApp:
 
     async def _on_remote_operation(self, frame: dict[str, object]
                                    ) -> dict[str, object] | None:
+        """CN1/A11: the full NXL envelope reaches the manager.
+
+        IDs, intent hash, expected_turn_id and payload travel intact;
+        remote close uses the SERVER's operation id and returns ITS
+        receipt (no second resolution, no locally-minted id). CoreError
+        is translated by the transport into a valid error frame — it
+        never kills the receiver.
+        """
         action = str(frame.get("action", ""))
         operation_id = str(frame.get("operation_id", ""))
         session_id = str(frame.get("session_id", ""))
         binding_id = str(frame.get("binding_id", ""))
-        try:
-            if action == "turn.submit":
-                expected = submit_frame_intent_hash(frame)
-                if expected != frame.get("intent_hash"):
-                    raise ConnectorError("OPERATION_CONFLICT", "wss_submit",
-                                         "intent hash mismatch")
-                text = str(frame.get("payload", {}).get("text", ""))
-                receipt = await self.runtimes.submit_remote(
-                    session_id, operation_id, text, binding_id)
-                return receipt_nxl_frame(
-                    receipt, server_id=str(frame["server_id"]),
-                    executor_id=str(frame["executor_id"]))
-            if action == "turn.interrupt":
-                receipt = await self.runtimes.interrupt_remote(
-                    session_id, operation_id, binding_id)
-                return receipt_nxl_frame(
-                    receipt, server_id=str(frame["server_id"]),
-                    executor_id=str(frame["executor_id"]))
-            if action == "runtime.close":
-                await self.runtimes.stop(session_id)
-                return None
-            raise ConnectorError("CAPABILITY_UNSUPPORTED", "wss_operation",
-                                 f"unsupported action {action!r}")
-        except ConnectorError as error:
-            return _error_frame(error, frame)
+        expected_turn_id = frame.get("expected_turn_id")
+        payload = frame.get("payload", {})
+        text = str(payload.get("text", "")) if isinstance(payload,
+                                                            dict) else ""
+        if action in ("turn.submit",):
+            expected = submit_frame_intent_hash(frame)
+            if expected != frame.get("intent_hash"):
+                raise ConnectorError("OPERATION_CONFLICT", "wss_submit",
+                                     "intent hash mismatch")
+        if action == "turn.submit":
+            receipt = await self.runtimes.submit_remote(
+                session_id, operation_id, text, binding_id,
+                expected_turn_id=expected_turn_id)
+            return receipt_nxl_frame(
+                receipt, server_id=str(frame["server_id"]),
+                executor_id=str(frame["executor_id"]))
+        if action == "turn.steer":
+            receipt = await self.runtimes.steer_remote(
+                session_id, operation_id, text, binding_id,
+                expected_turn_id=expected_turn_id)
+            return receipt_nxl_frame(
+                receipt, server_id=str(frame["server_id"]),
+                executor_id=str(frame["executor_id"]))
+        if action == "turn.interrupt":
+            receipt = await self.runtimes.interrupt_remote(
+                session_id, operation_id, binding_id,
+                expected_turn_id=expected_turn_id)
+            return receipt_nxl_frame(
+                receipt, server_id=str(frame["server_id"]),
+                executor_id=str(frame["executor_id"]))
+        if action == "runtime.close":
+            receipt = await self.runtimes.close_remote(
+                session_id, operation_id, binding_id)
+            return receipt_nxl_frame(
+                receipt, server_id=str(frame["server_id"]),
+                executor_id=str(frame["executor_id"]))
+        raise ConnectorError("CAPABILITY_UNSUPPORTED", "wss_operation",
+                             f"unsupported action {action!r}",
+                             action="Remote open requires the full managed "
+                                    "wiring and stays unavailable until "
+                                    "the vertical integration gate.")
 
     async def _on_remote_approval(self, frame: dict[str, object]
                                   ) -> dict[str, object] | None:
@@ -329,18 +389,31 @@ class DaemonApp:
 
     async def _on_reconcile(self, frame: dict[str, object]
                             ) -> dict[str, object] | None:
+        """CN1/A09: the ORIGINATING namespace produces the report;
+        receipts/snapshots are the typed projections the real NXL codec
+        accepts (validated by encode before use in tests).
+        """
+        server_id = str(frame.get("server_id", ""))
+        executor_id = str(frame.get("executor_id", ""))
         report = await self.runtimes.reconcile(
             operation_ids=frame.get("operation_ids", ()),
-            session_ids=frame.get("session_ids", ()))
+            session_ids=frame.get("session_ids", ()),
+            server_id=server_id, executor_id=executor_id)
         return {
             "protocol_major": PROTOCOL_MAJOR,
             "contract_revision": CONTRACT_REVISION,
             "type": "reconcile.report",
-            "server_id": frame.get("server_id"),
-            "executor_id": frame.get("executor_id"),
+            "server_id": server_id or self._default_namespace()[0],
+            "executor_id": executor_id or self._default_namespace()[1],
             "receipts": report.get("receipts", []),
             "snapshots": report.get("snapshots", []),
         }
+
+    def _default_namespace(self) -> tuple[str, str]:
+        state = self.store.load()
+        if state.connector_id:
+            return (next(iter(state.servers), ""), state.connector_id)
+        return ("", "")
 
     async def _core_ack(self, server_id: str, session_id: str, epoch: str,
                         sequence: int) -> None:
@@ -349,13 +422,39 @@ class DaemonApp:
                         if b.server_id == server_id), None)
         if binding is None:
             return
-        runtime = self.host.get(binding.binding_id)
+        runtime = (self.host.get(binding.binding_id, server_id)
+                   or next((r for k, r in self.host._runtimes.items()
+                            if k.server_id == server_id), None))
         if runtime is None:
             return
         from nexus_connector_core import EventCursor
         await runtime.acknowledge_events(
             EventCursor(server_id, binding.executor_id, session_id, epoch),
             sequence)
+
+    async def _journal_batch(self, server_id: str, session_id: str,
+                             epoch: str, after_sequence: int, limit: int):
+        """Bounded journal replay for the EventBridge (CN1/A13)."""
+        state = self.store.load()
+        binding = next((b for b in state.bindings
+                        if b.server_id == server_id), None)
+        if binding is None:
+            return []
+        runtime = (self.host.get(binding.binding_id, server_id)
+                   or next((r for k, r in self.host._runtimes.items()
+                            if k.server_id == server_id), None))
+        if runtime is None:
+            runtime = await self.host.build(
+                binding, environment=_no_environment)
+        from nexus_connector_core import EventCursor
+        batch = []
+        cursor = EventCursor(server_id, binding.executor_id, session_id,
+                             epoch, after_sequence)
+        async for event in runtime.events(cursor):
+            batch.append(event)
+            if len(batch) >= limit:
+                break
+        return batch
 
     # -- IPC dispatch -----------------------------------------------------------
 
@@ -500,6 +599,13 @@ def _error_frame(error: ConnectorError, frame: dict[str, object]
     if action:
         payload["corrective_action"] = action
     return payload
+
+
+async def _no_environment(prepared):
+    """Environment for composition-only paths (reconcile/replay): the
+    factory that would consume it is never invoked, so nothing here
+    reaches a child process."""
+    return {}
 
 
 def _current_identity():

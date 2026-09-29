@@ -101,7 +101,15 @@ def _no_proxy_for(base_url: str) -> bool:
 
 
 class NexusHTTPClient:
-    """One Server profile's authenticated HTTPS client."""
+    """One Server profile's authenticated HTTPS client.
+
+    CN1/A06: the origin tuple (scheme, host, port — defaults stripped)
+    is validated BEFORE any credential is attached or request is sent.
+    Non-loopback origins MUST be https/wss; explicit userinfo, missing
+    hosts and ambiguous shapes are refused up front, so no canonical
+    key is ever transmitted over plaintext to a remote host (test_10:
+    zero authenticated requests reach the transport).
+    """
 
     def __init__(self, base_url: str, *, verify: bool = True,
                  timeout: httpx.Timeout | None = None,
@@ -109,6 +117,7 @@ class NexusHTTPClient:
         self.base_url = base_url.rstrip("/")
         self.origin = origin_of(self.base_url)
         self._loopback = is_loopback_origin(self.base_url)
+        self._validate_origin_safety()
         if not verify and not self._loopback:
             raise ConnectorError("PROFILE_DRIFT", "tls",
                                  "TLS verification cannot be disabled for a "
@@ -117,6 +126,23 @@ class NexusHTTPClient:
         self._timeout = timeout or DEFAULT_TIMEOUT
         self._client = client
         self._owned = client is None
+
+    def _validate_origin_safety(self) -> None:
+        parts = urlsplit(self.base_url)
+        if parts.username or parts.password or "@" in parts.netloc:
+            raise ConnectorError(
+                "PROFILE_DRIFT", "origin",
+                "userinfo in the Server URL is refused",
+                action="Provide scheme://host[:port] without credentials "
+                       "in the URL; keys enter through protected input.")
+        if not self._loopback and parts.scheme != "https":
+            raise ConnectorError(
+                "PROFILE_DRIFT", "origin",
+                f"non-loopback Server origin must be HTTPS, got "
+                f"{parts.scheme!r} for {self.origin}",
+                action="Use the Server's https:// address; the canonical "
+                       "key is never sent over plaintext. Loopback http "
+                       "is the documented laboratory exception.")
 
     async def __aenter__(self) -> "NexusHTTPClient":
         if self._client is None:
@@ -144,20 +170,39 @@ class NexusHTTPClient:
         headers: dict[str, str] = {}
         if key is not None:
             headers["Authorization"] = f"Bearer {key}"
+        mutating = method.upper() in ("POST", "PUT", "PATCH", "DELETE")
         try:
             response = await self._client.request(
                 method, f"{self.base_url}{path}", headers=headers,
                 json=json_body)
         except httpx.HTTPError as exc:
+            # CN1/A07 (test_11): once the request has been handed to the
+            # transport, a LOST REPLY never proves absence of effect.
+            # Read/timeout/remote errors after a mutating send are
+            # possible-effect and NOT retry-safe; only a failure provably
+            # BEFORE delivery (connect-phase) keeps the safe-retry policy.
+            connect_phase = isinstance(
+                exc, (httpx.ConnectError, httpx.ConnectTimeout))
+            if mutating and not connect_phase:
+                raise ConnectorError(
+                    "OUTCOME_UNKNOWN", "http",
+                    redact_text(f"reply unavailable after {method} was "
+                                f"sent: {exc}"),
+                    possible_effect=True,
+                    retry_safe=False,
+                    action="The Server may have received the request. "
+                           "Query the operation by its id; do not re-send "
+                           "a new intent for the same work.") from None
             raise ConnectorError(
                 "EXECUTOR_OFFLINE", "http",
                 redact_text(f"transport failure: {exc}"),
                 retry_safe=True,
-                action="Check the Server address/network and retry; no "
-                       "effect was possible.") from None
+                action="Check the Server address/network and retry; the "
+                       "request was not delivered.") from None
         if response.has_redirect_location:
-            target = origin_of(str(response.url).join(
-                response.headers["location"]))
+            from urllib.parse import urljoin
+            target = origin_of(urljoin(str(response.url),
+                                       response.headers["location"]))
             if target != self.origin:
                 raise ConnectorError(
                     "PROFILE_DRIFT", "http",

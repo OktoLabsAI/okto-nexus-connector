@@ -50,6 +50,7 @@ class FakeNXLPeer:
         self.port: int = 0
         self.goaway_after_welcome = False
         self.drop_after_hello = False
+        self._generation_counter = 0
 
     async def start(self, host: str = "127.0.0.1") -> str:
         async def handler(websocket):
@@ -136,6 +137,10 @@ class FakeNXLPeer:
                 if kind == "hello":
                     session.server_id = frame["server_id"]
                     session.executor_id = frame["executor_id"]
+                    # CN1/A02: the SERVER authorizes each new connection
+                    # with a strictly increasing generation.
+                    self._generation_counter += 1
+                    session.connection_generation = self._generation_counter
                     if frame["contract_revision"] != CONTRACT_REVISION or \
                             frame["protocol_major"] != PROTOCOL_MAJOR:
                         await self._error(websocket, session,

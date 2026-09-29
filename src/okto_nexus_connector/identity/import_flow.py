@@ -93,7 +93,12 @@ def read_secret_from_mcp_entry(path: Path, *, entry_name: str,
                              action="Choose an existing entry explicitly.")
     entry = servers[entry_name]
     url = entry.get("url") if isinstance(entry, dict) else None
-    if not isinstance(url, str) or not url.startswith(server_origin):
+    # CN1/A06 (test_12): the origin comparison is the EXACT tuple
+    # (scheme, host, port) — a textual prefix would accept
+    # https://nexus.example.attacker.invalid as https://nexus.example.
+    entry_origin = _origin_tuple(url) if isinstance(url, str) else None
+    expected_origin = _origin_tuple(server_origin)
+    if entry_origin is None or entry_origin != expected_origin:
         raise ConnectorError(
             "PROFILE_DRIFT", "mcp_entry",
             "the selected entry does not target the expected Server origin",
@@ -116,6 +121,24 @@ def read_secret_from_mcp_entry(path: Path, *, entry_name: str,
                              action="Provide the key via --credential-stdin.")
     _check_key_shape(token)
     return token
+
+
+def _origin_tuple(url: str) -> tuple[str, str, int | None] | None:
+    """Exact (scheme, host, default-port-stripped) tuple or None."""
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return None
+    if parts.username or parts.password or "@" in parts.netloc:
+        return None
+    port = parts.port
+    if (parts.scheme == "https" and port == 443) or \
+            (parts.scheme == "http" and port == 80):
+        port = None
+    return (parts.scheme, parts.hostname.lower(), port)
 
 
 def _check_key_shape(key: str) -> None:

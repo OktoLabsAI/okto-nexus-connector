@@ -112,9 +112,16 @@ def _systemd_unit(root: Path) -> str:
 
 
 def _linger_enabled() -> bool:
+    """CN1/A16: query linger for the REAL user, not a literal $USER."""
+    import getpass
+    import shutil
+    loginctl = shutil.which("loginctl")
+    if loginctl is None:
+        return False
     try:
         result = subprocess.run(
-            ["loginctl", "show-user", "--property=Linger", "$USER"],
+            [loginctl, "show-user", "--property=Linger",
+             getpass.getuser()],
             capture_output=True, text=True, timeout=10)
         return "Linger=yes" in result.stdout
     except (OSError, subprocess.SubprocessError):
@@ -122,7 +129,10 @@ def _linger_enabled() -> bool:
 
 
 def _schtasks_create(root: Path) -> list[str]:
-    command = " ".join(_daemon_command())
+    """CN1/A16: the scheduled task carries the approved state root
+    (paths with spaces stay correctly quoted inside /TR)."""
+    import subprocess as _sp
+    command = " ".join(_daemon_command() + ["--state-dir", str(root)])
     return ["schtasks", "/Create", "/SC", "ONLOGON", "/TN", TASK_NAME,
             "/TR", f'"{command}"', "/F",
             "/RL", "LIMITED"]
@@ -181,27 +191,20 @@ def status(root: Path) -> dict[str, object]:
 
 
 def _launchd_plist(root: Path) -> str:
-    import xml.etree.ElementTree as ET
-    def _pair(key: str, *values: str) -> str:
-        parts = [f"<key>{key}</key>"]
-        if len(values) == 1:
-            parts.append(f"<string>{values[0]}</string>")
-        else:
-            parts.append("<array>" + "".join(
-                f"<string>{v}</string>" for v in values) + "</array>")
-        return "".join(parts)
-    command = _daemon_command()
-    return ("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-            "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLUGIND 1.0//EN\" "
-            "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
-            "<plist version=\"1.0\"><dict>"
-            + _pair("Label", f"ai.oktolabs.{SERVICE_NAME}")
-            + _pair("ProgramArguments", *command)
-            + _pair("EnvironmentVariables",
-                    "")  # placeholder replaced below
-            + _pair("RunAtLoad", "true")
-            + _pair("KeepAlive", "true")
-            + "</dict></plist>\n")
+    """CN1/A16: generated with plistlib — real dict/boolean types and
+    the approved state root transported as OKTO_NEXUS_CONNECTOR_STATE."""
+    import plistlib
+    command = _daemon_command() + ["--state-dir", str(root)]
+    payload = {
+        "Label": f"ai.oktolabs.{SERVICE_NAME}",
+        "ProgramArguments": command,
+        "EnvironmentVariables": {
+            "OKTO_NEXUS_CONNECTOR_STATE": str(root),
+        },
+        "RunAtLoad": True,
+        "KeepAlive": True,
+    }
+    return plistlib.dumps(payload, sort_keys=True).decode("utf-8")
 
 
 def _plan_json(service_plan: ServicePlan) -> dict[str, object]:

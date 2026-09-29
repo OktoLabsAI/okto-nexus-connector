@@ -62,6 +62,9 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
     forced_file = _os.environ.get(
         "OKTO_NEXUS_CONNECTOR_VAULT", "").strip().lower() == "file"
     from ...identity.vault import vault_backend_names
+    # CN1/A14: --non-interactive NEVER prompts. An unapproved vault
+    # fallback in headless mode is a prescriptive error, not an implicit
+    # approval (test_19: no confirm call with non_interactive=False).
     if (forced_file or not vault_backend_names()) and not \
             store.load().preferences.get("vault.fallback_file.approved"):
         if not args.non_interactive:
@@ -75,7 +78,11 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
                     {"vault.fallback_file.approved": True}))
         if not store.load().preferences.get("vault.fallback_file.approved"):
             raise ConnectorError("APPROVAL_REQUIRED", "vault",
-                                 "restricted-file fallback not approved")
+                                 "restricted-file fallback not approved",
+                                 action="Pre-approve the fallback once in "
+                                        "interactive mode, or install an OS "
+                                        "keyring backend, before running "
+                                        "non-interactive automation.")
     vault = open_vault(paths.vault_dir(root),
                       approved_fallback=bool(store.load().preferences.get(
                           "vault.fallback_file.approved", False)))
@@ -113,8 +120,12 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
             version=version, workspace_root=str(project))
         for line in _render_confirmation(confirmation):
             output.line(line)
-        if not confirm("Create this binding?", non_interactive=False,
-                       default=True):
+        # CN1/A14: the aggregated confirmation honors non-interactive.
+        approved = (args.non_interactive or
+                    confirm("Create this binding?",
+                            non_interactive=args.non_interactive,
+                            default=True))
+        if not approved:
             return {"connected": False, "aborted": True,
                     "identity_alias": identity_result.identity.alias}
 
@@ -194,9 +205,12 @@ async def _choose_harness(args, output: Output):
                              action="Pass --harness explicitly in "
                                     "non-interactive mode.")
     else:
+        # CN1/A14+CN-01.04 (test_24): the selection value is the EXACT
+        # installation — the entry's executable/ref — never a bare
+        # adapter id that falls back to matches[0].
         options = []
         for entry in inventory:
-            options.append((entry.adapter_id,
+            options.append((entry.executable,
                             f"{entry.executable}"
                             f" [{entry.source}]"
                             f"{f' v{entry.version}' if entry.version else ''}"))
@@ -205,25 +219,31 @@ async def _choose_harness(args, output: Output):
                                  "no local harness installation found",
                                  action="Install Codex/Pi/Claude or pass "
                                         "--executable explicitly.")
-        adapter_id = select("Which local harness should this agent use?",
-                            options, non_interactive=False)
-    if args.executable:
-        if adapter_id == "pi_rpc":
-            if not args.pi_node:
-                raise ConnectorError("VALIDATION_ERROR", "connect",
-                                     "Pi selection requires --pi-node "
-                                     "(trusted Node executable)")
-            candidate = pi_candidate(args.pi_node, args.executable)
-        else:
-            candidate = select_explicit(adapter_id, args.executable)
+        adapter_id = None
+        executable_choice = select(
+            "Which local harness should this agent use?",
+            options, non_interactive=args.non_interactive)
+        for entry in inventory:
+            if entry.executable == executable_choice:
+                adapter_id = entry.adapter_id
+                break
+        if adapter_id is None:
+            raise ConnectorError("VALIDATION_ERROR", "connect",
+                                 "selected installation vanished from the "
+                                 "inventory")
+    executable_path = (args.executable if args.executable
+                       else executable_choice)
+    if executable_path is None:
+        raise ConnectorError("VALIDATION_ERROR", "connect",
+                             "no installation selected")
+    if adapter_id == "pi_rpc":
+        if not args.pi_node:
+            raise ConnectorError("VALIDATION_ERROR", "connect",
+                                 "Pi selection requires --pi-node "
+                                 "(trusted Node executable)")
+        candidate = pi_candidate(args.pi_node, executable_path)
     else:
-        matches = [e for e in inventory if e.adapter_id == adapter_id]
-        if not matches:
-            raise ConnectorError("BINARY_NOT_FOUND", "connect",
-                                 f"no local candidate for {adapter_id}",
-                                 action="Pass --executable explicitly.")
-        exact = matches[0]
-        candidate = select_explicit(adapter_id, exact.executable)
+        candidate = select_explicit(adapter_id, executable_path)
     probed = await probe_version(candidate)
     return adapter_id, probed, probed.version
 

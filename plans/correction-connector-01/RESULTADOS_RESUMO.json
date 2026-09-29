@@ -1,0 +1,485 @@
+{
+  "connector_version": "0.1.0.dev0",
+  "connector_commit": "8bc50259dc7eb353f349f1eb762be2d33cc393de",
+  "source_file_count": 102,
+  "core_pinned": "0.2.8.dev0",
+  "core_experimental": "0.2.9.dev0",
+  "campaigns": {
+    "repo_core028": {
+      "total": 121,
+      "passed": 111,
+      "failed": 7,
+      "skipped": 3,
+      "errors": 0,
+      "xml": "suite028.xml",
+      "failures": [
+        {
+          "node": "tests.e2e.test_cli_flows::test_cli_identity_connect_and_daemon",
+          "message": "AssertionError: b''\nassert 1 == 0\n +  where 1 = CompletedProcess(args=['/mnt/data/connector_audit/venv/bin/python', '-m', 'okto_nexus_connector.cli.main', '--state-di...peration_id\": null,\\n  \"possible_effect\": false,\\n  \"retry_safe\": false,\\n  \"stage\": \"selection\"\\n }\\n}\\n', stderr=b'').returncode"
+        },
+        {
+          "node": "tests.integration.test_daemon_app::test_runtime_start_lifecycle",
+          "message": "AssertionError: {'done': True, 'error': {'action': None, 'code': 'BINARY_NOT_FOUND', 'message': 'selected candidate is not executable', 'operation_id': None, ...}, 'ok': False, 'seq': 8}\nassert False"
+        },
+        {
+          "node": "tests.integration.test_daemon_app::test_shutdown_report_is_honest",
+          "message": "KeyError: 'result'"
+        },
+        {
+          "node": "tests.integration.test_logs_stream::test_logs_snapshot_and_follow",
+          "message": "assert False"
+        },
+        {
+          "node": "tests.integration.test_two_servers::test_remove_binding_of_one_server_leaves_other",
+          "message": "AssertionError: {'done': True, 'error': {'action': None, 'code': 'BINARY_NOT_FOUND', 'message': 'selected candidate is not executable', 'operation_id': None, ...}, 'ok': False, 'seq': 19}\nassert False"
+        },
+        {
+          "node": "tests.integration.test_two_servers::test_runtime_start_works_on_both_servers",
+          "message": "AssertionError: {'done': True, 'error': {'action': None, 'code': 'BINARY_NOT_FOUND', 'message': 'selected candidate is not executable', 'operation_id': None, ...}, 'ok': False, 'seq': 20}\nassert False"
+        },
+        {
+          "node": "tests.unit.test_core02_integration::test_pi_release_layout_discovered_passively",
+          "message": "AssertionError: assert [Installation...b7ddd4311c2')] == []\n  \n  Left contains one more item: InstallationCandidate(adapter_id='pi_rpc', executable='/tmp/pytest-of-root/pytest-0/test_pi_release_layout_discove0/no...ng-agent/dist/bundle/cli.js', build_identity='sha256:da4d15c16d2cc31eb8f9386c4e251aec5dd2251c176928296d474b7ddd4311c2')\n  \n  Full diff:\n  - []\n  + [\n  +     InstallationCandidate(\n  +         adapter_id='pi_rpc',\n  +         executable='/tmp/pytest-of-root/pytest-0/test_pi_release_layout_discove0/node.exe',\n  +         fingerprint='sha256:9d6dcfd4ee121864c8726feeb6d8c19d1e214b41a95318ecf07781c89c99648a',\n  +         source='trusted_root',\n  +         trust='selected',\n  +         version='0.87.1',\n  +         architecture=None,\n  +         launch_script='/tmp/pytest-of-root/pytest-0/test_pi_release_layout_discove0/releases/0.87.1/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',\n  +         build_identity='sha256:da4d15c16d2cc31eb8f9386c4e251aec5dd2251c176928296d474b7ddd4311c2',\n  +     ),\n  + ]"
+        }
+      ]
+    },
+    "repo_core029": {
+      "total": 121,
+      "passed": 111,
+      "failed": 7,
+      "skipped": 3,
+      "errors": 0,
+      "xml": "suite029.xml",
+      "failures": [
+        {
+          "node": "tests.e2e.test_cli_flows::test_cli_identity_connect_and_daemon",
+          "message": "AssertionError: b''\nassert 1 == 0\n +  where 1 = CompletedProcess(args=['/mnt/data/connector_audit/venv/bin/python', '-m', 'okto_nexus_connector.cli.main', '--state-di...peration_id\": null,\\n  \"possible_effect\": false,\\n  \"retry_safe\": false,\\n  \"stage\": \"selection\"\\n }\\n}\\n', stderr=b'').returncode"
+        },
+        {
+          "node": "tests.integration.test_daemon_app::test_runtime_start_lifecycle",
+          "message": "AssertionError: {'done': True, 'error': {'action': None, 'code': 'BINARY_NOT_FOUND', 'message': 'selected candidate is not executable', 'operation_id': None, ...}, 'ok': False, 'seq': 8}\nassert False"
+        },
+        {
+          "node": "tests.integration.test_daemon_app::test_shutdown_report_is_honest",
+          "message": "KeyError: 'result'"
+        },
+        {
+          "node": "tests.integration.test_logs_stream::test_logs_snapshot_and_follow",
+          "message": "assert False"
+        },
+        {
+          "node": "tests.integration.test_two_servers::test_remove_binding_of_one_server_leaves_other",
+          "message": "AssertionError: {'done': True, 'error': {'action': None, 'code': 'BINARY_NOT_FOUND', 'message': 'selected candidate is not executable', 'operation_id': None, ...}, 'ok': False, 'seq': 19}\nassert False"
+        },
+        {
+          "node": "tests.integration.test_two_servers::test_runtime_start_works_on_both_servers",
+          "message": "AssertionError: {'done': True, 'error': {'action': None, 'code': 'BINARY_NOT_FOUND', 'message': 'selected candidate is not executable', 'operation_id': None, ...}, 'ok': False, 'seq': 20}\nassert False"
+        },
+        {
+          "node": "tests.unit.test_core02_integration::test_pi_release_layout_discovered_passively",
+          "message": "AssertionError: assert [Installation...b7ddd4311c2')] == []\n  \n  Left contains one more item: InstallationCandidate(adapter_id='pi_rpc', executable='/tmp/pytest-of-root/pytest-3/test_pi_release_layout_discove0/no...ng-agent/dist/bundle/cli.js', build_identity='sha256:da4d15c16d2cc31eb8f9386c4e251aec5dd2251c176928296d474b7ddd4311c2')\n  \n  Full diff:\n  - []\n  + [\n  +     InstallationCandidate(\n  +         adapter_id='pi_rpc',\n  +         executable='/tmp/pytest-of-root/pytest-3/test_pi_release_layout_discove0/node.exe',\n  +         fingerprint='sha256:ee0575781aadf635ef9454eaf7b9254c1849b8755392a684d7c960226bdbaa64',\n  +         source='trusted_root',\n  +         trust='selected',\n  +         version='0.87.1',\n  +         architecture=None,\n  +         launch_script='/tmp/pytest-of-root/pytest-3/test_pi_release_layout_discove0/releases/0.87.1/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js',\n  +         build_identity='sha256:da4d15c16d2cc31eb8f9386c4e251aec5dd2251c176928296d474b7ddd4311c2',\n  +     ),\n  + ]"
+        }
+      ]
+    },
+    "audit_source_core028": {
+      "total": 34,
+      "passed": 4,
+      "failed": 30,
+      "skipped": 0,
+      "errors": 0,
+      "xml": "reviewer028-final.xml",
+      "failures": [
+        {
+          "node": "test_connector_audit::test_01_qualified_candidate_architecture_survives_binding_roundtrip",
+          "message": "AssertionError: architecture lost: None\nassert None == 'x86_64'\n +  where None = InstallationCandidate(adapter_id='codex_app_server', executable='/tmp/pytest-of-root/pytest-6/test_01_qualified_candid...0', source='explicit', trust='selected', version='0.157.0', architecture=None, launch_script=None, build_identity=None).architecture"
+        },
+        {
+          "node": "test_connector_audit::test_02_two_servers_same_binding_id_do_not_share_core_instance",
+          "message": "AssertionError: runtime from srv_a was reused for srv_b\nassert <object object at 0x7fc819b27670> is not <object object at 0x7fc819b27670>"
+        },
+        {
+          "node": "test_connector_audit::test_03_empty_authority_does_not_gain_fallback_permissions",
+          "message": "AssertionError: permissions fabricated: frozenset({'runtime.close', 'turn.submit', 'runtime.open'})\nassert not frozenset({'runtime.close', 'runtime.open', 'turn.submit'})\n +  where frozenset({'runtime.close', 'runtime.open', 'turn.submit'}) = ExecutionContext(server_id='srv_a', executor_id='exe_a', binding_id='bind_a', agent_id='ag_a', workspace_id='ws_a', au...380.534226812, allowed_actions=frozenset({'runtime.close', 'turn.submit', 'runtime.open'}), session_owner_generation=1).allowed_actions"
+        },
+        {
+          "node": "test_connector_audit::test_04_remote_context_never_extends_expired_authorization",
+          "message": "AssertionError: expired lease was extended locally\nassert 1380.543304029 <= 1340.543293353\n +  where 1380.543304029 = ExecutionContext(server_id='srv_a', executor_id='exe_a', binding_id='bind_a', agent_id='ag_a', workspace_id='ws_a', au...0.543304029, allowed_actions=frozenset({'runtime.close', 'turn.submit', 'turn.interrupt'}), session_owner_generation=1).lease_deadline_monotonic\n +  and   1340.543293353 = ManagedSession(session_id='session_a', binding=BindingRecord(binding_id='bind_a', alias='local-srv_a', server_id='srv_...neration=1, session_owner_generation=1, closing=False, log_ring=deque([], maxlen=512), waiters=[], terminal_seen=False).lease_deadline"
+        },
+        {
+          "node": "test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes0]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes1]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes2]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_other', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes3]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes4]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_not_attached', ...}]"
+        },
+        {
+          "node": "test_connector_audit::test_06_server_generation_is_adopted_after_welcome",
+          "message": "AssertionError: assert 1 == 7\n +  where 1 = TransportStats(state='stopped', connection_generation=1, connected_at=None, last_frame_at=None, frames_sent=0, frames_received=0, reconnects=0, lanes={}).connection_generation\n +    where TransportStats(state='stopped', connection_generation=1, connected_at=None, last_frame_at=None, frames_sent=0, frames_received=0, reconnects=0, lanes={}) = <okto_nexus_connector.transport.wss_client.NXLTransport object at 0x7fc819454950>.stats"
+        },
+        {
+          "node": "test_connector_audit::test_07_operation_cannot_enter_before_handshake_and_reconcile",
+          "message": "AssertionError: operation accepted without welcome/lane/reconciliation\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "test_connector_audit::test_08_priority_queue_conserves_both_items_waking_together",
+          "message": "AssertionError: ({'id': 'urgent'}, None)\nassert {'urgent'} == {'normal', 'urgent'}\n  \n  Extra items in the right set:\n  'normal'\n  \n  Full diff:\n    {\n  -     'normal',\n        'urgent',\n    }"
+        },
+        {
+          "node": "test_connector_audit::test_09_silent_websocket_is_detected_while_tasks_are_pending",
+          "message": "AssertionError: absence deadline never checked while sender/receiver/heartbeat await\nassert set()"
+        },
+        {
+          "node": "test_connector_audit::test_10_http_plaintext_nonloopback_rejected_before_secret_transmission",
+          "message": "AssertionError: canonical credential was dispatched over non-loopback HTTP\nassert not [<Request('POST', 'http://remote.example/effect')>]"
+        },
+        {
+          "node": "test_connector_audit::test_11_read_timeout_after_mutating_request_is_not_safe_retry",
+          "message": "AssertionError: {'action': 'Check the Server address/network and retry; no effect was possible.', 'code': 'EXECUTOR_OFFLINE', 'message': 'transport failure: reply unavailable', 'operation_id': None, ...}\nassert (False)\n +  where False = ConnectorError(code='EXECUTOR_OFFLINE', stage='http', message='transport failure: reply unavailable', possible_effect=False, retry_safe=True, operation_id=None, action='Check the Server address/network and retry; no effect was possible.').possible_effect\n +    where ConnectorError(code='EXECUTOR_OFFLINE', stage='http', message='transport failure: reply unavailable', possible_effect=False, retry_safe=True, operation_id=None, action='Check the Server address/network and retry; no effect was possible.') = <ExceptionInfo ConnectorError(code='EXECUTOR_OFFLINE', stage='http', message='transport failure: reply unavailable', p...ry_safe=True, operation_id=None, action='Check the Server address/network and retry; no effect was possible.') tblen=2>.value"
+        },
+        {
+          "node": "test_connector_audit::test_12_explicit_mcp_import_uses_exact_origin_not_prefix",
+          "message": "Failed: DID NOT RAISE <class 'okto_nexus_connector.errors.ConnectorError'>"
+        },
+        {
+          "node": "test_connector_audit::test_13_failed_stop_can_be_retried_and_not_marked_closed",
+          "message": "AssertionError: stop failure permanently leaves closing=True\nassert not True\n +  where True = ManagedSession(session_id='session_a', binding=BindingRecord(binding_id='bind_a', alias='local-srv_a', server_id='srv_...eneration=1, session_owner_generation=1, closing=True, log_ring=deque([], maxlen=512), waiters=[], terminal_seen=False).closing"
+        },
+        {
+          "node": "test_connector_audit::test_14_unknown_close_receipt_keeps_managed_session_recoverable",
+          "message": "AssertionError: unknown runtime was removed from public management\nassert 'session_a' in []\n +  where [] = session_ids()\n +    where session_ids = <okto_nexus_connector.services.runtime_service.RuntimeManager object at 0x7fc8195c4640>.session_ids"
+        },
+        {
+          "node": "test_connector_audit::test_15_shutdown_does_not_discard_core_ownership_on_unknown",
+          "message": "AssertionError: core instance with unknown resource ownership was forgotten\nassert None is namespace(shutdown=<AsyncMock id='140497394246592'>)\n +  where None = get('bind_a')\n +    where get = <okto_nexus_connector.services.core_host.CoreRuntimeHost object at 0x7fc819600910>.get"
+        },
+        {
+          "node": "test_connector_audit::test_16_reconcile_response_is_valid_nxl_not_string_snapshots",
+          "message": "nexus_connector_core.models.CoreError: VALIDATION_ERROR"
+        },
+        {
+          "node": "test_connector_audit::test_17_reconcile_passes_originating_namespace_not_first_binding",
+          "message": "AssertionError: [{'operation_ids': [], 'session_ids': ['s']}]\nassert (None == 'srv_b')\n +  where None = <built-in method get of dict object at 0x7fc819422700>('server_id')\n +    where <built-in method get of dict object at 0x7fc819422700> = {'operation_ids': [], 'session_ids': ['s']}.get"
+        },
+        {
+          "node": "test_connector_audit::test_18_state_store_save_public_method_works",
+          "message": "AttributeError: 'StateStore' object has no attribute '_write_locked'"
+        },
+        {
+          "node": "test_connector_audit::test_19_noninteractive_connect_does_not_prompt",
+          "message": "AssertionError: [{'default': True, 'non_interactive': False}]\nassert not True\n +  where True = any(<generator object test_19_noninteractive_connect_does_not_prompt.<locals>.<genexpr> at 0x7fc819321f20>)"
+        },
+        {
+          "node": "test_connector_audit::test_20_launchd_plist_uses_dictionary_and_boolean_types",
+          "message": "AssertionError: {'EnvironmentVariables': '', 'KeepAlive': 'true', 'Label': 'ai.oktolabs.okto-nexus-connector', 'ProgramArguments': ['/mnt/data/connector_audit/venv/bin/python', '-m', 'okto_nexus_connector.daemon'], ...}\nassert False\n +  where False = isinstance('', dict)"
+        },
+        {
+          "node": "test_connector_audit::test_21_windows_autostart_preserves_custom_state_directory",
+          "message": "AssertionError: scheduled task loses selected state root\nassert '/tmp/pytest-of-root/pytest-6/test_21_windows_autostart_pres0' in 'schtasks /Create /SC ONLOGON /TN okto-nexus-connector /TR \"/mnt/data/connector_audit/venv/bin/python -m okto_nexus_connector.daemon\" /F /RL LIMITED'\n +  where '/tmp/pytest-of-root/pytest-6/test_21_windows_autostart_pres0' = str(PosixPath('/tmp/pytest-of-root/pytest-6/test_21_windows_autostart_pres0'))\n +  and   'schtasks /Create /SC ONLOGON /TN okto-nexus-connector /TR \"/mnt/data/connector_audit/venv/bin/python -m okto_nexus_connector.daemon\" /F /RL LIMITED' = <built-in method join of str object at 0xa50ad8>(['schtasks', '/Create', '/SC', 'ONLOGON', '/TN', 'okto-nexus-connector', ...])\n +    where <built-in method join of str object at 0xa50ad8> = ' '.join"
+        },
+        {
+          "node": "test_connector_audit::test_22_websocket_dispatch_does_not_ignore_wire_identity",
+          "message": "AssertionError: wire authority ignored; native writes=['send_turn']; result={'contract_revision': 'nxl-1-agent-centric-http-only-2026-09-25-r3', 'executor_id': 'exe_a', 'intent_hash': 'sha256:e5a71176e15bdfd87df9df6dc665402df3d0816d06d0dc7f1a839d5fa591a2d7', 'operation_id': 'op_a', 'possible_effect': True, 'protocol_major': 1, 'retry_safe': False, 'server_id': 'srv_a', 'session_id': 'session_a', 'stage': 'SUBMITTED', 'type': 'operation.receipt'}\nassert not ['send_turn']\n +  where ['send_turn'] = <test_connector_audit.test_22_websocket_dispatch_does_not_ignore_wire_identity.<locals>.Native object at 0x7fc81946b4d0>.sent"
+        },
+        {
+          "node": "test_connector_audit::test_24_select_second_installation_selects_that_exact_path",
+          "message": "AssertionError: InstallationCandidate(adapter_id='codex_app_server', executable='/tmp/pytest-of-root/pytest-6/test_24_select_second_in...111111', source='explicit', trust='selected', version=None, architecture=None, launch_script=None, build_identity=None)\nassert '/tmp/pytest-...d_installa0/a' == '/tmp/pytest-...d_installa0/b'\n  \n  Skipping 51 identical leading characters in diff, use -v to show\n  - installa0/b\n  ?           ^\n  + installa0/a\n  ?           ^"
+        },
+        {
+          "node": "test_connector_audit::test_25_bind_create_completes_identity_dto_construction",
+          "message": "NameError: name 'identity' is not defined"
+        },
+        {
+          "node": "test_connector_audit::test_26_blocked_submit_does_not_block_received_control",
+          "message": "AssertionError: queued remote interrupt cannot be read while turn handler waits\nassert set()"
+        },
+        {
+          "node": "test_connector_audit::test_27_start_session_capability_is_referenced_in_effective_environment",
+          "message": "AssertionError: {'PATH': '/opt/apply_patch/bin:/opt/imagemagick/bin:/opt/pyvenv/bin:/usr/local/swift/usr/bin:/usr/local/go/bin:/opt/nv...v22.16.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.sdkman/candidates/kotlin/current/bin'}\nassert False\n +  where False = any(<generator object test_27_start_session_capability_is_referenced_in_effective_environment.<locals>.<genexpr> at 0x7fc8193af440>)"
+        }
+      ]
+    },
+    "audit_source_core029": {
+      "total": 34,
+      "passed": 4,
+      "failed": 30,
+      "skipped": 0,
+      "errors": 0,
+      "xml": "reviewer029.xml",
+      "failures": [
+        {
+          "node": "test_connector_audit::test_01_qualified_candidate_architecture_survives_binding_roundtrip",
+          "message": "AssertionError: architecture lost: None\nassert None == 'x86_64'\n +  where None = InstallationCandidate(adapter_id='codex_app_server', executable='/tmp/pytest-of-root/pytest-7/test_01_qualified_candid...0', source='explicit', trust='selected', version='0.157.0', architecture=None, launch_script=None, build_identity=None).architecture"
+        },
+        {
+          "node": "test_connector_audit::test_02_two_servers_same_binding_id_do_not_share_core_instance",
+          "message": "AssertionError: runtime from srv_a was reused for srv_b\nassert <object object at 0x7fdbf1497670> is not <object object at 0x7fdbf1497670>"
+        },
+        {
+          "node": "test_connector_audit::test_03_empty_authority_does_not_gain_fallback_permissions",
+          "message": "AssertionError: permissions fabricated: frozenset({'runtime.close', 'turn.submit', 'runtime.open'})\nassert not frozenset({'runtime.close', 'runtime.open', 'turn.submit'})\n +  where frozenset({'runtime.close', 'runtime.open', 'turn.submit'}) = ExecutionContext(server_id='srv_a', executor_id='exe_a', binding_id='bind_a', agent_id='ag_a', workspace_id='ws_a', au...384.227891964, allowed_actions=frozenset({'runtime.close', 'turn.submit', 'runtime.open'}), session_owner_generation=1).allowed_actions"
+        },
+        {
+          "node": "test_connector_audit::test_04_remote_context_never_extends_expired_authorization",
+          "message": "AssertionError: expired lease was extended locally\nassert 1384.236248435 <= 1344.236236597\n +  where 1384.236248435 = ExecutionContext(server_id='srv_a', executor_id='exe_a', binding_id='bind_a', agent_id='ag_a', workspace_id='ws_a', au...4.236248435, allowed_actions=frozenset({'runtime.close', 'turn.submit', 'turn.interrupt'}), session_owner_generation=1).lease_deadline_monotonic\n +  and   1344.236236597 = ManagedSession(session_id='session_a', binding=BindingRecord(binding_id='bind_a', alias='local-srv_a', server_id='srv_...neration=1, session_owner_generation=1, closing=False, log_ring=deque([], maxlen=512), waiters=[], terminal_seen=False).lease_deadline"
+        },
+        {
+          "node": "test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes0]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes1]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes2]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_other', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes3]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes4]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_not_attached', ...}]"
+        },
+        {
+          "node": "test_connector_audit::test_06_server_generation_is_adopted_after_welcome",
+          "message": "AssertionError: assert 1 == 7\n +  where 1 = TransportStats(state='stopped', connection_generation=1, connected_at=None, last_frame_at=None, frames_sent=0, frames_received=0, reconnects=0, lanes={}).connection_generation\n +    where TransportStats(state='stopped', connection_generation=1, connected_at=None, last_frame_at=None, frames_sent=0, frames_received=0, reconnects=0, lanes={}) = <okto_nexus_connector.transport.wss_client.NXLTransport object at 0x7fdbf0d50950>.stats"
+        },
+        {
+          "node": "test_connector_audit::test_07_operation_cannot_enter_before_handshake_and_reconcile",
+          "message": "AssertionError: operation accepted without welcome/lane/reconciliation\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "test_connector_audit::test_08_priority_queue_conserves_both_items_waking_together",
+          "message": "AssertionError: ({'id': 'urgent'}, None)\nassert {'urgent'} == {'normal', 'urgent'}\n  \n  Extra items in the right set:\n  'normal'\n  \n  Full diff:\n    {\n  -     'normal',\n        'urgent',\n    }"
+        },
+        {
+          "node": "test_connector_audit::test_09_silent_websocket_is_detected_while_tasks_are_pending",
+          "message": "AssertionError: absence deadline never checked while sender/receiver/heartbeat await\nassert set()"
+        },
+        {
+          "node": "test_connector_audit::test_10_http_plaintext_nonloopback_rejected_before_secret_transmission",
+          "message": "AssertionError: canonical credential was dispatched over non-loopback HTTP\nassert not [<Request('POST', 'http://remote.example/effect')>]"
+        },
+        {
+          "node": "test_connector_audit::test_11_read_timeout_after_mutating_request_is_not_safe_retry",
+          "message": "AssertionError: {'action': 'Check the Server address/network and retry; no effect was possible.', 'code': 'EXECUTOR_OFFLINE', 'message': 'transport failure: reply unavailable', 'operation_id': None, ...}\nassert (False)\n +  where False = ConnectorError(code='EXECUTOR_OFFLINE', stage='http', message='transport failure: reply unavailable', possible_effect=False, retry_safe=True, operation_id=None, action='Check the Server address/network and retry; no effect was possible.').possible_effect\n +    where ConnectorError(code='EXECUTOR_OFFLINE', stage='http', message='transport failure: reply unavailable', possible_effect=False, retry_safe=True, operation_id=None, action='Check the Server address/network and retry; no effect was possible.') = <ExceptionInfo ConnectorError(code='EXECUTOR_OFFLINE', stage='http', message='transport failure: reply unavailable', p...ry_safe=True, operation_id=None, action='Check the Server address/network and retry; no effect was possible.') tblen=2>.value"
+        },
+        {
+          "node": "test_connector_audit::test_12_explicit_mcp_import_uses_exact_origin_not_prefix",
+          "message": "Failed: DID NOT RAISE <class 'okto_nexus_connector.errors.ConnectorError'>"
+        },
+        {
+          "node": "test_connector_audit::test_13_failed_stop_can_be_retried_and_not_marked_closed",
+          "message": "AssertionError: stop failure permanently leaves closing=True\nassert not True\n +  where True = ManagedSession(session_id='session_a', binding=BindingRecord(binding_id='bind_a', alias='local-srv_a', server_id='srv_...eneration=1, session_owner_generation=1, closing=True, log_ring=deque([], maxlen=512), waiters=[], terminal_seen=False).closing"
+        },
+        {
+          "node": "test_connector_audit::test_14_unknown_close_receipt_keeps_managed_session_recoverable",
+          "message": "AssertionError: unknown runtime was removed from public management\nassert 'session_a' in []\n +  where [] = session_ids()\n +    where session_ids = <okto_nexus_connector.services.runtime_service.RuntimeManager object at 0x7fdbf0c1cfc0>.session_ids"
+        },
+        {
+          "node": "test_connector_audit::test_15_shutdown_does_not_discard_core_ownership_on_unknown",
+          "message": "AssertionError: core instance with unknown resource ownership was forgotten\nassert None is namespace(shutdown=<AsyncMock id='140582613574256'>)\n +  where None = get('bind_a')\n +    where get = <okto_nexus_connector.services.core_host.CoreRuntimeHost object at 0x7fdbf0c70a50>.get"
+        },
+        {
+          "node": "test_connector_audit::test_16_reconcile_response_is_valid_nxl_not_string_snapshots",
+          "message": "nexus_connector_core.models.CoreError: VALIDATION_ERROR"
+        },
+        {
+          "node": "test_connector_audit::test_17_reconcile_passes_originating_namespace_not_first_binding",
+          "message": "AssertionError: [{'operation_ids': [], 'session_ids': ['s']}]\nassert (None == 'srv_b')\n +  where None = <built-in method get of dict object at 0x7fdbf0aec980>('server_id')\n +    where <built-in method get of dict object at 0x7fdbf0aec980> = {'operation_ids': [], 'session_ids': ['s']}.get"
+        },
+        {
+          "node": "test_connector_audit::test_18_state_store_save_public_method_works",
+          "message": "AttributeError: 'StateStore' object has no attribute '_write_locked'"
+        },
+        {
+          "node": "test_connector_audit::test_19_noninteractive_connect_does_not_prompt",
+          "message": "AssertionError: [{'default': True, 'non_interactive': False}]\nassert not True\n +  where True = any(<generator object test_19_noninteractive_connect_does_not_prompt.<locals>.<genexpr> at 0x7fdbf0cd5630>)"
+        },
+        {
+          "node": "test_connector_audit::test_20_launchd_plist_uses_dictionary_and_boolean_types",
+          "message": "AssertionError: {'EnvironmentVariables': '', 'KeepAlive': 'true', 'Label': 'ai.oktolabs.okto-nexus-connector', 'ProgramArguments': ['/mnt/data/connector_audit/venv/bin/python', '-m', 'okto_nexus_connector.daemon'], ...}\nassert False\n +  where False = isinstance('', dict)"
+        },
+        {
+          "node": "test_connector_audit::test_21_windows_autostart_preserves_custom_state_directory",
+          "message": "AssertionError: scheduled task loses selected state root\nassert '/tmp/pytest-of-root/pytest-7/test_21_windows_autostart_pres0' in 'schtasks /Create /SC ONLOGON /TN okto-nexus-connector /TR \"/mnt/data/connector_audit/venv/bin/python -m okto_nexus_connector.daemon\" /F /RL LIMITED'\n +  where '/tmp/pytest-of-root/pytest-7/test_21_windows_autostart_pres0' = str(PosixPath('/tmp/pytest-of-root/pytest-7/test_21_windows_autostart_pres0'))\n +  and   'schtasks /Create /SC ONLOGON /TN okto-nexus-connector /TR \"/mnt/data/connector_audit/venv/bin/python -m okto_nexus_connector.daemon\" /F /RL LIMITED' = <built-in method join of str object at 0xa50ad8>(['schtasks', '/Create', '/SC', 'ONLOGON', '/TN', 'okto-nexus-connector', ...])\n +    where <built-in method join of str object at 0xa50ad8> = ' '.join"
+        },
+        {
+          "node": "test_connector_audit::test_22_websocket_dispatch_does_not_ignore_wire_identity",
+          "message": "AssertionError: wire authority ignored; native writes=['send_turn']; result={'contract_revision': 'nxl-1-agent-centric-http-only-2026-09-25-r3', 'executor_id': 'exe_a', 'intent_hash': 'sha256:e5a71176e15bdfd87df9df6dc665402df3d0816d06d0dc7f1a839d5fa591a2d7', 'operation_id': 'op_a', 'possible_effect': True, 'protocol_major': 1, 'retry_safe': False, 'server_id': 'srv_a', 'session_id': 'session_a', 'stage': 'SUBMITTED', 'type': 'operation.receipt'}\nassert not ['send_turn']\n +  where ['send_turn'] = <test_connector_audit.test_22_websocket_dispatch_does_not_ignore_wire_identity.<locals>.Native object at 0x7fdbf0be7380>.sent"
+        },
+        {
+          "node": "test_connector_audit::test_24_select_second_installation_selects_that_exact_path",
+          "message": "AssertionError: InstallationCandidate(adapter_id='codex_app_server', executable='/tmp/pytest-of-root/pytest-7/test_24_select_second_in...111111', source='explicit', trust='selected', version=None, architecture=None, launch_script=None, build_identity=None)\nassert '/tmp/pytest-...d_installa0/a' == '/tmp/pytest-...d_installa0/b'\n  \n  Skipping 51 identical leading characters in diff, use -v to show\n  - installa0/b\n  ?           ^\n  + installa0/a\n  ?           ^"
+        },
+        {
+          "node": "test_connector_audit::test_25_bind_create_completes_identity_dto_construction",
+          "message": "NameError: name 'identity' is not defined"
+        },
+        {
+          "node": "test_connector_audit::test_26_blocked_submit_does_not_block_received_control",
+          "message": "AssertionError: queued remote interrupt cannot be read while turn handler waits\nassert set()"
+        },
+        {
+          "node": "test_connector_audit::test_27_start_session_capability_is_referenced_in_effective_environment",
+          "message": "AssertionError: {'PATH': '/opt/apply_patch/bin:/opt/imagemagick/bin:/opt/pyvenv/bin:/usr/local/swift/usr/bin:/usr/local/go/bin:/opt/nv...v22.16.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.sdkman/candidates/kotlin/current/bin'}\nassert False\n +  where False = any(<generator object test_27_start_session_capability_is_referenced_in_effective_environment.<locals>.<genexpr> at 0x7fdbf0ac8d40>)"
+        }
+      ]
+    },
+    "audit_installed_core028": {
+      "total": 34,
+      "passed": 4,
+      "failed": 30,
+      "skipped": 0,
+      "errors": 0,
+      "xml": "installed028.xml",
+      "failures": [
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_01_qualified_candidate_architecture_survives_binding_roundtrip",
+          "message": "AssertionError: architecture lost: None\nassert None == 'x86_64'\n +  where None = InstallationCandidate(adapter_id='codex_app_server', executable='/tmp/pytest-of-root/pytest-8/test_01_qualified_candid...0', source='explicit', trust='selected', version='0.157.0', architecture=None, launch_script=None, build_identity=None).architecture"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_02_two_servers_same_binding_id_do_not_share_core_instance",
+          "message": "AssertionError: runtime from srv_a was reused for srv_b\nassert <object object at 0x7f5e66db1e60> is not <object object at 0x7f5e66db1e60>"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_03_empty_authority_does_not_gain_fallback_permissions",
+          "message": "AssertionError: permissions fabricated: frozenset({'turn.submit', 'runtime.open', 'runtime.close'})\nassert not frozenset({'runtime.close', 'runtime.open', 'turn.submit'})\n +  where frozenset({'runtime.close', 'runtime.open', 'turn.submit'}) = ExecutionContext(server_id='srv_a', executor_id='exe_a', binding_id='bind_a', agent_id='ag_a', workspace_id='ws_a', au...387.701857498, allowed_actions=frozenset({'turn.submit', 'runtime.open', 'runtime.close'}), session_owner_generation=1).allowed_actions"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_04_remote_context_never_extends_expired_authorization",
+          "message": "AssertionError: expired lease was extended locally\nassert 1387.711119749 <= 1347.711109053\n +  where 1387.711119749 = ExecutionContext(server_id='srv_a', executor_id='exe_a', binding_id='bind_a', agent_id='ag_a', workspace_id='ws_a', au...7.711119749, allowed_actions=frozenset({'turn.submit', 'turn.interrupt', 'runtime.close'}), session_owner_generation=1).lease_deadline_monotonic\n +  and   1347.711109053 = ManagedSession(session_id='session_a', binding=BindingRecord(binding_id='bind_a', alias='local-srv_a', server_id='srv_...neration=1, session_owner_generation=1, closing=False, log_ring=deque([], maxlen=512), waiters=[], terminal_seen=False).lease_deadline"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes0]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes1]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes2]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_other', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes3]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_05_inbound_operations_require_exact_live_lane_scope[changes4]",
+          "message": "AssertionError: invalid scope or stale generation reached operation callback\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_not_attached', ...}]"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_06_server_generation_is_adopted_after_welcome",
+          "message": "AssertionError: assert 1 == 7\n +  where 1 = TransportStats(state='stopped', connection_generation=1, connected_at=None, last_frame_at=None, frames_sent=0, frames_received=0, reconnects=0, lanes={}).connection_generation\n +    where TransportStats(state='stopped', connection_generation=1, connected_at=None, last_frame_at=None, frames_sent=0, frames_received=0, reconnects=0, lanes={}) = <okto_nexus_connector.transport.wss_client.NXLTransport object at 0x7f5e668a5fd0>.stats"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_07_operation_cannot_enter_before_handshake_and_reconcile",
+          "message": "AssertionError: operation accepted without welcome/lane/reconciliation\nassert not [{'action': 'turn.submit', 'agent_id': 'ag_a', 'authorization_revision': 1, 'binding_id': 'bind_a', ...}]"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_08_priority_queue_conserves_both_items_waking_together",
+          "message": "AssertionError: ({'id': 'urgent'}, None)\nassert {'urgent'} == {'normal', 'urgent'}\n  \n  Extra items in the right set:\n  'normal'\n  \n  Full diff:\n    {\n  -     'normal',\n        'urgent',\n    }"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_09_silent_websocket_is_detected_while_tasks_are_pending",
+          "message": "AssertionError: absence deadline never checked while sender/receiver/heartbeat await\nassert set()"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_10_http_plaintext_nonloopback_rejected_before_secret_transmission",
+          "message": "AssertionError: canonical credential was dispatched over non-loopback HTTP\nassert not [<Request('POST', 'http://remote.example/effect')>]"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_11_read_timeout_after_mutating_request_is_not_safe_retry",
+          "message": "AssertionError: {'action': 'Check the Server address/network and retry; no effect was possible.', 'code': 'EXECUTOR_OFFLINE', 'message': 'transport failure: reply unavailable', 'operation_id': None, ...}\nassert (False)\n +  where False = ConnectorError(code='EXECUTOR_OFFLINE', stage='http', message='transport failure: reply unavailable', possible_effect=False, retry_safe=True, operation_id=None, action='Check the Server address/network and retry; no effect was possible.').possible_effect\n +    where ConnectorError(code='EXECUTOR_OFFLINE', stage='http', message='transport failure: reply unavailable', possible_effect=False, retry_safe=True, operation_id=None, action='Check the Server address/network and retry; no effect was possible.') = <ExceptionInfo ConnectorError(code='EXECUTOR_OFFLINE', stage='http', message='transport failure: reply unavailable', p...ry_safe=True, operation_id=None, action='Check the Server address/network and retry; no effect was possible.') tblen=2>.value"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_12_explicit_mcp_import_uses_exact_origin_not_prefix",
+          "message": "Failed: DID NOT RAISE <class 'okto_nexus_connector.errors.ConnectorError'>"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_13_failed_stop_can_be_retried_and_not_marked_closed",
+          "message": "AssertionError: stop failure permanently leaves closing=True\nassert not True\n +  where True = ManagedSession(session_id='session_a', binding=BindingRecord(binding_id='bind_a', alias='local-srv_a', server_id='srv_...eneration=1, session_owner_generation=1, closing=True, log_ring=deque([], maxlen=512), waiters=[], terminal_seen=False).closing"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_14_unknown_close_receipt_keeps_managed_session_recoverable",
+          "message": "AssertionError: unknown runtime was removed from public management\nassert 'session_a' in []\n +  where [] = session_ids()\n +    where session_ids = <okto_nexus_connector.services.runtime_service.RuntimeManager object at 0x7f5e668443e0>.session_ids"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_15_shutdown_does_not_discard_core_ownership_on_unknown",
+          "message": "AssertionError: core instance with unknown resource ownership was forgotten\nassert None is namespace(shutdown=<AsyncMock id='140043422229104'>)\n +  where None = get('bind_a')\n +    where get = <okto_nexus_connector.services.core_host.CoreRuntimeHost object at 0x7f5e6685ca50>.get"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_16_reconcile_response_is_valid_nxl_not_string_snapshots",
+          "message": "nexus_connector_core.models.CoreError: VALIDATION_ERROR"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_17_reconcile_passes_originating_namespace_not_first_binding",
+          "message": "AssertionError: [{'operation_ids': [], 'session_ids': ['s']}]\nassert (None == 'srv_b')\n +  where None = <built-in method get of dict object at 0x7f5e665fd380>('server_id')\n +    where <built-in method get of dict object at 0x7f5e665fd380> = {'operation_ids': [], 'session_ids': ['s']}.get"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_18_state_store_save_public_method_works",
+          "message": "AttributeError: 'StateStore' object has no attribute '_write_locked'"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_19_noninteractive_connect_does_not_prompt",
+          "message": "AssertionError: [{'default': True, 'non_interactive': False}]\nassert not True\n +  where True = any(<generator object test_19_noninteractive_connect_does_not_prompt.<locals>.<genexpr> at 0x7f5e667368e0>)"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_20_launchd_plist_uses_dictionary_and_boolean_types",
+          "message": "AssertionError: {'EnvironmentVariables': '', 'KeepAlive': 'true', 'Label': 'ai.oktolabs.okto-nexus-connector', 'ProgramArguments': ['/mnt/data/connector_audit/venv/bin/python', '-m', 'okto_nexus_connector.daemon'], ...}\nassert False\n +  where False = isinstance('', dict)"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_21_windows_autostart_preserves_custom_state_directory",
+          "message": "AssertionError: scheduled task loses selected state root\nassert '/tmp/pytest-of-root/pytest-8/test_21_windows_autostart_pres0' in 'schtasks /Create /SC ONLOGON /TN okto-nexus-connector /TR \"/mnt/data/connector_audit/venv/bin/python -m okto_nexus_connector.daemon\" /F /RL LIMITED'\n +  where '/tmp/pytest-of-root/pytest-8/test_21_windows_autostart_pres0' = str(PosixPath('/tmp/pytest-of-root/pytest-8/test_21_windows_autostart_pres0'))\n +  and   'schtasks /Create /SC ONLOGON /TN okto-nexus-connector /TR \"/mnt/data/connector_audit/venv/bin/python -m okto_nexus_connector.daemon\" /F /RL LIMITED' = <built-in method join of str object at 0xa50ad8>(['schtasks', '/Create', '/SC', 'ONLOGON', '/TN', 'okto-nexus-connector', ...])\n +    where <built-in method join of str object at 0xa50ad8> = ' '.join"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_22_websocket_dispatch_does_not_ignore_wire_identity",
+          "message": "AssertionError: wire authority ignored; native writes=['send_turn']; result={'contract_revision': 'nxl-1-agent-centric-http-only-2026-09-25-r3', 'executor_id': 'exe_a', 'intent_hash': 'sha256:e5a71176e15bdfd87df9df6dc665402df3d0816d06d0dc7f1a839d5fa591a2d7', 'operation_id': 'op_a', 'possible_effect': True, 'protocol_major': 1, 'retry_safe': False, 'server_id': 'srv_a', 'session_id': 'session_a', 'stage': 'SUBMITTED', 'type': 'operation.receipt'}\nassert not ['send_turn']\n +  where ['send_turn'] = <test_connector_audit.test_22_websocket_dispatch_does_not_ignore_wire_identity.<locals>.Native object at 0x7f5e666f7380>.sent"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_24_select_second_installation_selects_that_exact_path",
+          "message": "AssertionError: InstallationCandidate(adapter_id='codex_app_server', executable='/tmp/pytest-of-root/pytest-8/test_24_select_second_in...111111', source='explicit', trust='selected', version=None, architecture=None, launch_script=None, build_identity=None)\nassert '/tmp/pytest-...d_installa0/a' == '/tmp/pytest-...d_installa0/b'\n  \n  Skipping 51 identical leading characters in diff, use -v to show\n  - installa0/b\n  ?           ^\n  + installa0/a\n  ?           ^"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_25_bind_create_completes_identity_dto_construction",
+          "message": "NameError: name 'identity' is not defined"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_26_blocked_submit_does_not_block_received_control",
+          "message": "AssertionError: queued remote interrupt cannot be read while turn handler waits\nassert set()"
+        },
+        {
+          "node": "connector_audit.regressions.test_connector_audit::test_27_start_session_capability_is_referenced_in_effective_environment",
+          "message": "AssertionError: {'PATH': '/opt/apply_patch/bin:/opt/imagemagick/bin:/opt/pyvenv/bin:/usr/local/swift/usr/bin:/usr/local/go/bin:/opt/nv...v22.16.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.sdkman/candidates/kotlin/current/bin'}\nassert False\n +  where False = any(<generator object test_27_start_session_capability_is_referenced_in_effective_environment.<locals>.<genexpr> at 0x7f5e66736400>)"
+        }
+      ]
+    }
+  },
+  "additional_tests_note": "34 cases = 30 failed + 3 positive controls + 1 executed observation. Repetitions are not new cases.",
+  "package_original_tests": "2 tests excluded due build/download/sibling-clone prerequisites; manual offline build/install/probe separately passed",
+  "real_providers": "NOT_RUN",
+  "real_nexus_server": "NOT_RUN",
+  "multi_host": "NOT_RUN",
+  "windows_macos_autostart": "NOT_RUN",
+  "artifact_hashes": {
+    "okto_nexus_connector-0.1.0.dev0-py3-none-any.whl": "7926c7bc67ec2c461f788c080acadd137e478f862c54cfcbaded08d0a77bb339",
+    "okto_nexus_connector-0.1.0.dev0.tar.gz": "9b6ab3b547218685d24988093f8e2f0669c85eb8df4f2d8515b2027ebe18c399"
+  }
+}

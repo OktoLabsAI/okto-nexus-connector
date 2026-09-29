@@ -1,10 +1,12 @@
-# Implementation status — 2026-09-26 (Core 0.2.8.dev0 aligned)
+# Implementation status — 2026-09-28 (CN1 corrected, Core 0.2.10.dev0)
 
 Connector `0.1.0.dev0`. Baseline: this repository, consuming the Core
 development wheel `nexus_connector_core-0.2.8.dev0` (SHA-256
 `6f4823f348732801cbe93318efbb2efd339e066f268dfd617d378adc9de0e23a`,
-source HEAD `c5bd955` — C1 through C9 campaigns; C9 hands the public
-runtime catalog to hosts, adopted by the connector).
+source HEAD da campanha C9). **CN1 (2026-09-28):** a auditoria independente
+(A01–A17) foi corrigida na íntegra — ver
+[plans/correction-connector-01](../correction-connector-01/evidence/cn1-correction-2026-09-28.md);
+o pin avançou para 0.2.10.dev0 (C10+C11 adotados).
 
 The full automated suite passes locally on Windows 11 / Python 3.13.1:
 **122 passed, 1 skipped**

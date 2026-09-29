@@ -147,7 +147,7 @@ async def test_cli_identity_connect_and_daemon(tmp_path: Path, fake_server):
     assert result.returncode != 0
     error = json.loads(result.stdout)["error"]
     assert error["code"] in ("NATIVE_VERSION_UNQUALIFIED", "UNKNOWN",
-                             "PROFILE_DRIFT")
+                             "PROFILE_DRIFT", "NEEDS_REDISCOVERY")
 
     # runtime status lists zero sessions; logs of unknown session is typed
     result = await run_cli(root, "--json", "runtime", "status")

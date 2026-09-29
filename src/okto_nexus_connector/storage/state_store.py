@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -71,6 +71,18 @@ class BindingRecord:
     # composite launch script; both travel with the selected candidate.
     candidate_build_identity: str = ""
     candidate_launch_script: str = ""
+    # CN1/A01 + Core C10/C11 (schema v2): the COMPLETE observed candidate
+    # evidence. ``candidate_architecture`` is indispensable to the Core's
+    # exact-build qualification and was previously lost between discovery
+    # and runtime. ``installation_ref`` is the Core's opaque SELECTABLE
+    # LOCAL INSTALLATION identity (byte-identical copies in distinct
+    # locations stay distinct); ``inventory_revision`` versions the
+    # selection evidence. Legacy records (schema v1) without these keep
+    # working but are flagged ``needs_rediscovery`` — never guessed ready.
+    candidate_architecture: str = ""
+    installation_ref: str = ""
+    inventory_revision: int = 0
+    needs_rediscovery: bool = False
     created_at: str = ""
     mcp_entry_name: str = "nexus"
     tools_only: bool = False
@@ -126,8 +138,17 @@ class StateStore:
         return state_from_json(payload)
 
     def save(self, state: ConnectorState) -> None:
+        """Replace the whole state snapshot atomically under the lock.
+
+        ``save`` is a full-snapshot replace (last writer wins) for
+        callers that own the state exclusively; ``update`` remains the
+        CAS-style load-mutate-persist path for concurrent writers. Both
+        share the same atomic writer and cross-process advisory lock
+        (CN1/A15: the previous public ``save`` called a method that did
+        not exist and raised ``AttributeError``).
+        """
         with self.locked():
-            self._write_locked(state)
+            _write_unlocked(self.path, state)
 
     @contextmanager
     def locked(self) -> Iterator[None]:
@@ -181,6 +202,7 @@ def state_from_json(payload: dict[str, Any]) -> ConnectorState:
             f"state schema {version} is newer than supported "
             f"{SCHEMA_VERSION}; upgrade the connector first")
     state = ConnectorState()
+    state.schema_version = SCHEMA_VERSION
     state.connector_id = str(payload.get("connector_id", ""))
     for item in payload.get("servers", {}).values():
         record = ServerProfileRecord(**item)
@@ -188,7 +210,15 @@ def state_from_json(payload: dict[str, Any]) -> ConnectorState:
     for item in payload.get("identities", []):
         state.identities.append(IdentityRecord(**item))
     for item in payload.get("bindings", []):
-        state.bindings.append(BindingRecord(**item))
+        record = BindingRecord(**item)
+        # CN1/A01 migration (additive, schema v1 → v2): a legacy record
+        # without complete candidate evidence keeps everything it had —
+        # agent, key references, history — but is explicitly marked as
+        # needing rediscovery instead of silently guessing architecture
+        # or an installation ref. UNKNOWN is never converted to READY.
+        if not record.candidate_architecture:
+            record.needs_rediscovery = True
+        state.bindings.append(record)
     preferences = payload.get("preferences", {})
     if isinstance(preferences, dict):
         state.preferences = preferences
