@@ -59,6 +59,7 @@ class EventBridge:
 
     _MAX_INFLIGHT_PER_STREAM = 128
     _WAKE_COALESCE_SECONDS = 0.02
+    _ACK_RETRY_SECONDS = 5.0
 
     def __init__(self, ack_source, core_ack, journal_page):
         self._ack_source = ack_source      # transport provider by server
@@ -70,6 +71,23 @@ class EventBridge:
         self._acked_through: dict[tuple[str, str, str], int] = {}
         self._wakeups: dict[tuple[str, str, str], asyncio.Event] = {}
         self._tasks: dict[tuple[str, str, str], asyncio.Task] = {}
+        # CN4-02.02: a validated watermark whose CORE application
+        # failed stays pending here — the retry re-applies the SAME
+        # confirmation without re-reading/re-sending the batch.
+        self._pending_core_ack: dict[tuple[str, str, str], int] = {}
+
+    def ack_arrived(self, server_id: str, session_id: str,
+                    epoch: str) -> None:
+        """CN4-02.01: a NEW validated watermark wakes the parked
+        publisher of that stream — a batch-2 wait is satisfied by
+        ACK2's arrival, never by re-sending under an old watermark."""
+        wake = self._wakeups.get((server_id, session_id, epoch))
+        if wake is not None:
+            wake.set()
+            key = (server_id, session_id, epoch)
+            if key not in self._tasks or self._tasks[key].done():
+                self._tasks[key] = asyncio.create_task(
+                    self._flush_loop(*key))
 
     def publisher_for(self, server_id: str):
         def publish(event: RuntimeEvent) -> None:
@@ -102,6 +120,19 @@ class EventBridge:
                 transport = self._ack_source(server_id)
                 if transport is None or not transport.online:
                     break  # journal keeps everything; retry on wake
+                # CN4-02.02: FIRST drain a confirmation whose Core
+                # application failed — same evidence, no re-send.
+                pending_watermark = self._pending_core_ack.get(key)
+                if pending_watermark is not None:
+                    try:
+                        await self._core_ack(server_id, session_id,
+                                             epoch, pending_watermark)
+                    except Exception:
+                        self._wake_retry_later(key)
+                        break
+                    self._acked_through[key] = max(
+                        self._acked_through.get(key, 0), pending_watermark)
+                    del self._pending_core_ack[key]
                 # b05: resume after the VALIDATED ACK, never after sent.
                 after = self._acked_through.get(key, 0)
                 batch = await self._journal_page(
@@ -112,20 +143,44 @@ class EventBridge:
                 sent = await transport.send_events(list(batch))
                 if not sent:
                     break  # backpressure: retry without losing events
+                # CN4-02.01: the wait targets THE BATCH'S OWN last
+                # sequence — an old watermark (ACK1) can never satisfy
+                # a wait for batch2; the target is fixed for this
+                # attempt, never re-derived from a mutable cursor.
                 watermark = await transport.wait_event_ack(
-                    session_id, epoch, timeout=30.0)
+                    session_id, epoch, timeout=30.0,
+                    target=batch[-1].sequence)
                 if watermark is None:
-                    # No durable ACK: the batch is UNACKNOWLEDGED; the
-                    # cursor stays, so the next round REPLAYS it (b05).
+                    # ACK2 absent: EXACTLY ONE attempt was made while
+                    # it is missing (no tight re-send loop); the parked
+                    # obligation wakes on ACK2's arrival (ack_arrived),
+                    # a reconnect or a new event.
                     break
-                await self._core_ack(server_id, session_id, epoch,
-                                     watermark)
+                try:
+                    await self._core_ack(server_id, session_id, epoch,
+                                         watermark)
+                except Exception:
+                    # CN4-02.02/ACN4-21: remote progress exists but the
+                    # Core application failed — keep the obligation and
+                    # retry the SAME confirmation later (bounded),
+                    # never the agent's task.
+                    self._pending_core_ack[key] = watermark
+                    self._wake_retry_later(key)
+                    break
                 self._acked_through[key] = watermark
                 if batch[-1].sequence > watermark:
                     # Partial contiguous ack: replay the remainder.
                     continue
                 if len(batch) < self._MAX_INFLIGHT_PER_STREAM:
                     break
+
+    def _wake_retry_later(self, key: tuple[str, str, str]) -> None:
+        """CN4-02.02: one coalesced bounded retry per obligation."""
+        wake = self._wakeups.get(key)
+        if wake is None:
+            return
+        loop = asyncio.get_event_loop()
+        loop.call_later(self._ACK_RETRY_SECONDS, wake.set)
 
     async def drain(self) -> None:
         for task in list(self._tasks.values()):
@@ -160,8 +215,11 @@ class DaemonApp:
         self.started_at = time.time()
         self._stopped = asyncio.Event()
         self._draining = False
-        # CN3/G02: approvals keyed by (server_id, request_id).
+        # CN3/G02: approvals keyed by (server_id, request_id); CN4-01
+        # keeps a bounded terminal history so repeats consult the same
+        # outcome instead of re-deciding.
         self._approvals: dict[tuple[str, str], dict[str, object]] = {}
+        self._approval_history: dict[tuple[str, str], dict] = {}
         self._approval_channel: str | None = None
 
     # -- lifecycle -----------------------------------------------------------
@@ -261,7 +319,8 @@ class DaemonApp:
                 ticket_provider=self._ticket_provider(server_id),
                 on_operation=self._on_remote_operation,
                 on_approval=self._on_remote_approval,
-                on_reconcile=self._on_reconcile)
+                on_reconcile=self._on_reconcile,
+                ack_observer=self._on_ack_arrived)
             for binding in state.bindings:
                 if binding.server_id == server_id:
                     identity = state.identity_for(server_id,
@@ -277,7 +336,14 @@ class DaemonApp:
             self._wake_streams_when_online(server_id)
 
     async def reload_state(self) -> None:
-        """Pick up identities/bindings changed by CLI-side commands."""
+        """Pick up identities/bindings changed by CLI-side commands.
+
+        CN4-05.01: lanes are DIFFED against the persisted credentials —
+        a validated credential_epoch/authorization_revision change
+        rotates the EXISTING lane through add_lane (fence + new provider
+        + reattach); a true no-op touches nothing (no epoch bump,
+        ACN4-31) and other servers' lanes stay stable.
+        """
         state = self.store.load()
         self._start_transports()
         for server_id, transport in list(self.transports.items()):
@@ -291,15 +357,29 @@ class DaemonApp:
                 if binding_id not in wanted:
                     transport.remove_lane(binding_id)
             for binding in state.bindings:
-                if binding.server_id == server_id and \
-                        binding.binding_id not in transport.stats.lanes:
-                    identity = state.identity_for(server_id,
-                                                  binding.agent_id)
+                if binding.server_id != server_id:
+                    continue
+                identity = state.identity_for(server_id,
+                                              binding.agent_id)
+                credential_epoch = (identity.credential_epoch
+                                    if identity else 1)
+                live = transport.lane_info(binding.binding_id)
+                if live is None:
                     transport.add_lane(
                         binding.binding_id, binding.agent_id,
                         self._lane_ticket_provider(binding),
-                        credential_epoch=(identity.credential_epoch
-                                          if identity else 1),
+                        credential_epoch=credential_epoch,
+                        authorization_revision=binding.authorization_revision)
+                elif (int(live["credential_epoch"]) != credential_epoch
+                      or int(live["authorization_revision"]) !=
+                      binding.authorization_revision):
+                    # CN4-05.01: persisted rotation applied on the REAL
+                    # reload path — the old proof is fenced before any
+                    # I/O and the CURRENT provider is installed.
+                    transport.add_lane(
+                        binding.binding_id, binding.agent_id,
+                        self._lane_ticket_provider(binding),
+                        credential_epoch=credential_epoch,
                         authorization_revision=binding.authorization_revision)
 
     def _transport_for(self, server_id: str) -> NXLTransport | None:
@@ -337,12 +417,24 @@ class DaemonApp:
                                      "identity for its agent")
             key = self.vault.resolve(identity.secret_handle)
             async with NexusHTTPClient(profile.base_url) as http:
-                ticket, _expires = await http.binding_ticket(key, binding_id)
-            return ticket
+                ticket, expires_in = await http.binding_ticket(
+                    key, binding_id)
+            return ticket, expires_in
         return provide
 
+    def _on_ack_arrived(self, session_id: str, epoch: str,
+                        _watermark: int) -> None:
+        """CN4-02: a validated watermark wakes the matching publisher
+        for EVERY transport of this daemon (the observer is bound per
+        transport; the bridge keys streams by server already)."""
+        for server_id, transport in list(self.transports.items()):
+            if transport.written_through(session_id, epoch) >= \
+                    _watermark:
+                self.bridge.ack_arrived(server_id, session_id, epoch)
+                return
+
     def _lane_ticket_provider(self, binding):
-        async def provide() -> str:
+        async def provide() -> tuple[str, float]:
             state = self.store.load()
             profile = state.servers.get(binding.server_id)
             identity = state.identity_for(binding.server_id,
@@ -352,9 +444,13 @@ class DaemonApp:
                                      "identity missing for lane")
             key = self.vault.resolve(identity.secret_handle)
             async with NexusHTTPClient(profile.base_url) as http:
-                ticket, _expires = await http.binding_ticket(
+                ticket, expires_in = await http.binding_ticket(
                     key, binding.binding_id)
-            return ticket
+            # CN4-05.03: the lane observes the CONTRACT'S expiry — the
+            # transport records the local monotonic deadline (single-
+            # flight renewal via attach); it never extends the runtime
+            # lease by itself.
+            return ticket, expires_in
         return provide
 
     # -- remote operations over WSS ------------------------------------------
@@ -412,12 +508,14 @@ class DaemonApp:
             "request_id": request_id,
             "server_id": server_id,
             "binding_id": frame.get("binding_id"),
+            "agent_id": frame.get("agent_id"),
+            "workspace_id": frame.get("workspace_id"),
             "session_id": frame.get("session_id"),
             "kind": frame.get("kind"),
             "proposal": redact_mapping(frame.get("proposal", {})),
             "received_at": _now(),
             "source": "server",
-            "phase": "pending",  # G02 bifásico: pending→decided
+            "phase": "pending",  # CN4-01 state machine starts here
         }
         return None
 
@@ -569,21 +667,17 @@ class DaemonApp:
             decision = await self._decide_approval(params)
             yield response_ok(request.seq, decision)
         elif op == "availability.snapshot":
-            # CN3-05.01 (G01): the daemon publishes the versioned
-            # technical availability snapshot through its real API —
-            # the Core's assessment of THIS executor, never the
-            # Server's OS view.
+            # CN4-04.01/G01: the daemon publishes the versioned technical
+            # availability snapshot through its real API — over the FULL
+            # Core candidates behind the inventory (never re-created
+            # from executable paths, which would drop the Pi pair's
+            # CLI identity/version/build), and via the SAME service
+            # function the CLI uses.
             from ..services.discovery_service import (
-                availability_snapshot, discover_inventory,
+                availability_snapshot, inventory_candidates,
             )
-            from nexus_connector_core.discovery import candidate as \
-                _make_candidate
-            entries = await discover_inventory()
-            candidates = [_make_candidate(entry.adapter_id,
-                                          entry.executable, explicit=True)
-                          for entry in entries]
-            snapshot = availability_snapshot(candidates)
-            yield response_ok(request.seq, snapshot)
+            candidates = await inventory_candidates()
+            yield response_ok(request.seq, availability_snapshot(candidates))
         elif op == "reconcile":
             yield response_ok(request.seq, await self.runtimes.reconcile(
                 operation_ids=params.get("operation_ids", ()),
@@ -601,83 +695,180 @@ class DaemonApp:
 
     async def _decide_approval(self, params: dict[str, object]
                                ) -> dict[str, object]:
-        """G02/CN3-06.02: two-phase decision — reserve, validate, act.
+        """CN4-01: the decision flows Server-authority → Core effect.
 
-        The request is NOT removed before validation/network: an
-        invalid decision or a failed transport leaves it pending. When
-        the pending record carries a managed session, the authorized
-        decision ALSO reaches the Core's public native-approval port
-        (the final application route), not only the Server CAS.
+        Full key to the last resource (ApprovalKey = server/request,
+        resolved to binding by server+executor+binding_id with agent/
+        workspace compared — never by short binding_id alone and never
+        via split()); the FIRST external operation of the permissive
+        flow is the CANONICAL Server decision; only a confirmed result
+        authorizes the Core application, with the vocabulary translated
+        by the Core's public contract (approve→accept, deny→decline).
+        Phases: pending → server_pending → server_confirmed →
+        native_pending → applied (terminal records go to a bounded
+        tombstone history so a repeat consults the same outcome).
         """
         request_id = str(params.get("request_id", ""))
         decision = str(params.get("decision", ""))
-        server_id = str(params.get("server_id", ""))
-        key = (server_id, request_id) if server_id else next(
-            (candidate for candidate in self._approvals
-             if candidate[1] == request_id), (server_id, request_id))
-        pending = self._approvals.get(key)
-        if pending is None:
-            raise ConnectorError("VALIDATION_ERROR", "approval",
-                                 "unknown request")
-        if pending.get("phase") == "decided":
-            raise ConnectorError("OPERATION_CONFLICT", "approval",
-                                 "request already answered")
+        server_hint = str(params.get("server_id", ""))
         if decision not in ("approve", "deny"):
             raise ConnectorError("VALIDATION_ERROR", "approval",
                                  "decision must be approve or deny")
-        pending["phase"] = "deciding"
-        server_id = str(pending.get("binding_id", "")).split(":")[0]
+        # CN4-01.01/ACN4-19: a short CLI choice resolves EXACTLY one
+        # request — ambiguity is a typed error listing the servers,
+        # with ZERO HTTP requests issued.
+        matches = [key for key in list(self._approvals) +
+                   list(self._approval_history)
+                   if key[1] == request_id
+                   and (not server_hint or key[0] == server_hint)]
+        if not matches:
+            raise ConnectorError("VALIDATION_ERROR", "approval",
+                                 "unknown request")
+        if len(matches) > 1:
+            servers = ", ".join(sorted(key[0] for key in matches))
+            raise ConnectorError(
+                "VALIDATION_ERROR", "approval",
+                f"request_id {request_id!r} is pending on multiple "
+                f"servers ({servers}); specify server_id")
+        approval_key = matches[0]
+        history = self._approval_history.get(approval_key)
+        if history is not None:
+            # ACN4-16/20: a terminal attempt is idempotent — the repeat
+            # consults the SAME recorded outcome, never re-decides.
+            return dict(history["result"])
+        pending = self._approvals.get(approval_key)
+        if pending is None:
+            raise ConnectorError("VALIDATION_ERROR", "approval",
+                                 "unknown request")
+        phase = str(pending.get("phase", "pending"))
+        if phase in ("server_pending", "server_confirmed",
+                     "native_pending"):
+            # CN4-01.04/ACN4-15: one attempt owns the request; a second
+            # concurrent operator gets an explicit conflict — never a
+            # second canonical decision or native application.
+            raise ConnectorError(
+                "OPERATION_CONFLICT", "approval",
+                f"a decision for this request is already in progress "
+                f"(phase {phase})")
+        if phase == "result_unknown":
+            raise ConnectorError(
+                "OUTCOME_UNKNOWN", "approval",
+                "a previous decision attempt may have reached the "
+                "Server; its outcome is being reconciled — do not "
+                "re-send a new intent for the same work",
+                possible_effect=True,
+                action="Query the request by its id on the Server; the "
+                       "record stays consultable here.")
+        if decision not in ("approve", "deny"):
+            raise ConnectorError("VALIDATION_ERROR", "approval",
+                                 "decision must be approve or deny")
+        # CN4-01.01: resolve the FULL key — the server comes from the
+        # AUTHENTICATED request namespace (approval_key), never from
+        # split(binding_id); the binding matches server + binding_id
+        # and the frame's agent/workspace are compared when present.
+        server_id = approval_key[0]
         state = self.store.load()
-        binding = next((b for b in state.bindings
-                        if b.binding_id == pending.get("binding_id")), None)
+        binding = next(
+            (b for b in state.bindings
+             if b.server_id == server_id
+             and b.binding_id == pending.get("binding_id")), None)
         if binding is None:
-            pending["phase"] = "pending"
             raise ConnectorError("VALIDATION_ERROR", "approval",
                                  "binding for this request is gone")
-        profile = state.servers.get(binding.server_id)
-        identity = state.identity_for(binding.server_id, binding.agent_id)
+        frame_agent = pending.get("agent_id")
+        if isinstance(frame_agent, str) and frame_agent and \
+                frame_agent != binding.agent_id:
+            raise ConnectorError(
+                "BINDING_NOT_AUTHORIZED", "approval",
+                "request agent does not match the binding in this "
+                "namespace")
+        profile = state.servers.get(server_id)
+        identity = state.identity_for(server_id, binding.agent_id)
         if profile is None or identity is None:
-            pending["phase"] = "pending"
             raise ConnectorError("AGENT_AUTH_REQUIRED", "approval")
-        key = self.vault.resolve(identity.secret_handle)
+        agent_key = self.vault.resolve(identity.secret_handle)
+        # CN4-01.02: FIRST EXTERNAL OPERATION = canonical Server
+        # decision. The local operator proposal is intent, not
+        # authority; nothing native may run before this confirms.
+        pending["phase"] = "server_pending"
+        try:
+            async with NexusHTTPClient(profile.base_url) as http:
+                applied = await http.approval_decision(
+                    agent_key, request_id=request_id, decision=decision,
+                    cas_token=str(params.get("cas_token", "")),
+                    response=params.get("response") if isinstance(
+                        params.get("response"), dict) else None)
+        except ConnectorError as error:
+            if getattr(error, "possible_effect", False):
+                # CN4-01.05: a possible write is never undone and never
+                # restored as a fresh pending invitation.
+                pending["phase"] = "result_unknown"
+                raise
+            # Definitive refusal / not delivered: the Server did not
+            # consume the decision; the request stays pending for a
+            # corrected retry.
+            pending["phase"] = "pending"
+            raise
+        if not applied:
+            # 200-but-not-applied (conflict/already decided): the
+            # Server's canonical answer exists — record it as the
+            # outcome; NO native application is authorized.
+            result = {"request_id": request_id, "decision": decision,
+                      "applied": False, "native": None,
+                      "authority": "server-side CAS answered; the Core "
+                                   "was not touched"}
+            self._record_terminal(approval_key, result)
+            return result
+        pending["phase"] = "server_confirmed"
+        # CN4-01.03: translate the CONFIRMED decision through the Core's
+        # public vocabulary and apply it only for a LIVE MANAGED
+        # session of this namespace; an administrative (Server-side)
+        # request ends at the CAS.
         native_result = None
-        # G02/CN3-06.02: the authorized decision ALSO applies at the
-        # Core when the request belongs to a LIVE MANAGED session (the
-        # final application route). A Server-side HITL for a session
-        # this daemon does not manage proceeds to the Server CAS only.
         session_id = pending.get("session_id")
-        if isinstance(session_id, str) and session_id:
+        managed = (isinstance(session_id, str) and session_id
+                   and session_id in self.runtimes.session_ids())
+        if managed:
+            pending["phase"] = "native_pending"
+            core_decision = ("accept" if decision == "approve"
+                             else "decline")
             try:
                 native_result = await self.runtimes.decide_native_approval(
                     session_id, f"op_appr_{request_id}",
                     request=pending.get("proposal", {})
                     if isinstance(pending.get("proposal"), dict) else {},
-                    decision=decision,
+                    decision=core_decision,
+                    kind=pending.get("kind"),
                     response=params.get("response") if isinstance(
                         params.get("response"), dict) else None)
             except ConnectorError as error:
-                if error.code != "VALIDATION_ERROR":
-                    pending["phase"] = "pending"
-                    raise
-                native_result = None  # not a managed session here
-        try:
-            async with NexusHTTPClient(profile.base_url) as http:
-                applied = await http.approval_decision(
-                    key, request_id=request_id, decision=decision,
-                    cas_token=str(params.get("cas_token", "")),
-                    response=params.get("response") if isinstance(
-                        params.get("response"), dict) else None)
-        except ConnectorError:
-            # Network failure does NOT consume the request (bifásico).
-            pending["phase"] = "pending"
-            raise
-        pending["phase"] = "decided"
-        self._approvals.pop(key, None)
-        return {"request_id": request_id, "decision": decision,
-                "applied": applied,
-                "native": native_result,
-                "authority": "server-side CAS; the agent key only "
-                             "transports the operator's decision"}
+                if getattr(error, "possible_effect", False):
+                    pending["phase"] = "result_unknown"
+                else:
+                    # Pre-effect refusal of the authorized application:
+                    # terminal and distinct — never back to pending.
+                    pending["phase"] = "native_refused"
+                    pending["native_error"] = error.code
+                raise
+        result = {"request_id": request_id, "decision": decision,
+                  "applied": applied,
+                  "native": native_result,
+                  "authority": "canonical Server decision confirmed "
+                               "before any native application"}
+        self._record_terminal(approval_key, result)
+        return result
+
+    def _record_terminal(self, approval_key: tuple[str, str],
+                         result: dict[str, object]) -> None:
+        """CN4-01.04/ACN4-20: retire the request BY ITS OWN KEY (the
+        agent secret never substitutes the dictionary key) and keep a
+        bounded tombstone so repeats consult the same outcome."""
+        self._approvals.pop(approval_key, None)
+        self._approval_history[approval_key] = {
+            "result": result, "at": _now()}
+        while len(self._approval_history) > 128:
+            self._approval_history.pop(next(iter(
+                self._approval_history)))
 
 
 def _error_frame(error: ConnectorError, frame: dict[str, object]

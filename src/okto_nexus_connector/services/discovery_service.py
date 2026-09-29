@@ -120,30 +120,50 @@ async def discover_inventory(adapter_ids=None) -> list[InventoryEntry]:
     ``adapter_ids=None`` (the default) asks the catalog — the caller
     never needs its own adapter array (C9/C01).
     """
+    return [_entry_of(found) for found in
+            await inventory_candidates(adapter_ids)]
+
+
+async def inventory_candidates(adapter_ids=None, *, extra=()) -> list:
+    """CN4-04.01: the FULL Core ``InstallationCandidate`` objects.
+
+    The candidates the Core discovered are preserved EXACTLY as
+    produced (executable, launch_script, fingerprint, build_identity,
+    version, architecture, trust/source/installation_ref) — consumers
+    (CLI and IPC) pass THESE to the availability evaluation instead of
+    re-creating candidates from executable paths, which silently
+    dropped the Pi pair's CLI identity/version/build. ``extra``
+    appends operator-named candidates (e.g. the Pi release pair) to the
+    same single effective inventory.
+    """
     if adapter_ids is None:
         adapter_ids = tuple(
             descriptor.adapter_id for descriptor in
             catalog_runtimes(discoverable_only=True))
-    entries: list[InventoryEntry] = []
+    found: list = []
     for adapter_id in adapter_ids:
         try:
             candidates = await asyncio.to_thread(
                 discover_path, adapter_id)
         except CoreError:
             continue
-        for found in candidates:
-            entries.append(_entry_of(found))
+        found.extend(candidates)
     # Passive npm-shim resolution on Windows (Core 0.2.0): .cmd wrappers
     # are parsed, never executed; only the two documented shim shapes
     # yield candidates, everything else is refused honestly.
     if os.name == "nt":
         for adapter_id in adapter_ids:
-            for found in await asyncio.to_thread(
+            for candidate in await asyncio.to_thread(
                     shim_candidates, adapter_id):
-                if all(entry.executable != found.executable
-                       for entry in entries):
-                    entries.append(_entry_of(found))
-    return entries
+                if all(entry.executable != candidate.executable
+                       for entry in found):
+                    found.append(candidate)
+    for candidate in extra:
+        if all(entry.executable != candidate.executable
+               or entry.launch_script != candidate.launch_script
+               for entry in found):
+            found.append(candidate)
+    return found
 
 
 def shim_candidates(adapter_id: str, *,
@@ -266,22 +286,58 @@ def evaluate_availability(candidates):
 
 
 def availability_snapshot(candidates) -> dict[str, object]:
-    """CN2/N09 (CN-07.05): versioned, path-free executor projection.
+    """CN4-04.02/G01: versioned, path-free executor projection.
 
-    The revision derives from the CURRENT evidence (sorted refs +
-    versions), not the state schema version — installing/updating a
-    build changes it. Only the executing host's assessment is
-    published; the Server applies policy, never its own OS view.
+    The revision derives from ALL relevant evidence of the WHOLE
+    candidate set — installation identity (adapter, executable
+    basename, launch_script, installation_ref), fingerprint/build,
+    version/architecture, trust/source AND the Core's readiness
+    state/reasons — in a canonical, ORDER-INDEPENDENT serialization
+    (reordering discovery or touching a publication timestamp does
+    not rotate the revision; changing the CLI's bytes, version,
+    trust or qualification does). Only the executing host's
+    assessment is published; the Server applies policy, never its
+    own OS view.
     """
     import hashlib as _hashlib
+    import json as _json
+    import nexus_connector_core as _core
     report = evaluate_availability(candidates)
     projection = report.to_dict()
     rows = projection["availability"]
-    evidence = "|".join(sorted(
-        f"{row['candidate_ref']}@{row.get('version') or '?'}"
-        f":{row['state']}" for row in rows))
-    revision = "inv1:" + _hashlib.sha256(
-        evidence.encode("utf-8")).hexdigest()[:16]
+    state_by_ref: dict[str, dict] = {
+        str(row.get("candidate_ref")): row for row in rows}
+    evidence = []
+    for candidate in sorted(
+            candidates,
+            key=lambda c: (c.adapter_id, c.executable,
+                           c.launch_script or "", c.fingerprint)):
+        ref = getattr(candidate, "installation_ref", None) or \
+            str(candidate.executable)
+        row = state_by_ref.get(ref, {})
+        evidence.append({
+            "adapter_id": candidate.adapter_id,
+            "executable": str(candidate.executable),
+            "launch_script": (None if candidate.launch_script is None
+                              else str(candidate.launch_script)),
+            "installation_ref": ref,
+            "fingerprint": candidate.fingerprint,
+            "build_identity": candidate.build_identity,
+            "version": candidate.version,
+            "architecture": candidate.architecture,
+            "trust": candidate.trust,
+            "source": candidate.source,
+            "state": row.get("state"),
+            "reasons": sorted(str(r) for r in (row.get("reasons") or ())),
+        })
+    canonical = _json.dumps(
+        {"core": getattr(_core, "__version__", ""),
+         "format": projection["format_version"],
+         "platform": projection["platform"],
+         "candidates": evidence},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    revision = "inv2:" + _hashlib.sha256(
+        canonical.encode("utf-8")).hexdigest()[:24]
     return {
         "format_version": projection["format_version"],
         "platform": projection["platform"],

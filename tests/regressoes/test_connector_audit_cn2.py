@@ -453,8 +453,17 @@ class _AckTransport:
         self.batches.append(list(batch))
         return True
 
-    async def wait_event_ack(self, session_id, epoch, timeout=5.0):
-        return self.acks.get((session_id, epoch))
+    async def wait_event_ack(self, session_id, epoch, timeout=5.0, *,
+                             target=None):
+        # CN4 adaptation: the caller now passes the batch's target; the
+        # double still answers only with durable ACKs it recorded (None
+        # while unacknowledged — the replay causal condition).
+        watermark = self.acks.get((session_id, epoch))
+        if watermark is None:
+            return None
+        if target is not None and watermark < target:
+            return None
+        return watermark
 
 
 def _bridge(transport, ack_applied):
@@ -939,11 +948,16 @@ async def test_b09_managed_mcp_start_configures_server_url_not_only_token(
     except ConnectorError as error:
         pytest.fail(f"managed start failed: {error}")
     session_id = started["session_id"]
-    # CN3-06 adaptation: the ephemeral home is now scoped by the full
-    # namespace (server/executor/binding/session) — same causal check.
+    # CN4-03 adaptation: the ephemeral home is now a VERSIONED DIGEST
+    # of the ownership tuple (readable prefix + full digest) — same
+    # causal check: the generated config carries the Server URL.
     binding = manager.binding_by_alias("codex")
-    home = (Path(root) / "runtime" / "mcp" / binding.server_id /
-            binding.executor_id / binding.binding_id / session_id)
+    base = Path(root) / "runtime" / "mcp"
+    matches = [p for p in base.glob("v2-*")
+               if binding.server_id in p.name
+               and session_id in p.name]
+    assert matches, "no namespaced v2 MCP tree was created"
+    home = matches[0]
     config = home / ".codex" / "config.toml"
     assert config.is_file(), "no ephemeral MCP config was installed"
     content = config.read_text(encoding="utf-8")

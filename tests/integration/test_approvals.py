@@ -100,9 +100,13 @@ async def test_approval_routing_and_cas(approval_harness):
     assert decision["ok"], decision
     assert decision["result"]["applied"] is True
 
-    # double decision fails the CAS (already answered)
+    # CN4 (ACN4-16/20): a repeat CONSULTS the recorded terminal outcome
+    # — it never issues a SECOND canonical decision; the Server's CAS
+    # record stays answered exactly once with the ORIGINAL decision.
     second = await harness.call("approvals.decide", {
         "request_id": "req_1", "decision": "deny", "cas_token": "cas-1"})
-    assert second["ok"] is False
-    assert second["error"]["code"] in ("VALIDATION_ERROR",
-                                       "OPERATION_CONFLICT")
+    assert second["ok"], second
+    assert second["result"]["decision"] == "approve"  # recorded outcome
+    record = harness.http.approvals["req_1"]
+    assert record.get("answered") is True
+    assert record.get("decision") == "approve"  # CAS answered ONCE

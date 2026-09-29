@@ -51,6 +51,9 @@ logger = logging.getLogger(__name__)
 HEARTBEAT_SECONDS = 15.0
 ABSENCE_DETECT_SECONDS = 45.0
 BACKOFF_MIN = 0.5
+#: CN4-05.03: safety margin subtracted from the Server's reported
+#: ticket lifetime when converting to a local monotonic deadline.
+_TICKET_EXPIRY_MARGIN = 5.0
 BACKOFF_MAX = 30.0
 URGENT_BUDGET = 8
 NORMAL_LIMIT = 256
@@ -337,12 +340,14 @@ class NXLTransport:
                  ticket_provider: Callable[[], Awaitable[str]],
                  on_operation: Callable,
                  on_approval: Callable,
-                 on_reconcile: Callable | None = None):
+                 on_reconcile: Callable | None = None,
+                 ack_observer: Callable[[str, str, int], None] | None = None):
         self.server_id = server_id
         self.executor_id = executor_id
         # CN2/N08: validated at construction — before any ticket fetch.
         self.link_url = validate_link_url(link_url)
         self._ticket_provider = ticket_provider
+        self._ack_observer = ack_observer
         self._on_operation = on_operation
         self._on_approval = on_approval
         self._on_reconcile = on_reconcile
@@ -381,16 +386,37 @@ class NXLTransport:
                  expires_at: float | None = None) -> None:
         lane = self._lanes.get(binding_id)
         if lane is not None:
-            # CN3-01.04 (G02): rotation updates the EXISTING lane's
-            # epochs/revisions atomically and invalidates old proofs.
+            # CN4-05.02: a REAL rotation installs the CURRENT provider
+            # and identity (the old closure must never serve a later
+            # fetch), fences the old proof unconditionally and
+            # re-attaches through the existing coordinator. A true
+            # no-op (same credentials/revisions/provider/expiry) is
+            # idempotent and does NOT rotate epochs (ACN4-31).
+            same = (
+                lane.credential_epoch == credential_epoch and
+                lane.authorization_revision == authorization_revision and
+                lane.agent_id == agent_id and
+                lane.expires_at == expires_at and
+                lane.ticket_provider is ticket_provider)
+            if same:
+                return
+            if lane.attach_task is not None and not \
+                    lane.attach_task.done():
+                # CN4-05.02/ACN4-32: the in-flight attach of the OLD
+                # proof is superseded — its late result must not ready
+                # the new epoch.
+                lane.attach_task.cancel()
             lane.credential_epoch = credential_epoch
             lane.authorization_revision = authorization_revision
+            lane.agent_id = agent_id
+            lane.ticket_provider = ticket_provider
             if expires_at is not None:
                 lane.expires_at = expires_at
             lane.ticket_epoch += 1
-            if lane.state == "ready":
-                lane.state = "pending"  # must re-attach under new epoch
-                self.stats.lanes[binding_id] = False
+            lane.state = "pending"  # old proof fenced ALWAYS
+            self.stats.lanes[binding_id] = False
+            if self._negotiated and self.websocket_open:
+                self._schedule_lane_attach(binding_id)
             return
         self._lanes[binding_id] = LaneState(
             binding_id, agent_id, ticket_provider,
@@ -408,6 +434,19 @@ class NXLTransport:
         if lane is not None and lane.attach_task is not None:
             lane.attach_task.cancel()
         self.stats.lanes.pop(binding_id, None)
+
+    def lane_info(self, binding_id: str) -> dict[str, object] | None:
+        """CN4-05.01: the reload path diffs against the PERSISTED
+        credentials/revisions — the transport exposes its live lane
+        identity (never the provider closure) for that comparison."""
+        lane = self._lanes.get(binding_id)
+        if lane is None:
+            return None
+        return {"binding_id": lane.binding_id, "agent_id": lane.agent_id,
+                "credential_epoch": lane.credential_epoch,
+                "authorization_revision": lane.authorization_revision,
+                "ticket_epoch": lane.ticket_epoch, "state": lane.state,
+                "expires_at": lane.expires_at}
 
     @property
     def websocket_open(self) -> bool:
@@ -540,7 +579,9 @@ class NXLTransport:
         while not self._stop.is_set():
             self.stats.state = ST_CONNECTING
             try:
-                ticket = await self._ticket_provider()
+                _fetched = await self._ticket_provider()
+                ticket = _fetched[0] if isinstance(
+                    _fetched, tuple) else _fetched
                 headers = [("Authorization", f"Bearer {ticket}")]
                 async with websockets.connect(
                         self.link_url, subprotocols=["nxl.v1"],
@@ -636,7 +677,14 @@ class NXLTransport:
             kind = frame.get("type")
             if kind == "binding.attach":
                 lane = self._lanes.get(str(frame.get("binding_id")))
-                if lane is not None and lane.state == "attaching":
+                # CN4-05.02/ACN4-32: an attach sent under SUPERSEDED
+                # credentials/revisions never marks the lane ready —
+                # only the CURRENT proof's frame does.
+                if lane is not None and lane.state == "attaching" and \
+                        int(frame.get("credential_epoch", 0)) == \
+                        lane.credential_epoch and \
+                        int(frame.get("authorization_revision", 0)) == \
+                        lane.authorization_revision:
                     lane.state = "ready"
                     self.stats.lanes[lane.binding_id] = True
             elif kind == "event.batch":
@@ -715,6 +763,9 @@ class NXLTransport:
     # -- inbound handling ---------------------------------------------------
 
     async def _handle(self, frame: dict[str, object]) -> None:
+        # CN4-05.03: every inbound frame is a cheap, deterministic
+        # checkpoint for ticket expiry (no polling task of its own).
+        self._check_lane_expiry()
         kind = frame.get("type")
         if kind == "approval.request":
             if not self._frame_namespace_matches(frame):
@@ -829,9 +880,14 @@ class NXLTransport:
         waiter = self._ack_waiters.get((session_id, epoch))
         if waiter is not None:
             waiter.set()
-        callback = getattr(self, "_ack_callback", None)
-        if callback is not None:
-            callback(session_id, epoch, sequence)
+        # CN4-02.01: a NEW validated watermark wakes the publisher that
+        # is parked waiting for THIS batch's target — the obligation is
+        # satisfied without a timed re-send loop.
+        if self._ack_observer is not None:
+            try:
+                self._ack_observer(session_id, epoch, sequence)
+            except Exception:  # pragma: no cover - observer is local
+                logger.exception("ack observer failed")
 
     async def _complete_handshake(self, frame: dict) -> None:
         """Adopt the SERVER's generation, attach lanes, reconcile."""
@@ -1094,11 +1150,20 @@ class NXLTransport:
 
     async def _attach_one_lane(self, lane: LaneState) -> None:
         try:
-            ticket = await lane.ticket_provider()
+            fetched = await lane.ticket_provider()
         except Exception:
             logger.warning("ticket fetch failed for lane %s",
                            lane.binding_id)
             return
+        # CN4-05.03: providers may return (ticket, expires_in) — the
+        # locally observed expiry is recorded on the lane; a plain
+        # string stays valid (no contract break for existing seams).
+        if isinstance(fetched, tuple):
+            ticket, expires_in = fetched
+            lane.expires_at = time.monotonic() + max(
+                1.0, float(expires_in) - _TICKET_EXPIRY_MARGIN)
+        else:
+            ticket = fetched
         # The lane may have been removed while the ticket was being
         # fetched; attaching it anyway would resurrect a revoked lane.
         if self._lanes.get(lane.binding_id) is not lane:
@@ -1120,6 +1185,21 @@ class NXLTransport:
             self.stats.lanes[lane.binding_id] = False
             return
         lane.state = "attaching"
+
+    def _check_lane_expiry(self) -> None:
+        """CN4-05.03: an expired ticket never leaves a lane READY
+        indefinitely — the lane demotes to pending and renews through
+        the SAME single-flight attach (the fetch is the renewal; it
+        never extends the runtime's lease by itself)."""
+        now = time.monotonic()
+        for lane in list(self._lanes.values()):
+            if lane.state == "ready" and lane.expires_at is not None \
+                    and lane.expires_at <= now:
+                logger.info("lane %s ticket expired; renewing",
+                            lane.binding_id)
+                lane.state = "pending"
+                self.stats.lanes[lane.binding_id] = False
+                self._schedule_lane_attach(lane.binding_id)
 
 
 def _as_error_frame_payload(operation: ValidatedOperation) -> dict:

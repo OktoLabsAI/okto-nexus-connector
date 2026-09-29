@@ -19,6 +19,7 @@ async def run_discover(args, output: Output, root: Path):
              "candidates are not trusted automatically"]
     pi_root = getattr(args, "pi_releases_root", None)
     pi_node = getattr(args, "pi_node", None)
+    release_candidates: list = []
     if pi_root:
         if not pi_node:
             raise ConnectorError("VALIDATION_ERROR", "discover",
@@ -30,6 +31,7 @@ async def run_discover(args, output: Output, root: Path):
         for candidate in pi_release_candidates(
                 P(pi_root).expanduser(), P(pi_node).expanduser(),
                 trusted_roots=trusted):
+            release_candidates.append(candidate)
             payload.append({
                 "adapter_id": candidate.adapter_id, "label": "Pi RPC",
                 "executable": candidate.executable, "source": "releases",
@@ -42,17 +44,19 @@ async def run_discover(args, output: Output, root: Path):
             })
         notes.append("Pi release layouts are enumerated passively; the "
                      "Node executable you named is the trusted pair")
-    # CN3-05.01 (G01): the DISCOVER flow publishes the versioned
-    # technical availability snapshot of THIS executor (Core-assessed) —
-    # the same projection the daemon serves over IPC.
+    # CN4-04.01 (G01/P04): the DISCOVER flow publishes the versioned
+    # technical availability snapshot of THIS executor (Core-assessed)
+    # over the FULL Core candidates — the same service function the
+    # daemon serves over IPC; the Pi pair the operator named enters
+    # the SAME effective inventory (never a re-created candidate that
+    # would drop the CLI identity/version/build).
     snapshot = None
     try:
         from ...services.discovery_service import (
-            availability_snapshot, select_explicit,
+            availability_snapshot, inventory_candidates,
         )
-        from nexus_connector_core.discovery import candidate as _mk
-        candidates = [_mk(e["adapter_id"], e["executable"], explicit=True)
-                      for e in payload]
+        candidates = await inventory_candidates(
+            extra=release_candidates)
         snapshot = availability_snapshot(candidates)
     except Exception:
         snapshot = None

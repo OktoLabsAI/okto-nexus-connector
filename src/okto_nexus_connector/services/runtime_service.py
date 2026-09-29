@@ -542,27 +542,27 @@ class RuntimeManager:
     async def decide_native_approval(self, session_id: str,
                                      operation_id: str, request: Mapping,
                                      decision: str,
-                                     response: Mapping | None
+                                     response: Mapping | None,
+                                     kind: str | None = None
                                      ) -> dict[str, object]:
         """Answer one pending native approval/input through the Core.
 
         CN1/A11+CN-06.05: the decision travels the Core's public
         ``decide_native_approval`` with the pending request projection;
         containment-reply semantics (deny allowed while closing) belong
-        to the Core.
+        to the Core. CN4-01.03: the ACTION derives from the observed
+        REQUEST KIND (never ``decision.startswith``), the decision is
+        the Core's public vocabulary (accept/decline/cancel) and the
+        context comes from the grant already validated at open.
         """
         session = self.session(session_id)
         runtime = self._runtime_of(session)
-        # CN2/N06.2 (b08): the action derives from the validated
-        # decision; the DTO is built with NAMED fields (the old
-        # positional call inverted request/decision and the context
-        # lacked its required action argument -> TypeError).
-        action = ("input.provide" if decision.startswith("input")
+        action = ("input.provide" if kind == "input.request"
                   else "approval.decide")
         context = self._authorized_context(
             session, action,
-            containment=decision in ("deny", "decline",
-                                     "input.decline"))
+            containment=action == "approval.decide"
+            and decision == "decline")
         receipt = await runtime.decide_native_approval(
             NativeApprovalOperation(
                 operation_id=operation_id,
@@ -963,29 +963,57 @@ class RuntimeManager:
         """
         if not templates:
             return None
-        # CN3-06 (D07): the directory belongs to the FULL execution
-        # owner (server/executor/binding/session) — two namespaces with
-        # the same textual session_id NEVER share or overwrite each
-        # other's configuration.
-        home = Path(self._host.root) / "runtime" / "mcp" / _safe_segment(
-            binding.server_id) / _safe_segment(
-            binding.executor_id) / _safe_segment(
-            binding.binding_id) / _safe_segment(session_id)
-        home.mkdir(parents=True, exist_ok=True)
-        # Ownership receipt: minimal metadata identifying the execution
-        # that owns this tree (validated on reuse; never a session
-        # credential).
-        marker = home / ".owner.json"
+        # CN4-03.01 (P03): the tree name derives from a VERSIONED DIGEST
+        # of the canonical ownership tuple — complete IDs survive the
+        # bounded name (two 85-char server ids differing at the end are
+        # DISTINCT trees; sanitization/truncation can never merge them).
+        # A readable prefix is cosmetic only; the digest is the key.
+        home = _mcp_home_dir(Path(self._host.root), binding.server_id,
+                             binding.executor_id, binding.binding_id,
+                             session_id)
+        # CN4-03.02: the ownership marker is VALIDATED BEFORE any write
+        # — a divergent/foreign marker refuses this execution; the tree
+        # is never overwritten ahead of validation.
         import json as _json_owner
         import time as _time_owner
-        owner_record = {"server_id": binding.server_id,
+        marker = home / ".owner.json"
+        owner_record = {"layout": "v2",
+                        "server_id": binding.server_id,
                         "executor_id": binding.executor_id,
                         "binding_id": binding.binding_id,
                         "session_id": session_id,
                         "created_at": _time_owner.strftime(
                             "%Y-%m-%dT%H:%M:%SZ", _time_owner.gmtime())}
-        marker.write_text(_json_owner.dumps(owner_record, indent=1),
-                          encoding="utf-8")
+        if marker.exists():
+            try:
+                existing = _json_owner.loads(
+                    marker.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                existing = None
+            same = isinstance(existing, dict) and all(
+                existing.get(field) == owner_record[field]
+                for field in ("layout", "server_id", "executor_id",
+                              "binding_id", "session_id"))
+            if not same:
+                raise ConnectorError(
+                    "VALIDATION_ERROR", "mcp_home",
+                    "config tree exists with a different owner; "
+                    "refusing to overwrite it",
+                    action="The tree belongs to another execution "
+                           "namespace. Inspect it manually or remove "
+                           "it before reusing this path.")
+        else:
+            if home.exists() and any(home.iterdir()):
+                raise ConnectorError(
+                    "VALIDATION_ERROR", "mcp_home",
+                    "config tree exists without an ownership marker; "
+                    "refusing to reuse it",
+                    action="Unattributed trees are never overwritten "
+                           "blindly; reconcile or remove it manually.")
+            home.mkdir(parents=True, exist_ok=True)
+            _atomic_write(marker, _json_owner.dumps(
+                owner_record, indent=1))
+            home = home  # marker is the only pre-write side effect
         from nexus_connector_core.harness_config import \
             render_codex_toml_fragment
         import json as _json
@@ -1094,6 +1122,26 @@ class RuntimeManager:
 
     def session_ids(self) -> list[str]:
         return list(self._index)
+
+
+def _mcp_home_dir(root: Path, server_id: str, executor_id: str,
+                  binding_id: str, session_id: str) -> Path:
+    """CN4-03.01: bounded, collision-free tree name.
+
+    The digest covers the CANONICAL ownership tuple (JSON with sorted
+    keys and fixed separators — no ambiguous concatenation); the same
+    readable prefix can never merge two owners because the full digest
+    is always part of the name.
+    """
+    import hashlib as _hashlib
+    import json as _json
+    canonical = _json.dumps(
+        [server_id, executor_id, binding_id, session_id],
+        separators=(",", ":"), ensure_ascii=False)
+    digest = _hashlib.sha256(canonical.encode("utf-8")
+                            ).hexdigest()[:24]
+    readable = _safe_segment(f"{server_id}~{binding_id}~{session_id}")[:48]
+    return root / "runtime" / "mcp" / f"v2-{readable}-{digest}"
 
 
 def _safe_segment(value: str) -> str:
