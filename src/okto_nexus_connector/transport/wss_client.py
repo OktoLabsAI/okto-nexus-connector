@@ -118,9 +118,18 @@ class ValidatedOperation:
     connection_generation: int
     authorization_revision: int
     configuration_revision: int
+    #: CN3-01: the FULL contract expectations travel with the envelope.
+    #: The host compares them against the session's authorized snapshot
+    #: before building any ExecutionContext — divergence is a typed
+    #: refusal with zero effects, never silently "corrected".
+    session_owner_generation: int = 1
+    workspace_binding_id: str = ""
     #: Lane reservation captured at admission (CN2-01.02): revalidated
-    # after every wait, right before the Core call.
+    # after every wait, right before the Core call. CN3-01.02: the
+    # AUTHORIZATION REVISION is part of the reservation — a lane that
+    # advanced to a new revision invalidates work admitted under the old.
     lane_epoch: int = 1
+    lane_authorization_revision: int = 1
 
     @property
     def control(self) -> bool:
@@ -261,12 +270,26 @@ class PriorityQueues:
         return len(self._urgent) + len(self._normal)
 
 
-class _Admission:
-    """CN2/N02: bounded admission BEFORE create_task.
+class _Reservation:
+    """CN3-03: one admission's EXACT cost — computed once, released once.
 
-    Waiting operations are counted (items and estimated bytes); beyond
-    the cap the frame is refused with an explicit error BEFORE any task
-    exists — an already-admitted operation keeps its durable intent and
+    The reservation carries the byte/item cost charged at ingress; the
+    release spends THIS object (never a re-serialized approximation of
+    the frame). Double release raises instead of silently corrupting
+    the counters.
+    """
+
+    __slots__ = ("bytes_cost", "finalized")
+
+    def __init__(self, bytes_cost: int):
+        self.bytes_cost = bytes_cost
+        self.finalized = False
+
+
+class _Admission:
+    """CN2/N02 + CN3-03: bounded admission BEFORE create_task, with
+    exact single-shot accounting. Refusals happen before any task
+    exists; an already-admitted operation keeps its durable intent and
     a consultable receipt.
     """
 
@@ -277,23 +300,34 @@ class _Admission:
         self.waiting_items = 0
         self.waiting_bytes = 0
         self.refused = 0
+        self._released_inconsistent = 0
 
-    def try_reserve(self, frame: dict) -> bool:
+    @staticmethod
+    def cost_of(frame: dict) -> int:
         import json as _json
-        blob = _json.dumps(frame, default=str).encode("utf-8")
+        return len(_json.dumps(frame, default=str,
+                               sort_keys=True).encode("utf-8"))
+
+    def try_reserve(self, frame: dict) -> "_Reservation | None":
+        cost = self.cost_of(frame)
         if (self.waiting_items >= self.max_items or
-                self.waiting_bytes + len(blob) > self.max_bytes):
+                self.waiting_bytes + cost > self.max_bytes):
             self.refused += 1
-            return False
+            return None
         self.waiting_items += 1
-        self.waiting_bytes += len(blob)
-        return True
+        self.waiting_bytes += cost
+        return _Reservation(cost)
 
-    def release(self, frame: dict) -> None:
-        import json as _json
-        blob = _json.dumps(frame, default=str).encode("utf-8")
-        self.waiting_items = max(0, self.waiting_items - 1)
-        self.waiting_bytes = max(0, self.waiting_bytes - len(blob))
+    def release(self, reservation: "_Reservation") -> None:
+        if reservation is None:
+            return
+        if reservation.finalized:
+            # CN3-03: a double release is a bug, not a clamp.
+            self._released_inconsistent += 1
+            raise RuntimeError("admission reservation released twice")
+        reservation.finalized = True
+        self.waiting_items -= 1
+        self.waiting_bytes -= reservation.bytes_cost
 
 
 class NXLTransport:
@@ -343,11 +377,26 @@ class NXLTransport:
     def add_lane(self, binding_id: str, agent_id: str,
                  ticket_provider: Callable[[], Awaitable[str]],
                  *, credential_epoch: int = 1,
-                 authorization_revision: int = 1) -> None:
+                 authorization_revision: int = 1,
+                 expires_at: float | None = None) -> None:
+        lane = self._lanes.get(binding_id)
+        if lane is not None:
+            # CN3-01.04 (G02): rotation updates the EXISTING lane's
+            # epochs/revisions atomically and invalidates old proofs.
+            lane.credential_epoch = credential_epoch
+            lane.authorization_revision = authorization_revision
+            if expires_at is not None:
+                lane.expires_at = expires_at
+            lane.ticket_epoch += 1
+            if lane.state == "ready":
+                lane.state = "pending"  # must re-attach under new epoch
+                self.stats.lanes[binding_id] = False
+            return
         self._lanes[binding_id] = LaneState(
             binding_id, agent_id, ticket_provider,
             credential_epoch=credential_epoch,
-            authorization_revision=authorization_revision)
+            authorization_revision=authorization_revision,
+            expires_at=expires_at)
         self.stats.lanes[binding_id] = False
         # CN2/N07 (b11b): a lane added on a LIVE negotiated transport
         # gets its own owned attach producer immediately.
@@ -427,12 +476,11 @@ class NXLTransport:
         for batch in _contiguous_batches(events):
             sent = await self.queues.put(event_batch_frame(batch)) and sent
         state = self._streams.setdefault(stream_key, StreamSendState())
-        # CN2/N03: written_through advances only when the SENDER writes;
-        # here we track the accepted-for-write intent; the sender marks
-        # actual writes. See _sender.
-        state.written_through = max(state.written_through, 0)
+        # CN3-05: a REPLAY never erases a proof already received — the
+        # waiter Event is not cleared here; the predicate wait checks
+        # acked_through against the target before blocking.
         self._ack_waiters.setdefault(
-            (last.session_id, last.stream_epoch), asyncio.Event()).clear()
+            (last.session_id, last.stream_epoch), asyncio.Event())
         return sent
 
     def _stream_key(self, session_id: str, epoch: str) -> tuple:
@@ -445,13 +493,36 @@ class NXLTransport:
             StreamSendState()).written_through
 
     async def wait_event_ack(self, session_id: str, stream_epoch: str,
-                             timeout: float = 30.0) -> int | None:
+                             timeout: float = 30.0, *,
+                             target: int | None = None) -> int | None:
+        """CN3-05 (D05): the wait tests a MONOTONIC watermark predicate.
+
+        A duplicate-but-valid ACK satisfies the wait for the target it
+        already covers (idempotent progress); an old watermark (ACK1)
+        never satisfies a wait for a newer target (seq2). The check runs
+        BEFORE and AFTER every wait — replaying a batch cannot erase a
+        proof already received.
+        """
         waiter = self._ack_waiters.setdefault(
             (session_id, stream_epoch), asyncio.Event())
-        try:
-            await asyncio.wait_for(waiter.wait(), timeout)
-        except asyncio.TimeoutError:
-            return None
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout
+
+        def _satisfied() -> bool:
+            state = self._streams.get(
+                self._stream_key(session_id, stream_epoch))
+            current = state.acked_through if state else 0
+            return current >= target if target is not None else current > 0
+
+        while not _satisfied():
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return None
+            try:
+                await asyncio.wait_for(waiter.wait(), remaining)
+            except asyncio.TimeoutError:
+                return None
+            waiter.clear()
         state = self._streams.get(self._stream_key(session_id, stream_epoch))
         return state.acked_through if state else None
 
@@ -600,11 +671,13 @@ class NXLTransport:
                 # CN2/N02: bounded admission BEFORE create_task.
                 admission = (self._control_admission if operation.control
                              else self._productive_admission)
-                if not admission.try_reserve(frame):
+                reservation = admission.try_reserve(frame)
+                if reservation is None:
                     self._reject_over_capacity(operation, frame)
                     continue
                 task = asyncio.create_task(
-                    self._run_operation(operation, admission))
+                    self._run_operation(operation, admission,
+                                        reservation))
                 self._inflight.add(task)
                 task.add_done_callback(self._inflight.discard)
             elif kind == "welcome":
@@ -644,12 +717,47 @@ class NXLTransport:
     async def _handle(self, frame: dict[str, object]) -> None:
         kind = frame.get("type")
         if kind == "approval.request":
+            if not self._frame_namespace_matches(frame):
+                logger.warning(
+                    "approval.request from foreign namespace %s/%s "
+                    "ignored", frame.get("server_id"),
+                    frame.get("executor_id"))
+                return
             decision = await self._on_approval(frame)
             if decision is not None:
                 await self.queues.put(decision, urgent=True)
         elif kind == "reconcile.request":
+            # CN3-02 (D02): the frame's declared namespace is checked
+            # against the AUTHENTICATED channel — it can never select
+            # another Server's journal. The callback receives the
+            # channel's trusted namespace, not the frame's claim.
+            if not self._frame_namespace_matches(frame):
+                logger.warning(
+                    "reconcile.request from foreign namespace %s/%s "
+                    "refused (channel is %s/%s)",
+                    frame.get("server_id"), frame.get("executor_id"),
+                    self.server_id, self.executor_id)
+                error = ConnectorError(
+                    "BINDING_NOT_AUTHORIZED", "wss_reconcile",
+                    "reconcile requested a namespace foreign to this "
+                    "channel",
+                    action="The channel answers only its own "
+                           "authenticated namespace.")
+                from ..daemon.app import _error_frame
+                await self.queues.put(_error_frame(error, {
+                    "type": "reconcile.request",
+                    "server_id": self.server_id,
+                    "executor_id": self.executor_id,
+                    "code": "BINDING_NOT_AUTHORIZED",
+                    "stage": "wss_reconcile",
+                    "possible_effect": False,
+                    "retry_safe": False}))
+                return
+            envelope = dict(frame)
+            envelope["server_id"] = self.server_id
+            envelope["executor_id"] = self.executor_id
             if self._on_reconcile is not None:
-                report = await self._on_reconcile(frame)
+                report = await self._on_reconcile(envelope)
                 if report is not None:
                     await self.queues.put(report)
         elif kind == "event.ack":
@@ -710,7 +818,12 @@ class NXLTransport:
                 sequence, state.written_through)
             return
         if sequence <= state.acked_through and state.acked_through > 0:
-            # Duplicate/regressive: idempotent no-op.
+            # CN3-05: duplicate/regressive ACK — the cursor never moves,
+            # but a duplicate of a VALID watermark still wakes waiters
+            # testing a predicate their target already covers.
+            waiter = self._ack_waiters.get((session_id, epoch))
+            if waiter is not None:
+                waiter.set()
             return
         state.acked_through = sequence
         waiter = self._ack_waiters.get((session_id, epoch))
@@ -760,6 +873,16 @@ class NXLTransport:
         self.stats.reconcile_state = RECONCILE_COMPLETE
         self.stats.state = ST_READY
         self._online.set()
+
+    def _frame_namespace_matches(self, frame: dict[str, object]) -> bool:
+        """CN3-01.03: origin equality for non-productive frames too."""
+        server = str(frame.get("server_id", ""))
+        executor = str(frame.get("executor_id", ""))
+        if server and server != self.server_id:
+            return False
+        if executor and executor != self.executor_id:
+            return False
+        return True
 
     def _reject_premature(self, frame: dict[str, object]) -> None:
         logger.warning("operation %s refused: transport not ready (%s)",
@@ -828,7 +951,12 @@ class NXLTransport:
             authorization_revision=authorization_revision,
             configuration_revision=int(frame.get("configuration_revision",
                                                  0)),
-            lane_epoch=lane.ticket_epoch)
+            session_owner_generation=int(frame.get(
+                "session_owner_generation", 1)),
+            workspace_binding_id=str(frame.get("workspace_binding_id",
+                                               "")),
+            lane_epoch=lane.ticket_epoch,
+            lane_authorization_revision=lane.authorization_revision)
 
     def lane_reservation_valid(self, operation: ValidatedOperation) -> bool:
         """CN2-01.02 (b02): reservation recheck AFTER any wait.
@@ -845,6 +973,12 @@ class NXLTransport:
             return False
         if lane.agent_id != operation.agent_id:
             return False
+        # CN3-01.02 (D06): the authorization revision captured at
+        # admission must STILL be the lane's — rotation to a new
+        # revision invalidates work queued under the old one.
+        if lane.authorization_revision != operation. \
+                lane_authorization_revision:
+            return False
         if not self._negotiated or \
                 self._reconcile_state != RECONCILE_COMPLETE:
             return False
@@ -854,7 +988,8 @@ class NXLTransport:
         return True
 
     async def _run_operation(self, operation: ValidatedOperation,
-                             admission: _Admission) -> None:
+                             admission: _Admission,
+                             reservation: "_Reservation") -> None:
         try:
             semaphore = (self._control_sem if operation.control
                          else self._productive_sem)
@@ -923,7 +1058,8 @@ class NXLTransport:
                                 "receipt remains durable/consultable",
                                 operation.operation_id)
         finally:
-            admission.release(_as_error_frame_payload(operation))
+            # CN3-03: releases the EXACT reservation charged at ingress.
+            admission.release(reservation)
 
     async def _send_initial_reconcile(self) -> bool:
         """CN2/N04: FAILED projection never becomes an empty success."""

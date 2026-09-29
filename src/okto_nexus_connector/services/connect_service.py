@@ -102,6 +102,16 @@ async def create_binding(http: NexusHTTPClient, store: StateStore,
     connector_id = state.connector_id
     workspace_str = str(workspace_root.resolve())
     installation_ref = effective_installation_ref(candidate)
+    # CN3-05.03 (G01): the inventory revision derives from the CURRENT
+    # EVIDENCE (the executor's availability snapshot revision), never
+    # from the state schema version — installing/updating a build
+    # changes it while the schema does not.
+    from ..services.discovery_service import availability_snapshot
+    try:
+        inventory_revision_value = availability_snapshot(
+            [candidate]).get("executor_revision")
+    except Exception:
+        inventory_revision_value = None
     existing = [b for b in state.bindings
                 if b.server_id == identity.server_id
                 and b.agent_id == identity.me_agent_id
@@ -168,7 +178,7 @@ async def create_binding(http: NexusHTTPClient, store: StateStore,
         candidate_build_identity=candidate.build_identity or "",
         candidate_launch_script=candidate.launch_script or "",
         installation_ref=installation_ref,
-        inventory_revision=(state.schema_version << 8) | 1,
+        inventory_revision=inventory_revision_value,
         created_at=_now(),
     )
 

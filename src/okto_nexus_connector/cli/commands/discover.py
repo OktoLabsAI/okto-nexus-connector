@@ -42,6 +42,23 @@ async def run_discover(args, output: Output, root: Path):
             })
         notes.append("Pi release layouts are enumerated passively; the "
                      "Node executable you named is the trusted pair")
+    # CN3-05.01 (G01): the DISCOVER flow publishes the versioned
+    # technical availability snapshot of THIS executor (Core-assessed) —
+    # the same projection the daemon serves over IPC.
+    snapshot = None
+    try:
+        from ...services.discovery_service import (
+            availability_snapshot, select_explicit,
+        )
+        from nexus_connector_core.discovery import candidate as _mk
+        candidates = [_mk(e["adapter_id"], e["executable"], explicit=True)
+                      for e in payload]
+        snapshot = availability_snapshot(candidates)
+    except Exception:
+        snapshot = None
     output.line(f"{len(payload)} candidate(s); discovery executes nothing "
                 "and authorizes nothing")
-    return {"candidates": payload, "note": " ".join(notes)}
+    result = {"candidates": payload, "note": " ".join(notes)}
+    if snapshot is not None:
+        result["availability"] = snapshot
+    return result

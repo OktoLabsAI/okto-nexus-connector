@@ -622,11 +622,14 @@ class RuntimeManager:
         return runtime
 
     def _resolve_remote_session(self, operation) -> ManagedSession:
-        """CN2/N01 (b03): resolve ONLY in the wire's authenticated
-        namespace - a textual session id that happens to exist under
-        ANOTHER Server never matches; the resolved session must agree
-        with the envelope's binding/agent/workspace or the frame is
-        refused with zero effects."""
+        """CN2/N01 + CN3-01: resolve ONLY in the wire's authenticated
+        namespace and compare the FULL envelope — identity AND the
+        generation/revision expectations — against the session's
+        authorized snapshot. Divergence is a typed refusal with ZERO
+        effects: the connector never silently "corrects" a frame by
+        substituting the session's local values, because that would
+        hand the Core a context whose incompatibility it must never
+        see (D01 variants)."""
         session = self.session_by_key(SessionKey(
             operation.server_id, operation.executor_id,
             operation.session_id))
@@ -640,6 +643,44 @@ class RuntimeManager:
                 "resolved in its namespace",
                 action="The frame targets a different binding/agent/"
                        "workspace; the connector refuses to remap it.")
+        # CN3-01: the frame's EXPECTATIONS must equal the session's
+        # authorized snapshot. A newer legitimate generation completes
+        # the Core's public renewal FIRST; until then, work under the
+        # old snapshot typed-refuses with zero effects.
+        mismatches = []
+        if operation.connection_generation != session. \
+                connection_generation:
+            mismatches.append(
+                f"connection_generation frame="
+                f"{operation.connection_generation} authorized="
+                f"{session.connection_generation}")
+        if operation.session_owner_generation != session. \
+                session_owner_generation:
+            mismatches.append(
+                f"session_owner_generation frame="
+                f"{operation.session_owner_generation} authorized="
+                f"{session.session_owner_generation}")
+        if operation.authorization_revision != binding. \
+                authorization_revision:
+            mismatches.append(
+                f"authorization_revision frame="
+                f"{operation.authorization_revision} authorized="
+                f"{binding.authorization_revision}")
+        if operation.configuration_revision != binding. \
+                configuration_revision:
+            mismatches.append(
+                f"configuration_revision frame="
+                f"{operation.configuration_revision} authorized="
+                f"{binding.configuration_revision}")
+        if mismatches:
+            raise ConnectorError(
+                "STALE_GENERATION", "wss_grant",
+                "the frame's generation/revision expectations diverge "
+                "from the session's authorized snapshot: "
+                + "; ".join(mismatches),
+                action="A new generation/revision must complete the "
+                       "Core's public renewal before work is admitted "
+                       "under it; the operation produced no effect.")
         return session
 
     async def submit_remote(self, operation):
@@ -801,9 +842,13 @@ class RuntimeManager:
         # port — a receipt is answerable even after the executable was
         # removed; a missing live handle is unknown ownership, never
         # "operation did not exist".
+        # CN3-04 (D04): a COLD host (no runtime ever composed) OPENS
+        # the technical journal explicitly before answering — an
+        # unopened store is state to RECOVER, not evidence of absence,
+        # and a read failure is an error, never an empty success.
         receipts = []
         snapshots = []
-        journal = self._host.journal_if_open()
+        journal = await self._host.ensure_history_journal()
         if journal is not None:
             from nexus_connector_core import OperationKey
             for operation_id in operation_ids:
@@ -918,8 +963,29 @@ class RuntimeManager:
         """
         if not templates:
             return None
-        home = Path(self._host.root) / "runtime" / "mcp" / session_id
+        # CN3-06 (D07): the directory belongs to the FULL execution
+        # owner (server/executor/binding/session) — two namespaces with
+        # the same textual session_id NEVER share or overwrite each
+        # other's configuration.
+        home = Path(self._host.root) / "runtime" / "mcp" / _safe_segment(
+            binding.server_id) / _safe_segment(
+            binding.executor_id) / _safe_segment(
+            binding.binding_id) / _safe_segment(session_id)
         home.mkdir(parents=True, exist_ok=True)
+        # Ownership receipt: minimal metadata identifying the execution
+        # that owns this tree (validated on reuse; never a session
+        # credential).
+        marker = home / ".owner.json"
+        import json as _json_owner
+        import time as _time_owner
+        owner_record = {"server_id": binding.server_id,
+                        "executor_id": binding.executor_id,
+                        "binding_id": binding.binding_id,
+                        "session_id": session_id,
+                        "created_at": _time_owner.strftime(
+                            "%Y-%m-%dT%H:%M:%SZ", _time_owner.gmtime())}
+        marker.write_text(_json_owner.dumps(owner_record, indent=1),
+                          encoding="utf-8")
         from nexus_connector_core.harness_config import \
             render_codex_toml_fragment
         import json as _json
@@ -927,13 +993,13 @@ class RuntimeManager:
             if template.adapter_id == "codex_app_server":
                 codex_dir = home / ".codex"
                 codex_dir.mkdir(exist_ok=True)
-                (codex_dir / "config.toml").write_text(
-                    render_codex_toml_fragment(template), encoding="utf-8")
+                _atomic_write(codex_dir / "config.toml",
+                              render_codex_toml_fragment(template))
             elif template.adapter_id == "claude_stream":
                 document = {"mcpServers": {
                     template.entry_name: template.entry()}}
-                (home / ".claude.json").write_text(
-                    _json.dumps(document, indent=2), encoding="utf-8")
+                _atomic_write(home / ".claude.json",
+                              _json.dumps(document, indent=2))
         return home
 
     def _provider_home(self, state: ConnectorState, binding: BindingRecord
@@ -1028,6 +1094,31 @@ class RuntimeManager:
 
     def session_ids(self) -> list[str]:
         return list(self._index)
+
+
+def _safe_segment(value: str) -> str:
+    """CN3-06: path-safe, bounded namespace segment (validated)."""
+    import re as _re
+    cleaned = _re.sub(r"[^A-Za-z0-9_.-]", "_", value)[:80]
+    return cleaned or "_"
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """CN3-04.02: staging + atomic replace under the owning namespace."""
+    import os as _os
+    import tempfile as _tf
+    fd, temp = _tf.mkstemp(dir=str(path.parent), prefix=".cfg-")
+    try:
+        with _os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+        _os.replace(temp, path)
+        temp = None
+    finally:
+        if temp is not None:
+            try:
+                _os.unlink(temp)
+            except OSError:
+                pass
 
 
 def _environment_with(resolver: LaunchSecretResolver, overlay: LaunchOverlay):

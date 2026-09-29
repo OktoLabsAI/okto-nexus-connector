@@ -1,4 +1,4 @@
-# Implementation status — 2026-09-29 (CN2 corrected, 0.2.0.dev0)
+# Implementation status — 2026-09-29 (CN3 corrected, 0.3.0.dev0)
 
 Connector `0.1.0.dev0`. Baseline: this repository, consuming the Core
 development wheel `nexus_connector_core-0.2.8.dev0` (SHA-256
@@ -6,7 +6,7 @@ development wheel `nexus_connector_core-0.2.8.dev0` (SHA-256
 source HEAD da campanha C9). **CN1 (2026-09-28):** a auditoria independente
 (A01–A17) foi corrigida na íntegra — ver
 [plans/correction-connector-01](../correction-connector-01/evidence/cn1-correction-2026-09-28.md);
-o pin avançou para 0.2.10.dev0 (C10+C11 adotados). **CN2 (2026-09-29):** a reavaliação independente (N01–N09) foi corrigida e o Connector bumpou para 0.2.0.dev0 — ver [plans/correction-connector-02](../correction-connector-02/evidence/cn2-correction-2026-09-29.md); remote runtime.open permanece UNSUPPORTED declarado até o gate vertical.
+o pin avançou para 0.2.10.dev0 (C10+C11 adotados). **CN2 (2026-09-29):** a reavaliação independente (N01–N09) foi corrigida e o Connector bumpou para 0.2.0.dev0 — ver [plans/correction-connector-02](../correction-connector-02/evidence/cn2-correction-2026-09-29.md); remote runtime.open permanece UNSUPPORTED declarado até o gate vertical. **CN3:** os seis grupos da reavaliação (gerações/revisões, reconcile estrangeiro, quota de admissão, histórico a frio, ACK duplicado, colisão de config MCP) foram corrigidos — ver [plans/correction-connector-03](../correction-connector-03/evidence/cn3-correction-2026-09-29.md).
 
 The full automated suite passes locally on Windows 11 / Python 3.13.1:
 **122 passed, 1 skipped**

@@ -160,7 +160,9 @@ class DaemonApp:
         self.started_at = time.time()
         self._stopped = asyncio.Event()
         self._draining = False
-        self._approvals: dict[str, dict[str, object]] = {}
+        # CN3/G02: approvals keyed by (server_id, request_id).
+        self._approvals: dict[tuple[str, str], dict[str, object]] = {}
+        self._approval_channel: str | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -399,15 +401,23 @@ class DaemonApp:
         (TC-29): the request is queued for the CLI/TUI operator and the
         decision is forwarded through the Server's authorized mechanism.
         """
+        # CN3-01.03/G02: approvals are keyed by the FULL authenticated
+        # namespace — a foreign frame never reaches this point (the
+        # transport validates), and same-text request ids of two
+        # Servers never collide.
         request_id = str(frame.get("request_id", ""))
-        self._approvals[request_id] = {
+        server_id = str(frame.get("server_id", self._approval_channel or
+                                  ""))
+        self._approvals[(server_id, request_id)] = {
             "request_id": request_id,
+            "server_id": server_id,
             "binding_id": frame.get("binding_id"),
             "session_id": frame.get("session_id"),
             "kind": frame.get("kind"),
             "proposal": redact_mapping(frame.get("proposal", {})),
             "received_at": _now(),
             "source": "server",
+            "phase": "pending",  # G02 bifásico: pending→decided
         }
         return None
 
@@ -450,11 +460,10 @@ class DaemonApp:
                    or next((r for k, r in self.host._runtimes.items()
                             if k.server_id == server_id), None))
         if runtime is None:
-            # CN2/N03: acknowledge through the PUBLIC journal port when
-            # no live runtime exists (history-only namespaces).
-            journal = self.host.journal_if_open()
-            if journal is None:
-                return
+            # CN2/N03 + CN3-04: acknowledge through the PUBLIC journal
+            # port when no live runtime exists (history-only
+            # namespaces); the journal is recovered on demand.
+            journal = await self.host.ensure_history_journal()
             from nexus_connector_core import EventCursor
             await journal.acknowledge_events(
                 EventCursor(server_id, binding.executor_id, session_id,
@@ -474,9 +483,9 @@ class DaemonApp:
         zero means no more data now, never a wait for future events.
         No runtime handle and no binary are required.
         """
-        journal = self.host.journal_if_open()
-        if journal is None:
-            return []
+        # CN3-04: a cold host OPENS the journal before reading —
+        # unopened is state to recover, not an empty snapshot.
+        journal = await self.host.ensure_history_journal()
         from nexus_connector_core import EventCursor
         batch = []
         cursor = EventCursor(server_id, self._executor_for(server_id),
@@ -559,6 +568,22 @@ class DaemonApp:
         elif op == "approvals.decide":
             decision = await self._decide_approval(params)
             yield response_ok(request.seq, decision)
+        elif op == "availability.snapshot":
+            # CN3-05.01 (G01): the daemon publishes the versioned
+            # technical availability snapshot through its real API —
+            # the Core's assessment of THIS executor, never the
+            # Server's OS view.
+            from ..services.discovery_service import (
+                availability_snapshot, discover_inventory,
+            )
+            from nexus_connector_core.discovery import candidate as \
+                _make_candidate
+            entries = await discover_inventory()
+            candidates = [_make_candidate(entry.adapter_id,
+                                          entry.executable, explicit=True)
+                          for entry in entries]
+            snapshot = availability_snapshot(candidates)
+            yield response_ok(request.seq, snapshot)
         elif op == "reconcile":
             yield response_ok(request.seq, await self.runtimes.reconcile(
                 operation_ids=params.get("operation_ids", ()),
@@ -576,35 +601,81 @@ class DaemonApp:
 
     async def _decide_approval(self, params: dict[str, object]
                                ) -> dict[str, object]:
+        """G02/CN3-06.02: two-phase decision — reserve, validate, act.
+
+        The request is NOT removed before validation/network: an
+        invalid decision or a failed transport leaves it pending. When
+        the pending record carries a managed session, the authorized
+        decision ALSO reaches the Core's public native-approval port
+        (the final application route), not only the Server CAS.
+        """
         request_id = str(params.get("request_id", ""))
         decision = str(params.get("decision", ""))
-        pending = self._approvals.pop(request_id, None)
+        server_id = str(params.get("server_id", ""))
+        key = (server_id, request_id) if server_id else next(
+            (candidate for candidate in self._approvals
+             if candidate[1] == request_id), (server_id, request_id))
+        pending = self._approvals.get(key)
         if pending is None:
             raise ConnectorError("VALIDATION_ERROR", "approval",
-                                 "unknown or already answered request")
+                                 "unknown request")
+        if pending.get("phase") == "decided":
+            raise ConnectorError("OPERATION_CONFLICT", "approval",
+                                 "request already answered")
         if decision not in ("approve", "deny"):
             raise ConnectorError("VALIDATION_ERROR", "approval",
                                  "decision must be approve or deny")
+        pending["phase"] = "deciding"
         server_id = str(pending.get("binding_id", "")).split(":")[0]
         state = self.store.load()
         binding = next((b for b in state.bindings
                         if b.binding_id == pending.get("binding_id")), None)
         if binding is None:
+            pending["phase"] = "pending"
             raise ConnectorError("VALIDATION_ERROR", "approval",
                                  "binding for this request is gone")
         profile = state.servers.get(binding.server_id)
         identity = state.identity_for(binding.server_id, binding.agent_id)
         if profile is None or identity is None:
+            pending["phase"] = "pending"
             raise ConnectorError("AGENT_AUTH_REQUIRED", "approval")
         key = self.vault.resolve(identity.secret_handle)
-        async with NexusHTTPClient(profile.base_url) as http:
-            applied = await http.approval_decision(
-                key, request_id=request_id, decision=decision,
-                cas_token=str(params.get("cas_token", "")),
-                response=params.get("response") if isinstance(
-                    params.get("response"), dict) else None)
+        native_result = None
+        # G02/CN3-06.02: the authorized decision ALSO applies at the
+        # Core when the request belongs to a LIVE MANAGED session (the
+        # final application route). A Server-side HITL for a session
+        # this daemon does not manage proceeds to the Server CAS only.
+        session_id = pending.get("session_id")
+        if isinstance(session_id, str) and session_id:
+            try:
+                native_result = await self.runtimes.decide_native_approval(
+                    session_id, f"op_appr_{request_id}",
+                    request=pending.get("proposal", {})
+                    if isinstance(pending.get("proposal"), dict) else {},
+                    decision=decision,
+                    response=params.get("response") if isinstance(
+                        params.get("response"), dict) else None)
+            except ConnectorError as error:
+                if error.code != "VALIDATION_ERROR":
+                    pending["phase"] = "pending"
+                    raise
+                native_result = None  # not a managed session here
+        try:
+            async with NexusHTTPClient(profile.base_url) as http:
+                applied = await http.approval_decision(
+                    key, request_id=request_id, decision=decision,
+                    cas_token=str(params.get("cas_token", "")),
+                    response=params.get("response") if isinstance(
+                        params.get("response"), dict) else None)
+        except ConnectorError:
+            # Network failure does NOT consume the request (bifásico).
+            pending["phase"] = "pending"
+            raise
+        pending["phase"] = "decided"
+        self._approvals.pop(key, None)
         return {"request_id": request_id, "decision": decision,
                 "applied": applied,
+                "native": native_result,
                 "authority": "server-side CAS; the agent key only "
                              "transports the operator's decision"}
 

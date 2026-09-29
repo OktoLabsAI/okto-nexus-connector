@@ -939,8 +939,11 @@ async def test_b09_managed_mcp_start_configures_server_url_not_only_token(
     except ConnectorError as error:
         pytest.fail(f"managed start failed: {error}")
     session_id = started["session_id"]
-    # The ephemeral session home exists and carries the URL.
-    home = Path(root) / "runtime" / "mcp" / session_id
+    # CN3-06 adaptation: the ephemeral home is now scoped by the full
+    # namespace (server/executor/binding/session) — same causal check.
+    binding = manager.binding_by_alias("codex")
+    home = (Path(root) / "runtime" / "mcp" / binding.server_id /
+            binding.executor_id / binding.binding_id / session_id)
     config = home / ".codex" / "config.toml"
     assert config.is_file(), "no ephemeral MCP config was installed"
     content = config.read_text(encoding="utf-8")

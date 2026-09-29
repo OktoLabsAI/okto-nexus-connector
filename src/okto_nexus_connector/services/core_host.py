@@ -164,6 +164,14 @@ class CoreRuntimeHost:
         open — durable history queries never require the binary."""
         return self._journal
 
+    async def ensure_history_journal(self):
+        """CN3-04 (D04): OPEN the technical journal explicitly for
+        history — a cold host (no runtime ever composed) recovers the
+        durable store before answering reconcile/replay queries. Never
+        composes a runtime, never validates a binary; single-flight; a
+        failure to open is an error, not an empty success."""
+        return await self.ensure_journal()
+
     # -- candidates -------------------------------------------------------
 
     def candidate_for(self, binding: BindingRecord) -> InstallationCandidate:

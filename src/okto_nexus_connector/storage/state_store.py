@@ -81,7 +81,9 @@ class BindingRecord:
     # working but are flagged ``needs_rediscovery`` — never guessed ready.
     candidate_architecture: str = ""
     installation_ref: str = ""
-    inventory_revision: int = 0
+    #: CN3-05.03: evidence-derived inventory revision (opaque string
+    #: from the availability snapshot; legacy ints load unchanged).
+    inventory_revision: str | int = ""
     needs_rediscovery: bool = False
     created_at: str = ""
     mcp_entry_name: str = "nexus"
