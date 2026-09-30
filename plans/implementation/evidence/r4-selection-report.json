@@ -1,0 +1,151 @@
+{
+  "recorded_at": "2026-09-30T08:30:35.623843+00:00",
+  "scope": "Partial M03/M06 approved physical selection and Core host composition; no daemon or provider acceptance",
+  "parent_commit": "6736fc3c51b83047f50a0c92a3cf0fbe5b5293ee",
+  "core_commit": "9d244cfecc31c817661d560bbcee75cc9f8d5513",
+  "source_sha256": {
+    "src/okto_nexus_connector/storage/state_store.py": "96fb565702218a835b40890cc66f2fde77aba38bedf9aee52d880f850b35b694",
+    "src/okto_nexus_connector/services/realization_service.py": "a2c63f01bc274e46fa12d289b5c55fc47f6f4f5774d1d0513611ced58198d6c5",
+    "src/okto_nexus_connector/services/execution_selection.py": "9f35d83738fd69d8f92a1797795176d7ec871a7bbad66463eff76d484bd95f59",
+    "src/okto_nexus_connector/services/core_host.py": "90cace252e47b81a0fbbe1eb1f6916fa25a54decc5bf5dec505c49564f27bd24",
+    "tests/unit/test_execution_selection.py": "e7bf14f4d544bb28c183400e7f31bbad5118920a15a06348c8057fe4e13cbd08"
+  },
+  "runs": [
+    {
+      "file": "plans/implementation/evidence/r4-selection-initial.xml",
+      "sha256": "e93a87cd2874e7a4168229f887c772adff6af56e9c8fe3e6f3f4866734ec41fa",
+      "tests": 26,
+      "failures": 2,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 24,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "2",
+          "skipped": "0",
+          "tests": "26",
+          "time": "1.930",
+          "timestamp": "2026-09-30T05:18:21.789653-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ],
+      "skips": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-selection-regression.xml",
+      "sha256": "2f25779e9b3cb269a048391a506569968319c3d744aa88c5037f2e9eb32eadda",
+      "tests": 280,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "passed": 278,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "2",
+          "tests": "280",
+          "time": "229.405",
+          "timestamp": "2026-09-30T05:21:31.054751-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ],
+      "skips": [
+        {
+          "nodeid": "tests.regressoes.test_connector_audit::test_27_start_session_capability_is_referenced_in_effective_environment",
+          "reason": "lab peer lacks full contract surface: BINDING_NOT_AUTHORIZED"
+        },
+        {
+          "nodeid": "tests.unit.test_core02_integration::test_shim_resolution_never_runs_outside_windows",
+          "reason": "covered above"
+        }
+      ]
+    },
+    {
+      "file": "plans/implementation/evidence/r4-selection-targeted-final.xml",
+      "sha256": "24ef9a7011340f07505db3a6878ab32cc46403053771f5d74c96128b33978396",
+      "tests": 27,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 27,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "27",
+          "time": "1.799",
+          "timestamp": "2026-09-30T05:20:51.282863-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ],
+      "skips": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-selection-targeted.xml",
+      "sha256": "195e5c6ba4a1db61cac81bb159e8993d3f755cdc598a593e2c249a0222a3e10f",
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 26,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "26",
+          "time": "2.009",
+          "timestamp": "2026-09-30T05:18:52.646955-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ],
+      "skips": []
+    }
+  ],
+  "commands": {
+    "targeted": "rtk proxy C:/Users/jpamb/AppData/Local/Temp/okto-r4-connection-source-unf1oud0/Scripts/python.exe -X utf8 -m pytest tests/unit/test_execution_selection.py tests/unit/test_realization_service_r4.py tests/unit/test_state_store.py -q --tb=line --junitxml=plans/implementation/evidence/r4-selection-targeted-final.xml",
+    "regression": "rtk proxy C:/Users/jpamb/AppData/Local/Temp/okto-r4-connection-source-unf1oud0/Scripts/python.exe -X utf8 -m pytest tests -q --tb=line --junitxml=plans/implementation/evidence/r4-selection-regression.xml"
+  },
+  "source_environment": "Editable Connector source with the pinned Core wheel; Windows, Python 3.13.",
+  "artifact": {
+    "stage": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-selection-build-w5sygu_u",
+    "wheel": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-selection-wheel-ga8dgxjq\\okto_nexus_connector-0.5.0.dev0-py3-none-any.whl",
+    "sha256": "2d810b73a8b5b75263267cea5a5080d1d9fafad8093588c1858bb1840da71632"
+  },
+  "core_wheel_sha256": "27df75100dea033ca5456f2d571eb41b6311fa3ce530a723ecd6c606d257953c",
+  "coordinated_evidence": {
+    "repository": "Nexus",
+    "manifest": "plans/r4_execution/test_runs_20260930_physical_selection.json",
+    "source_r4_passes": 103,
+    "public_wss_passes": 1,
+    "installed_passes": 55,
+    "counts_overlap": true
+  },
+  "failure_analysis": [
+    "The first directed run passed 24 cases and failed two test fixtures: candidate_ref was not schema-valid, and the private runtime directory did not exist.",
+    "The fixtures were corrected; all 26 cases passed. A Pi package-content drift case was added and the final directed run passed 27.",
+    "The complete Connector regression passed 278 cases with two existing skips. Raw initial failure XML remains preserved."
+  ],
+  "schema_change": {
+    "from": 3,
+    "to": 4,
+    "behavior": "Add approved execution_bindings separately from legacy bindings; preserve legacy state without inventing approval.",
+    "rollback": "Older binaries reject schema 4. Verified backup and complete upgrade/rollback qualification remain in M12."
+  },
+  "limitations": [
+    "Authenticated binding persistence, full-inventory resolution and runtime composition are services; the daemon and CLI still need to call them.",
+    "Full profile/environment mapping, persisted executor registry, credential refresh and explicit binding revision refresh remain pending.",
+    "The real loopback WSS journey uses synthetic native implementation and readiness; it does not qualify a provider, daemon, independent hosts or Linux.",
+    "Nonempty reconciliation, durable error/receipt/event publication, all seven actions and embedded composition remain incomplete.",
+    "Native containment under concurrent filesystem changes, global limits and M00/M01/final product gates remain open.",
+    "Core and Nexus production bytes are unchanged. No executable/readiness flag is promoted."
+  ],
+  "product_gates_closed": []
+}

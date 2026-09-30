@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -125,6 +125,29 @@ class LocalRealizationRecord:
 
 
 @dataclass(slots=True)
+class ExecutionBindingRecord:
+    """Approved R4 mapping, separate from legacy bindings and runtime grants."""
+
+    binding_id: str
+    server_id: str
+    executor_id: str
+    agent_id: str
+    endpoint_id: str
+    workspace_id: str
+    workspace_binding_id: str
+    adapter_id: str
+    candidate_ref: str
+    inventory_revision: str
+    realization_ref: str
+    realization_revision: int
+    binding_revision: int
+    authorization_revision: int
+    configuration_revision: int
+    state: str
+    realization_snapshot_digest: str
+
+
+@dataclass(slots=True)
 class ConnectorState:
     schema_version: int = SCHEMA_VERSION
     connector_id: str = ""
@@ -132,6 +155,7 @@ class ConnectorState:
     identities: list[IdentityRecord] = field(default_factory=list)
     bindings: list[BindingRecord] = field(default_factory=list)
     realizations: list[LocalRealizationRecord] = field(default_factory=list)
+    execution_bindings: list[ExecutionBindingRecord] = field(default_factory=list)
     preferences: dict[str, Any] = field(default_factory=dict)
 
     # -- lookups ---------------------------------------------------------
@@ -258,6 +282,8 @@ def state_from_json(payload: dict[str, Any]) -> ConnectorState:
         state.bindings.append(record)
     for item in payload.get("realizations", []):
         state.realizations.append(LocalRealizationRecord(**item))
+    for item in payload.get("execution_bindings", []):
+        state.execution_bindings.append(ExecutionBindingRecord(**item))
     preferences = payload.get("preferences", {})
     if isinstance(preferences, dict):
         state.preferences = preferences
@@ -273,6 +299,7 @@ def state_to_json(state: ConnectorState) -> dict[str, Any]:
         "identities": [asdict(value) for value in state.identities],
         "bindings": [asdict(value) for value in state.bindings],
         "realizations": [asdict(value) for value in state.realizations],
+        "execution_bindings": [asdict(value) for value in state.execution_bindings],
         "preferences": state.preferences,
     }
 

@@ -1,5 +1,15 @@
 # Implementation status — 2026-09-29 (CN5 corrected, 0.5.0.dev0)
 
+## R4 physical selection — 2026-09-30
+
+[Approved physical selection](R4_PHYSICAL_SELECTION.md) adds schema 4 binding
+mappings, replay without downgrade, strict opaque-reference resolution and
+Core host composition from revalidated local evidence. The public loopback
+journey now uses the persisted resolver through the five-action cycle.
+Results are in `evidence/r4-selection-report.json`; daemon composition,
+approved-revision refresh and final product acceptance remain open.
+
+
 ## R4 connection ownership — 2026-09-30
 
 The [R4 connection owner](R4_CONNECTION_OWNER.md) now correlates lease/attach

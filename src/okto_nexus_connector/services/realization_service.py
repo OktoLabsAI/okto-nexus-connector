@@ -204,6 +204,7 @@ def acknowledge_local_realization(
                         item.agent_id == record.agent_id and
                         item.client_intent_id == record.client_intent_id), None)
         if (current is None or
+                publication_body(current) != publication_body(record) or
                 current.local_realization_ref != record.local_realization_ref or
                 current.local_root_proof_digest != record.local_root_proof_digest or
                 (current.realization_ref and
@@ -217,7 +218,8 @@ def acknowledge_local_realization(
         current.realization_ref = published.realization_ref
         current.workspace_binding_id = published.workspace_binding_id
         current.canonical_workspace_id = published.workspace_id
-        current.status = "PENDING_APPROVAL"
+        if current.status != "BOUND":
+            current.status = "PENDING_APPROVAL"
         acknowledged = current
 
     store.update(_record)

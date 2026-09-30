@@ -48,6 +48,14 @@ class BindingKey:
     binding_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class ExecutionRuntimeKey:
+    server_id: str
+    executor_id: str
+    binding_id: str
+    session_id: str
+
+
 class LaunchSecretResolver:
     """Resolves vault handles and per-launch ephemeral capability refs."""
 
@@ -105,7 +113,8 @@ class CoreRuntimeHost:
         self._ledger_path = paths.owned_slot_ledger_path(root)
         # CN1/A03: keyed by the typed BindingKey — two Servers with the
         # same textual binding id never share an instance.
-        self._runtimes: dict[BindingKey, LocalRuntimeCore] = {}
+        self._runtimes: dict[BindingKey | ExecutionRuntimeKey, LocalRuntimeCore] = {}
+        self._execution_selections = {}
         self._journal: SQLiteJournal | None = None
         self._ledger: SQLiteOwnedSlotLedger | None = None
         # CN1/CN-05.05: single-flight initialization for the shared
@@ -272,6 +281,49 @@ class CoreRuntimeHost:
 
     # -- runtime composition ------------------------------------------------
 
+    async def build_r4(self, store, *, frame, candidates, environment, factory=None):
+        """Compose an R4 runtime only from the approved host realization.
+
+        Composition is effect-free and does not install execution authority.
+        The connection owner must install the canonical lease before prepare.
+        Revalidate after shared-store waits and around the environment callback.
+        """
+        from .execution_selection import resolve_execution_selection
+        from nexus_connector_core import decode_r4_frame, encode_r4_frame
+        # Freeze caller-owned input before yielding; no mutable wire dict or
+        # candidate generator may retarget a build that is already waiting.
+        encoded = encode_r4_frame(frame)
+        candidates = tuple(candidates)
+        async def resolve():
+            return await asyncio.to_thread(resolve_execution_selection, store,
+                frame=decode_r4_frame(encoded), candidates=candidates)
+        selection = await resolve()
+        key = ExecutionRuntimeKey(selection.server_id, selection.executor_id,
+                                  selection.binding_id, selection.session_id)
+        journal = await self.ensure_journal()
+        ledger = await self.ensure_ledger()
+        if await resolve() != selection:
+            raise ConnectorError('PROFILE_DRIFT', 'runtime_composition', 'The approved execution selection changed.')
+        existing = self._runtimes.get(key)
+        if existing is not None:
+            if self._execution_selections.get(key) != selection:
+                raise ConnectorError('OPERATION_CONFLICT', 'runtime_composition', 'The runtime has a different opening selection.')
+            return existing
+        async def checked_environment(prepared):
+            if await resolve() != selection:
+                raise ConnectorError('PROFILE_DRIFT', 'runtime_environment', 'The approved execution selection changed.')
+            value = await environment(prepared)
+            if await resolve() != selection:
+                raise ConnectorError('PROFILE_DRIFT', 'runtime_environment', 'The approved execution selection changed.')
+            return value
+        runtime = create_runtime(journal=journal, environment=checked_environment,
+            candidates={selection.candidate.adapter_id: selection.candidate},
+            workspace_roots={selection.workspace_id: selection.workspace_root},
+            native_factory=factory, owned_slot_ledger=ledger)
+        self._runtimes[key] = runtime
+        self._execution_selections[key] = selection
+        return runtime
+
     async def build(self, binding: BindingRecord, *, environment,
                     factory=None, session_id: str | None = None
                     ) -> LocalRuntimeCore:
@@ -319,7 +371,7 @@ class CoreRuntimeHost:
         if server_id is not None:
             return self._runtimes.get(BindingKey(server_id, binding_id))
         matches = [runtime for key, runtime in self._runtimes.items()
-                   if key.binding_id == binding_id]
+                   if isinstance(key, BindingKey) and key.binding_id == binding_id]
         return matches[0] if len(matches) == 1 else None
 
     @property
@@ -355,6 +407,7 @@ class CoreRuntimeHost:
                     resolved = False
             if resolved:
                 del self._runtimes[key]
+                self._execution_selections.pop(key, None)
             else:
                 any_pending = True
         if self._runtimes or not any_pending:
