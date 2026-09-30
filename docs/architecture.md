@@ -179,3 +179,26 @@ approved-profile composition, safe rehydration under a reconciled lease,
 capability renewal and terminal reservation retention/cleanup remain pending.
 The durable capacity is 128 reservations by default and fails before HTTP.
 This is an incremental issuance component, not complete daemon onboarding.
+
+
+### Explicit recovery under applied authority
+
+SessionCapabilityOwner.restore reads the persisted reservation and resolves
+the existing secret only after a fresh GET of capability metadata. The
+metadata client uses a new request nonce, checks exact scope/types, audience,
+actions, same-origin MCP URL, lease ID/serial, and anchors the returned
+remaining lifetime before the HTTP call.
+
+Recovery requires the public Core current-context API to accept the same
+scope and connection. The Server and Core must agree on the applied lease ID
+and serial; the local deadline is the minimum of their deadlines. The owner
+rechecks Core authority after metadata, vault I/O and state commit. It can
+finish recording a vault write whose preceding MATERIAL_RECEIVED record
+survived, but it cannot recreate missing secret material.
+
+Recovery is an explicit host port. It never opens a runtime, installs or
+renews a lease, resends an operation, or replaces a capability. Automatic
+daemon reconciliation and scheduling of recovery/renewal remain pending.
+The earlier issuance-only restart limitation is superseded for callers that
+have already reconciled and installed current authority. Terminal retention
+and approved configuration composition are still required.

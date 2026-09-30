@@ -55,17 +55,18 @@ class SessionCapabilityOwner:
             raise ValueError("The session capability capacity must be positive.")
         self.store, self.vault, self.clock, self.capacity = store, vault, clock, capacity
         self._tasks = {}
+        self._restores = set()
         self._closing = False
 
     @property
     def pending_count(self):
-        return sum(not task.done() for _, task in self._tasks.values())
+        return sum(not task.done() for _, task in self._tasks.values()) + len(self._restores)
 
     async def close(self):
         self._closing = True
         # Cancellation belongs to the observer, never the HTTP/vault producer.
         await asyncio.shield(asyncio.gather(
-            *(task for _, task in self._tasks.values()), return_exceptions=True))
+            *(task for _, task in self._tasks.values()), *tuple(self._restores), return_exceptions=True))
 
     async def reserve(self, http, key, *, frame, audience, actions, require_current):
         """Persist before POST and vault-commit before returning launch material.
@@ -74,27 +75,14 @@ class SessionCapabilityOwner:
         guard. The caller supplies an authenticated, origin-pinned HTTP client
         for this Server and keeps it alive until this owner's close completes.
         """
-        parsed = decode_r4_frame(encode_r4_frame(frame))
-        if (parsed['type'] != 'operation.submit' or parsed['action'] != 'runtime.open'
-                or audience not in ('nexus-mcp-session', 'nexus-native-session')
-                or type(actions) is not tuple or len(actions) > 128
-                or any(type(a) is not str or not 1 <= len(a) <= 160 for a in actions)
-                or len(set(actions)) != len(actions) or not callable(require_current)):
+        parsed, reservation, digest = self._request_identity(frame, audience, actions)
+        if not callable(require_current):
             raise ConnectorError('VALIDATION_ERROR', 'capability_reservation',
-                                 'The session capability reservation is invalid.')
+                                 'A current host authority guard is required.')
         require_current()
         if self._closing:
             raise ConnectorError('CONTROL_DISCONNECTED', 'capability_reservation',
                                  'The session capability owner is shutting down.')
-        # Stable across connection replacement, but never across opening/scope
-        # changes. No secrets, raw paths or launch environment enter this hash.
-        body = {k: v for k, v in parsed.items()
-                if k not in ('connection_id', 'connection_generation')}
-        body.update(audience=audience, actions=sorted(actions))
-        digest = hashlib.sha256(canonical_json(body)).hexdigest()
-        identity = {k: parsed[k] for k in ('server_id', 'executor_id', 'session_id')}
-        identity['audience'] = audience
-        reservation = hashlib.sha256(canonical_json(identity)).hexdigest()
         cached = self._tasks.get(reservation)
         if cached is not None:
             if cached[0] != digest:
@@ -117,7 +105,26 @@ class SessionCapabilityOwner:
                                  'The session capability requires authority renewal.')
         return replace(result, scope=MappingProxyType(dict(result.scope)))
 
-    def _stage(self, frame, audience, reservation, digest):
+    @staticmethod
+    def _request_identity(frame, audience, actions):
+        parsed = decode_r4_frame(encode_r4_frame(frame))
+        if (parsed['type'] != 'operation.submit' or parsed['action'] != 'runtime.open'
+                or audience not in ('nexus-mcp-session', 'nexus-native-session')
+                or type(actions) is not tuple or len(actions) > 128
+                or any(type(a) is not str or not 1 <= len(a) <= 160 for a in actions)
+                or len(set(actions)) != len(actions)):
+            raise ConnectorError('VALIDATION_ERROR', 'capability_reservation',
+                                 'The session capability reservation is invalid.')
+        body = {k: v for k, v in parsed.items()
+                if k not in ('connection_id', 'connection_generation')}
+        body.update(audience=audience, actions=sorted(actions))
+        digest = hashlib.sha256(canonical_json(body)).hexdigest()
+        identity = {k: parsed[k] for k in ('server_id', 'executor_id', 'session_id')}
+        identity['audience'] = audience
+        reservation = hashlib.sha256(canonical_json(identity)).hexdigest()
+        return parsed, reservation, digest
+
+    def _stage(self, frame, audience, reservation, digest, *, create=True):
         result = None
         def stage(state):
             nonlocal result
@@ -137,6 +144,9 @@ class SessionCapabilityOwner:
                     raise ConnectorError('OPERATION_CONFLICT', 'capability_reservation',
                                          'The persisted capability metadata is inconsistent.')
             else:
+                if not create:
+                    raise ConnectorError('CREDENTIAL_MATERIAL_UNAVAILABLE', 'capability_restore',
+                                         'No durable session capability is available.')
                 if len(state.session_capabilities) >= self.capacity:
                     raise ConnectorError('CAPACITY_EXCEEDED', 'capability_reservation',
                                          'The durable capability capacity is exhausted.')
@@ -147,6 +157,76 @@ class SessionCapabilityOwner:
             result = replace(record)
         self.store.update(stage)
         return result
+
+    async def restore(self, http, key, *, frame, audience, actions, runtime, require_current):
+        """Rehydrate vault material under matching Server and Core applied leases.
+
+        This reads authority; it does not reopen a runtime, install a lease,
+        replace a capability or resend an opening. Reconciliation owns those
+        prerequisites. Every observation uses a new correlated metadata read.
+        """
+        parsed, reservation, digest = self._request_identity(frame, audience, actions)
+        if not callable(require_current):
+            raise ConnectorError('VALIDATION_ERROR', 'capability_restore',
+                                 'A current host authority guard is required.')
+        require_current()
+        if self._closing or len(self._restores) >= self.capacity:
+            raise ConnectorError('CAPACITY_EXCEEDED', 'capability_restore',
+                                 'The capability recovery owner is unavailable.')
+        task = asyncio.create_task(self._restore(http, key, parsed, audience, actions,
+            reservation, digest, runtime, require_current), name='session-capability-recovery')
+        self._restores.add(task)
+        def observed(done):
+            self._restores.discard(done)
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(observed)
+        return await asyncio.shield(task)
+
+    async def _restore(self, http, key, frame, audience, actions, reservation, digest, runtime, guard):
+        from ..transport.https_client import R4SessionCapability
+        record = await asyncio.to_thread(self._stage, frame, audience, reservation, digest, create=False)
+        guard()
+        if record.status not in ('STORED', 'MATERIAL_RECEIVED') or not record.capability_id:
+            raise CapabilityMaterialUnavailable('CREDENTIAL_MATERIAL_UNAVAILABLE',
+                'capability_restore', 'Protected session material is unavailable.',
+                capability_id=record.capability_id, recovery_allowed=False)
+        scope = {k: frame[k] for k in ('server_id', 'executor_id', 'binding_id', 'agent_id',
+            'workspace_id', 'workspace_binding_id', 'session_id', 'session_owner_generation',
+            'binding_revision', 'credential_epoch', 'authorization_revision', 'configuration_revision')}
+        def context():
+            guard()
+            return runtime.r4_native_action_context(scope,
+                connection_id=frame['connection_id'], connection_generation=frame['connection_generation'])
+        context()  # Refuse missing, stale or unapplied local authority before HTTP.
+        metadata = await http.describe_r4_session_capability(key, frame=frame,
+            capability_id=record.capability_id, audience=audience, actions=actions)
+        def deadline():
+            current = context()
+            authority = current.r4_authority
+            if (metadata.capability_ref != record.capability_ref or authority is None
+                    or authority.grant_id != frame['grant_id']
+                    or (metadata.lease_id, metadata.lease_serial) != (authority.lease_id, authority.lease_serial)):
+                raise ConnectorError('STALE_GENERATION', 'capability_restore',
+                                     'Server and Core capability authority do not match.')
+            until = min(metadata.deadline_monotonic, current.lease_deadline_monotonic)
+            if until - self.clock() < 1:
+                raise ConnectorError('AUTH_EXPIRED', 'capability_restore',
+                                     'The reconciled capability authority has expired.')
+            return until
+        deadline()
+        material = await asyncio.to_thread(self.vault.resolve, record.secret_handle)
+        if (type(material) is not str or not material.startswith('nxc4_')
+                or not 32 <= len(material) <= 4096):
+            raise ConnectorError('CREDENTIAL_MATERIAL_UNAVAILABLE', 'capability_restore',
+                                 'The protected session material is invalid.')
+        deadline()
+        await asyncio.to_thread(self._record, record, status='STORED',
+            capability_id=metadata.capability_id, capability_ref=metadata.capability_ref)
+        until = deadline()
+        return R4SessionCapability(metadata.capability_id, metadata.capability_ref, material,
+            MappingProxyType(scope), audience, tuple(sorted(actions)),
+            min(120, int(until - self.clock())), until, metadata.mcp_url)
 
     def _record(self, record, *, status, capability_id='', capability_ref='', recovery_allowed=False):
         def commit(state):

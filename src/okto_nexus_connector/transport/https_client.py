@@ -213,6 +213,19 @@ class R4SessionCapability:
     mcp_url: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class R4CapabilityMetadata:
+    capability_id: str
+    capability_ref: str
+    scope: dict[str, object]
+    audience: str
+    actions: tuple[str, ...]
+    deadline_monotonic: float
+    lease_id: str
+    lease_serial: int
+    mcp_url: str | None
+
+
 def origin_of(base_url: str) -> str:
     parts = urlsplit(base_url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -1070,6 +1083,51 @@ class NexusHTTPClient:
             raise uncertain() from None
         except (ValueError, UnicodeError, RecursionError):
             raise uncertain() from None
+
+    async def describe_r4_session_capability(self, key: str, *, frame: dict,
+            capability_id: str, audience: str, actions: tuple[str, ...]) -> R4CapabilityMetadata:
+        """Read current metadata with a fresh nonce; never mint or return material."""
+        import secrets
+        from urllib.parse import quote, urlencode
+        from nexus_connector_core import decode_r4_frame, encode_r4_frame
+        frame = decode_r4_frame(encode_r4_frame(frame))
+        if (frame['type'] != 'operation.submit' or frame['action'] != 'runtime.open'
+                or type(capability_id) is not str or not 1 <= len(capability_id) <= 160
+                or audience not in ('nexus-mcp-session', 'nexus-native-session')
+                or type(actions) is not tuple or len(actions) > 128
+                or any(type(a) is not str or not 1 <= len(a) <= 160 for a in actions)
+                or len(set(actions)) != len(actions)):
+            raise ConnectorError('VALIDATION_ERROR', 'capability_metadata',
+                                 'Invalid session capability metadata request.')
+        scope = {k: frame[k] for k in ('server_id', 'executor_id', 'binding_id', 'agent_id',
+            'workspace_id', 'workspace_binding_id', 'session_id', 'session_owner_generation',
+            'binding_revision', 'credential_epoch', 'authorization_revision', 'configuration_revision')}
+        nonce = 'capmeta_' + secrets.token_hex(16)
+        query = urlencode(dict(binding_id=scope['binding_id'], capability_id=capability_id, request_id=nonce))
+        sent_at = time.monotonic()
+        payload = await self._request('GET',
+            '/v1/runtime/sessions/' + quote(scope['session_id'], safe='') + '/capability?' + query,
+            key=key, require_revision=True)
+        prefix = 'mcp-cap:' if audience == 'nexus-mcp-session' else 'native-cap:'
+        if (set(payload) != {'request_id', 'capability_id', 'capability_ref', 'scope',
+                'audience', 'actions', 'expires_in', 'lease_id', 'lease_serial', 'mcp_url'}
+                or payload.get('request_id') != nonce or payload.get('capability_id') != capability_id
+                or payload.get('capability_ref') != prefix + capability_id
+                or payload.get('scope') != scope
+                or any(type(payload['scope'].get(k)) is not type(v) for k, v in scope.items())
+                or payload.get('audience') != audience or payload.get('actions') != sorted(actions)
+                or type(payload.get('expires_in')) is not int or not 1 <= payload['expires_in'] <= 120
+                or type(payload.get('lease_id')) is not str or not 1 <= len(payload['lease_id']) <= 160
+                or type(payload.get('lease_serial')) is not int or payload['lease_serial'] < 1
+                or payload.get('mcp_url') != (self.base_url + '/mcp' if audience == 'nexus-mcp-session' else None)):
+            raise ConnectorError('VERSION_INCOMPATIBLE', 'capability_metadata',
+                                 'The Server returned invalid capability metadata.')
+        deadline = sent_at + payload['expires_in'] - .5
+        if time.monotonic() >= deadline:
+            raise ConnectorError('AUTH_EXPIRED', 'capability_metadata',
+                                 'The capability metadata response arrived too late.')
+        return R4CapabilityMetadata(capability_id, payload['capability_ref'], scope, audience,
+            tuple(payload['actions']), deadline, payload['lease_id'], payload['lease_serial'], payload['mcp_url'])
 
     async def request_r4_session_capability(
             self, key: str, *, frame: dict, capability_request_id: str,
