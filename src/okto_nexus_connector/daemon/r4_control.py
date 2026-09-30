@@ -274,7 +274,9 @@ class R4DaemonControl:
                     raise ConnectorError('CONTROL_DISCONNECTED', 'r4_startup', 'The R4 control link was lost.')
             finally:
                 self._retained_lanes.update(self.execution.lanes)
-                await self.execution.close()
+                await self.execution.close(
+                    preserve_leases=not self._stopped.is_set() and not self.connection.online,
+                    stop_event=self._stopped)
                 self.execution = None
 
     async def _run(self):

@@ -134,18 +134,35 @@ class R4DaemonExecution:
                 publish_receipt=self._publish, native_factory=self.native_factory)
             self.owner.start()
 
-    async def close(self):
+    async def close(self, *, preserve_leases=False, stop_event=None):
         if self._close_task is None:
             self.closing = True
-            self._close_task = asyncio.create_task(self._close(), name="r4-execution-cleanup")
+            self._close_task = asyncio.create_task(
+                self._close(preserve_leases=preserve_leases, stop_event=stop_event),
+                name="r4-execution-cleanup")
         await asyncio.shield(self._close_task)
 
-    async def _close(self):
+    async def _close(self, *, preserve_leases=False, stop_event=None):
         self.closing = True
         await self.connection.close()
         if self.owner is not None:
             await self.owner.stop()
         await self.capabilities.close()
+        if preserve_leases:
+            self.control.cleanup_pending = True
+            stop_event = stop_event if stop_event is not None else asyncio.Event()
+            while True:
+                try:
+                    await self.host.wait_executor_leases(
+                        server_id=self.control.server_id, executor_id=self.control.executor_id,
+                        stop_event=stop_event)
+                    break
+                except Exception:
+                    # Missing observation is not permission to shorten the
+                    # already-granted lease. Keep the same host and retry.
+                    if stop_event.is_set():
+                        break
+                    await asyncio.sleep(0.1)
         # Keep the HTTP client and Core stores owned while late native tool
         # producers settle. The caller retains this lifecycle task.
         while True:

@@ -409,6 +409,36 @@ class CoreRuntimeHost:
         owner = self._native_action_owners.get(key)
         return owner is None or await owner.close(timeout_seconds=timeout_seconds)
 
+    async def wait_executor_leases(self, *, server_id, executor_id, stop_event):
+        """Retain disconnected runtimes until Core observes lease expiry.
+
+        This is observation only: no lease is renewed and no runtime is
+        recreated. An explicit daemon stop can proceed to normal shutdown.
+        Storage/inspection failures propagate while ownership stays retained.
+        """
+        from nexus_connector_core import SessionKey
+
+        while not stop_event.is_set():
+            selected = [(key, runtime) for key, runtime in self._runtimes.items()
+                        if isinstance(key, ExecutionRuntimeKey) and
+                        (key.server_id, key.executor_id) == (server_id, executor_id)]
+            if not selected:
+                return
+            snapshots = await asyncio.gather(*[
+                runtime.inspect(SessionKey(key.server_id, key.executor_id, key.session_id))
+                for key, runtime in selected], return_exceptions=True)
+            for snapshot in snapshots:
+                if isinstance(snapshot, BaseException):
+                    raise snapshot
+            if not any(snapshot.lease_state not in ("EXPIRED", "REVOKED", "CLOSED")
+                       and snapshot.ownership != "released"
+                       for snapshot in snapshots):
+                return
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=0.1)
+            except TimeoutError:
+                pass
+
     async def shutdown_executor(self, *, server_id, executor_id):
         return await self.shutdown_all(_scope=(server_id, executor_id))
 

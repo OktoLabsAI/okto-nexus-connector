@@ -180,3 +180,122 @@ async def test_each_lane_uses_its_agent_identity_without_cross_server_fallback(l
     assert keys == ["agent-key", "second-agent-key"]
     assert [(row["binding_id"], row["agent_id"]) for row in attached] == [
         ("binding", "agent"), ("second", "other")]
+
+@pytest.mark.parametrize("selection", [True], indirect=True)
+@pytest.mark.parametrize("finish", ["expiry", "explicit_stop", "inspection_failure"])
+async def test_disconnected_cleanup_preserves_the_installed_core_lease(lifecycle, monkeypatch, finish):
+    from nexus_connector_core import R4_PREVIEW_REVISION, SessionKey
+
+    owner, _, _, frame, native, _, published, _ = lifecycle
+    await owner.sync()
+    async def lease(runtime, *, scope, grant_id):
+        attempt = await runtime.begin_r4_lease_request(scope=scope, grant_id=grant_id,
+            connection_id=owner.connection.state.connection_id,
+            connection_generation=owner.connection.state.connection_generation, purpose="initial")
+        return await runtime.install_r4_lease(attempt, dict(protocol_major=1,
+            contract_revision=R4_PREVIEW_REVISION, type="lease.granted",
+            request_id=attempt.request_id, grant_id=grant_id, scope=scope,
+            lease_id="lease", lease_serial=1, valid_for_ms=1500,
+            allowed_actions=["runtime.open", "turn.submit", "runtime.close"]))
+    monkeypatch.setattr(owner.connection, "apply_lease", lease)
+    await owner.connection.emit(frame)
+    await observed(published, owner.owner)
+    runtime = next(iter(owner.host._runtimes.values()))
+    session = SessionKey(frame["server_id"], frame["executor_id"], frame["session_id"])
+    assert (await runtime.inspect(session)).lease_state == "ACTIVE"
+    inspected = asyncio.Event()
+    inspect = runtime.inspect
+    attempts = []
+    async def inspection(key):
+        attempts.append(key)
+        inspected.set()
+        if finish == "inspection_failure" and len(attempts) == 1:
+            raise OSError("Injected ownership observation failure.")
+        return await inspect(key)
+    monkeypatch.setattr(runtime, "inspect", inspection)
+    stop = asyncio.Event()
+    closing = asyncio.create_task(owner.close(preserve_leases=True, stop_event=stop))
+    try:
+        await asyncio.wait_for(inspected.wait(), 3)
+        assert not native.native.stopped
+        assert owner.control.cleanup_pending and not closing.done()
+        assert not owner.connection.online
+        assert owner.host._journal is not None and len(native.opened) == 1
+        if finish == "explicit_stop":
+            closing.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await closing
+            assert not owner._close_task.done()
+            stop.set()
+        await asyncio.wait_for(owner.close(), 5)
+        assert native.native.stopped and not owner.control.cleanup_pending
+        assert len(native.opened) == 1 and not native.native.sent
+        if finish == "inspection_failure":
+            assert len(attempts) > 1
+    finally:
+        stop.set()
+        await owner.close()
+
+
+async def test_lease_wait_observes_only_the_selected_executor(tmp_path):
+    from nexus_connector_core import RuntimeSnapshot
+
+    host = CoreRuntimeHost(tmp_path, None)
+    class Selected:
+        async def inspect(self, session):
+            assert session.server_id == "selected"
+            return RuntimeSnapshot(session.session_id, "RUNNING", "IDLE", "owned", 0, "EXPIRED")
+    class Foreign:
+        async def inspect(self, session):
+            raise AssertionError("An unrelated executor was inspected.")
+    selected = ExecutionRuntimeKey("selected", "exe", "binding", "session")
+    foreign = ExecutionRuntimeKey("foreign", "exe", "binding", "session")
+    host._runtimes.update({selected: Selected(), foreign: Foreign()})
+    await host.wait_executor_leases(server_id="selected", executor_id="exe", stop_event=asyncio.Event())
+    assert len(host._runtimes) == 2
+
+
+async def test_unknown_lease_observation_does_not_authorize_early_cleanup(tmp_path):
+    from nexus_connector_core import RuntimeSnapshot
+    host = CoreRuntimeHost(tmp_path, None)
+    entered = asyncio.Event()
+    state = ["UNKNOWN"]
+    class Runtime:
+        async def inspect(self, session):
+            entered.set()
+            return RuntimeSnapshot(session.session_id, "UNKNOWN", "UNKNOWN", "unknown", 0, state[0])
+    host._runtimes[ExecutionRuntimeKey("srv", "exe", "binding", "session")] = Runtime()
+    stop = asyncio.Event()
+    waiter = asyncio.create_task(host.wait_executor_leases(server_id="srv", executor_id="exe", stop_event=stop))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert not waiter.done()
+        state[0] = "EXPIRED"
+        await asyncio.wait_for(waiter, 2)
+    finally:
+        stop.set()
+        await waiter
+
+
+async def test_failed_inspection_keeps_other_started_inspections_owned(tmp_path):
+    host = CoreRuntimeHost(tmp_path, None)
+    entered, release = asyncio.Event(), asyncio.Event()
+    class Failed:
+        async def inspect(self, session):
+            raise OSError("Injected failed inspection.")
+    class Pending:
+        async def inspect(self, session):
+            entered.set()
+            await release.wait()
+            raise OSError("Injected pending inspection completion.")
+    host._runtimes[ExecutionRuntimeKey("srv", "exe", "binding", "one")] = Failed()
+    host._runtimes[ExecutionRuntimeKey("srv", "exe", "binding", "two")] = Pending()
+    waiter = asyncio.create_task(host.wait_executor_leases(
+        server_id="srv", executor_id="exe", stop_event=asyncio.Event()))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert not waiter.done()
+    finally:
+        release.set()
+        with pytest.raises(OSError):
+            await waiter
