@@ -244,7 +244,8 @@ class R4DaemonControl:
             from ..services.r4_publications import recover_publications
             recovered_lanes = await recover_publications(self.store, self.vault, http,
                 server_id=self.server_id, executor_id=self.executor_id,
-                require_current=lambda: self._require(snapshot), clock=self.clock)
+                require_current=lambda: self._require(snapshot), clock=self.clock,
+                journal=await self.host.ensure_history_journal())
             remaining = bootstrap.deadline_monotonic - self.clock()
             if remaining <= 0:
                 raise ConnectorError('CONTROL_DISCONNECTED', 'r4_startup', 'The bootstrap ticket expired.')

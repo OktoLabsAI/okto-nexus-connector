@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import sqlite3
 
-from nexus_connector_core import decode_r4_frame, encode_r4_frame
+from nexus_connector_core import decode_r4_frame, encode_r4_frame, validate_r4_receipt_binding
 from nexus_connector_core.protocol import canonical_json
 
 from ..errors import ConnectorError
@@ -43,14 +43,16 @@ class R4PublicationStore:
             connection.execute('PRAGMA max_page_count=65536')
             connection.execute('BEGIN IMMEDIATE')
             version = connection.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise ConnectorError('VERSION_INCOMPATIBLE', 'r4_publication',
                                      'The publication store requires a newer Connector.')
             connection.execute('CREATE TABLE IF NOT EXISTS publications ('
                 'server_id TEXT NOT NULL, executor_id TEXT NOT NULL, operation_id TEXT NOT NULL,'
                 'metadata TEXT NOT NULL, receipt TEXT, digest TEXT,'
                 'PRIMARY KEY(server_id,executor_id,operation_id))')
-            connection.execute('PRAGMA user_version=1')
+            if version < 2:
+                connection.execute('ALTER TABLE publications ADD COLUMN projection_binding TEXT')
+            connection.execute('PRAGMA user_version=2')
             yield connection
             connection.commit()
         except (OSError, sqlite3.Error, ValueError, TypeError, KeyError) as error:
@@ -99,6 +101,44 @@ class R4PublicationStore:
                                      'The receipt does not match its publication obligation.')
             conn.execute('UPDATE publications SET receipt=?,digest=? WHERE '
                          'server_id=? AND executor_id=? AND operation_id=?', (raw, digest, *key))
+
+    def bind(self, binding):
+        binding = validate_r4_receipt_binding(binding)
+        source = binding['source']
+        raw = canonical_json(binding).decode()
+        with self._transaction() as conn:
+            key = tuple(source[k] for k in _KEY)
+            row = conn.execute('SELECT metadata,projection_binding FROM publications WHERE '
+                               'server_id=? AND executor_id=? AND operation_id=?', key).fetchone()
+            if (row is None or json.loads(row['metadata'])['action'] != binding['action'] or
+                    any(json.loads(row['metadata'])[k] != source[k] for k in _PROVENANCE) or
+                    row['projection_binding'] not in (None, raw)):
+                raise ConnectorError('OPERATION_CONFLICT', 'r4_publication',
+                                     'The Core receipt binding conflicts with its reserved operation.')
+            conn.execute('UPDATE publications SET projection_binding=? WHERE '
+                         'server_id=? AND executor_id=? AND operation_id=?', (raw, *key))
+
+    def unprojected(self, server_id, executor_id, *, after='', limit=128):
+        if type(limit) is not int or not 1 <= limit <= 256 or type(after) is not str:
+            raise ValueError('Invalid publication page cursor.')
+        with self._transaction() as conn:
+            rows = conn.execute('SELECT operation_id,metadata,projection_binding FROM publications '
+                'WHERE server_id=? AND executor_id=? AND operation_id>? AND receipt IS NULL '
+                'AND projection_binding IS NOT NULL ORDER BY operation_id LIMIT ?',
+                (server_id, executor_id, after, limit)).fetchall()
+            result = []
+            for row in rows:
+                binding = validate_r4_receipt_binding(json.loads(row['projection_binding']))
+                source = binding['source']
+                metadata = json.loads(row['metadata'])
+                if ((source['server_id'], source['executor_id'], source['operation_id']) !=
+                        (server_id, executor_id, row['operation_id']) or
+                        any(metadata[k] != source[k] for k in _PROVENANCE) or
+                        metadata['action'] != binding['action']):
+                    raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_publication',
+                                         'The stored Core receipt binding has inconsistent provenance.')
+                result.append(binding)
+            return result
 
     def acknowledge(self, frame):
         frame = self._frame(frame, 'operation.receipt')

@@ -86,6 +86,79 @@ async def test_failed_reservation_never_reaches_native_open(execution, monkeypat
     assert not native.opened and connection.lease_count == 0
 
 
+async def test_failed_binding_commit_never_reaches_native_open(execution, monkeypatch):
+    owner, connection, native, _, opening = execution
+    def unavailable(binding):
+        raise ConnectorError('JOURNAL_UNAVAILABLE', 'test', 'The disk is unavailable.')
+    monkeypatch.setattr(owner.publications, 'bind', unavailable)
+    await connection.emit(opening)
+    await failed(owner)
+    assert not native.opened
+    assert owner.publications.pending(opening['server_id'], opening['executor_id'])
+
+
+def test_schema_one_pending_receipt_migrates_without_inventing_hash_binding(selection):
+    from nexus_connector_core.protocol import canonical_json
+    from okto_nexus_connector.storage.r4_publications import _PROVENANCE
+    state, _, _, opening, *_ = selection
+    store = R4PublicationStore.for_state(state)
+    with sqlite3.connect(store.path) as conn:
+        conn.execute('CREATE TABLE publications (server_id TEXT,executor_id TEXT,operation_id TEXT,'
+                     'metadata TEXT,receipt TEXT,digest TEXT,PRIMARY KEY(server_id,executor_id,operation_id))')
+        conn.execute('PRAGMA user_version=1')
+        conn.execute('INSERT INTO publications(server_id,executor_id,operation_id,metadata) VALUES (?,?,?,?)',
+                     (opening['server_id'], opening['executor_id'], opening['operation_id'],
+                      canonical_json({k: opening[k] for k in (*_PROVENANCE, 'action')}).decode()))
+    assert store.pending(opening['server_id'], opening['executor_id'])
+    assert store.unprojected(opening['server_id'], opening['executor_id']) == []
+    store.record(receipt(opening))
+    assert store.ready(opening['server_id'], opening['executor_id']) == [receipt(opening)]
+
+
+@pytest.mark.parametrize('selection', [True], indirect=True)
+async def test_recover_after_core_commit_before_wire_projection(lifecycle, monkeypatch):
+    owner, http, state, frame, native, _, published, _ = lifecycle
+    await owner.sync()
+    def failed_projection_write(frame):
+        raise OSError('The process lost the publication write.')
+    monkeypatch.setattr(owner.owner.publications, 'record', failed_projection_write)
+    await owner.connection.emit(frame)
+    await failed(owner.owner)
+    journal = R4PublicationStore.for_state(state)
+    assert not journal.ready('srv', 'exe') and len(journal.unprojected('srv', 'exe')) == 1
+    assert len(native.opened) == 1 and published.empty()
+    async def current():
+        pass
+    await recover_publications(state, owner.vault, http, server_id='srv', executor_id='exe',
+        require_current=current, journal=await owner.host.ensure_history_journal())
+    recovered = published.get_nowait()
+    assert recovered['operation_id'] == frame['operation_id'] and recovered['stage'] == 'SUBMITTED'
+    assert recovered['intent_hash'] == frame['intent_hash']
+    assert len(native.opened) == 1 and not journal.pending('srv', 'exe')
+
+
+@pytest.mark.parametrize('selection', [True], indirect=True)
+async def test_binding_without_core_admission_stays_pending(lifecycle, monkeypatch):
+    owner, http, state, frame, native, _, published, keys = lifecycle
+    await owner.sync()
+    persist = owner.owner.publications.bind
+    def interrupted(binding):
+        persist(binding)
+        raise OSError('The process stopped before Core admission.')
+    monkeypatch.setattr(owner.owner.publications, 'bind', interrupted)
+    await owner.connection.emit(frame)
+    await failed(owner.owner)
+    journal = R4PublicationStore.for_state(state)
+    assert len(journal.unprojected('srv', 'exe')) == 1
+    before = len(keys)
+    async def current():
+        pass
+    assert await recover_publications(state, owner.vault, http, server_id='srv', executor_id='exe',
+        require_current=current, journal=await owner.host.ensure_history_journal()) == {}
+    assert len(keys) == before and not native.opened and published.empty()
+    assert journal.pending('srv', 'exe') and not journal.ready('srv', 'exe')
+
+
 async def test_failed_receipt_write_retains_reservation_and_never_publishes(execution, monkeypatch):
     owner, connection, native, published, opening = execution
     def unavailable(frame):

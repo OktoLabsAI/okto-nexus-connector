@@ -15,6 +15,7 @@ from nexus_connector_core import (
     project_r4_open_receipt, project_r4_turn_receipt, project_r4_steer_receipt,
     project_r4_interrupt_receipt, project_r4_close_receipt,
     project_r4_decision_receipt, r4_close_operation, r4_native_decision_operation,
+    prepare_r4_receipt_binding,
 )
 
 from ..errors import ConnectorError
@@ -123,6 +124,12 @@ class R4ExecutionOwner:
             connection_id=self.connection.state.connection_id,
             connection_generation=self.connection.state.connection_generation)
 
+    async def _bind(self, item, runtime, context, **options):
+        binding = prepare_r4_receipt_binding(item.frame, context, **options)
+        await asyncio.to_thread(self.publications.bind, binding)
+        # Persistence can yield while the lane, link or lease is superseded.
+        return self._context(item, runtime)
+
     async def _produce(self, item):
         try:
             await asyncio.to_thread(self.publications.reserve, self.connection.require_current(item))
@@ -192,6 +199,8 @@ class R4ExecutionOwner:
             # prepare and environment discovery may yield. The current lane
             # and installed authority are checked again before open.
             context = self._context(item, runtime)
+            context = await self._bind(item, runtime, context, prepared=prepared,
+                                       stream_epoch=session.stream_epoch)
             receipt = await runtime.open(OpenOperation(frame['operation_id'], frame['session_id'],
                                                        session.stream_epoch, prepared), context)
             return project_r4_open_receipt(frame, receipt, context, prepared,
@@ -200,6 +209,8 @@ class R4ExecutionOwner:
             raise CoreError('SESSION_UNKNOWN', 'r4_execution')
         runtime = session.runtime
         context = self._context(item, runtime)
+        if action not in ('approval.decide', 'input.provide'):
+            context = await self._bind(item, runtime, context)
         if action == 'turn.submit':
             receipt = await runtime.submit(TurnOperation(frame['operation_id'], frame['session_id'],
                 payload['text'], frame.get('expected_turn_id')), context)
@@ -224,6 +235,7 @@ class R4ExecutionOwner:
                 response = await self.response_resolver(item.frame)
                 context = self._context(item, runtime)
             operation = r4_native_decision_operation(frame, resolved_response=response)
+            context = await self._bind(item, runtime, context, applied_operation=operation)
             receipt = await runtime.decide_native_approval(operation, context)
             return project_r4_decision_receipt(frame, receipt, context, operation, receipt_revision=1)
         else:

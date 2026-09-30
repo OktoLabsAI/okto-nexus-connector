@@ -4,6 +4,8 @@ from dataclasses import dataclass
 import secrets
 import time
 
+from nexus_connector_core import OperationKey, project_r4_bound_receipt
+
 from ..errors import ConnectorError
 from ..storage.r4_publications import R4PublicationStore
 from .executor_registration import _identity, _profile
@@ -32,7 +34,7 @@ def _binding(store, http, server_id, executor_id, frame):
 
 
 async def recover_publications(store, vault, http, *, server_id, executor_id,
-                               require_current, clock=time.monotonic):
+                               require_current, clock=time.monotonic, journal=None):
     """Drain bounded ready pages before control negotiation, without Core effects.
 
     Unprojected reservations remain pending. A live previous ticket can refuse
@@ -40,6 +42,23 @@ async def recover_publications(store, vault, http, *, server_id, executor_id,
     authority can be reused for lane attachment on this same startup attempt.
     """
     publications = R4PublicationStore.for_state(store)
+    if journal is not None:
+        after = ''
+        for _ in range(32):
+            await require_current()
+            bindings = await asyncio.to_thread(publications.unprojected,
+                                               server_id, executor_id, after=after)
+            if not bindings:
+                break
+            for binding in bindings:
+                source = binding['source']
+                key = OperationKey(server_id, executor_id, source['operation_id'])
+                fact = await journal.get_receipt(key)
+                if fact is not None:
+                    frame = project_r4_bound_receipt(binding, fact, key=key, receipt_revision=1)
+                    await asyncio.to_thread(publications.record, frame)
+                # Missing receipts remain unresolved; never infer NOT_SENT.
+                after = source['operation_id']
     authorities = {}
     for _ in range(32):
         await require_current()
