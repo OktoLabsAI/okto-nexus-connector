@@ -409,7 +409,10 @@ class CoreRuntimeHost:
         owner = self._native_action_owners.get(key)
         return owner is None or await owner.close(timeout_seconds=timeout_seconds)
 
-    async def shutdown_all(self) -> list[tuple[str, str]]:
+    async def shutdown_executor(self, *, server_id, executor_id):
+        return await self.shutdown_all(_scope=(server_id, executor_id))
+
+    async def shutdown_all(self, *, _scope=None) -> list[tuple[str, str]]:
         """Bounded shutdown; unknown outcomes are never discarded.
 
         CN1/A08+CN-05.03: an instance whose report leaves any session
@@ -425,6 +428,9 @@ class CoreRuntimeHost:
         outcomes: list[tuple[str, str]] = []
         any_pending = False
         for key, runtime in list(self._runtimes.items()):
+            if _scope is not None and (not isinstance(key, ExecutionRuntimeKey) or
+                    (key.server_id, key.executor_id) != _scope):
+                continue
             owner = self._native_action_owners.get(key)
             if owner is not None:
                 await owner.close(timeout_seconds=0)

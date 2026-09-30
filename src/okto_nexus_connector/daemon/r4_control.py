@@ -48,7 +48,7 @@ class R4DaemonControl:
 
     Stop joins the owned task rather than cancelling a registration or state
     write. Each reconnect obtains a fresh process-local bootstrap. No legacy
-    identity fallback, lane attachment or runtime effect is implied here.
+    identity fallback is used; approved lanes and consumers are composed after negotiation.
     """
 
     def __init__(self, store, vault, host, server_id, *, http_factory=NexusHTTPClient,
@@ -63,6 +63,7 @@ class R4DaemonControl:
         self.registration = ExecutorRegistrationService(store, vault, http_factory=http_factory, clock=clock)
         self.boot_id = 'boot_' + secrets.token_hex(16)
         self.connection = None
+        self.execution = None
         self.phase, self.error_code = 'STOPPED', None
         self.executor_id = ''
         self.inventory_revision = None
@@ -91,7 +92,7 @@ class R4DaemonControl:
         return dict(state=self.phase, executor_id=self.executor_id,
             control_ready=bool(connection is not None and connection.online and
                                connection.state.control_ready and self.phase == 'CONTROL_READY'),
-            execution_ready=False, error_code=self.error_code,
+            execution_ready=bool(self.execution is not None and self.execution.ready), error_code=self.error_code,
             recovery_required=self._recovery_error is not None, cleanup_pending=self.cleanup_pending,
             publication_sequence=self.publication_sequence, inventory_revision=self.inventory_revision,
             connection_generation=connection.state.connection_generation if connection else None,
@@ -248,19 +249,27 @@ class R4DaemonControl:
             await self._require(snapshot)
             self.phase = 'PUBLISHING_INVENTORY'
             refresh_at = await self._publish(http, bootstrap, snapshot)
-            self.phase, self.error_code = 'CONTROL_READY', None
-            renew_at = self.clock() + max(0, bootstrap.deadline_monotonic - self.clock()) * 0.7
-            while not self._stopped.is_set() and self.connection.online:
-                await self._require(snapshot)
-                if self.clock() >= renew_at:
-                    # A bootstrap cannot rotate an attached lane or renew a
-                    # runtime lease. Reconnect control with a fresh proof.
-                    return
-                if self.clock() >= refresh_at:
-                    refresh_at = await self._publish(http, bootstrap, snapshot)
-                await self._wait(min(self.poll_seconds, max(0.001, renew_at - self.clock())))
-            if not self._stopped.is_set():
-                raise ConnectorError('CONTROL_DISCONNECTED', 'r4_startup', 'The R4 control link was lost.')
+            from .r4_execution import R4DaemonExecution
+            self.execution = R4DaemonExecution(self, http)
+            try:
+                await self.execution.sync()
+                self.phase, self.error_code = 'CONTROL_READY', None
+                renew_at = self.clock() + max(0, bootstrap.deadline_monotonic - self.clock()) * 0.7
+                while not self._stopped.is_set() and self.connection.online:
+                    await self._require(snapshot)
+                    await self.execution.sync()
+                    if self.clock() >= renew_at:
+                        # A bootstrap cannot rotate an attached lane or renew a
+                        # runtime lease. Reconnect control with a fresh proof.
+                        return
+                    if self.clock() >= refresh_at:
+                        refresh_at = await self._publish(http, bootstrap, snapshot)
+                    await self._wait(min(self.poll_seconds, max(0.001, renew_at - self.clock())))
+                if not self._stopped.is_set():
+                    raise ConnectorError('CONTROL_DISCONNECTED', 'r4_startup', 'The R4 control link was lost.')
+            finally:
+                await self.execution.close()
+                self.execution = None
 
     async def _run(self):
         failures = 0
