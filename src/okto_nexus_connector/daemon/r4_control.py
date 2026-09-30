@@ -171,6 +171,11 @@ class R4DaemonControl:
         """Only prove an empty namespace, using public durable Core readers."""
         if (request['server_id'] != self.server_id or request['executor_id'] != self.executor_id):
             raise ConnectorError('SCOPE_MISMATCH', 'r4_reconcile', 'The reconciliation scope changed.')
+        from ..storage.r4_publications import R4PublicationStore
+        if await asyncio.to_thread(R4PublicationStore.for_state(self.store).pending,
+                                   self.server_id, self.executor_id):
+            raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile',
+                                 'Durable publication obligations require recovery.')
         if (request['operation_ids'] or request['session_ids'] or request.get('stream_watermarks') or
                 request['cursor'] is not None):
             raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile',
@@ -236,6 +241,10 @@ class R4DaemonControl:
                 raise ConnectorError('VERSION_INCOMPATIBLE', 'r4_startup',
                                      'The Server has not qualified remote R4 execution.')
             await self._require(snapshot)
+            from ..services.r4_publications import recover_publications
+            recovered_lanes = await recover_publications(self.store, self.vault, http,
+                server_id=self.server_id, executor_id=self.executor_id,
+                require_current=lambda: self._require(snapshot), clock=self.clock)
             remaining = bootstrap.deadline_monotonic - self.clock()
             if remaining <= 0:
                 raise ConnectorError('CONTROL_DISCONNECTED', 'r4_startup', 'The bootstrap ticket expired.')
@@ -250,7 +259,7 @@ class R4DaemonControl:
             self.phase = 'PUBLISHING_INVENTORY'
             refresh_at = await self._publish(http, bootstrap, snapshot)
             from .r4_execution import R4DaemonExecution
-            self.execution = R4DaemonExecution(self, http)
+            self.execution = R4DaemonExecution(self, http, recovered_lanes=recovered_lanes)
             try:
                 await self.execution.sync()
                 self.phase, self.error_code = 'CONTROL_READY', None

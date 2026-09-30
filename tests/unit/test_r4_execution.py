@@ -163,6 +163,10 @@ async def test_control_and_cancelled_stop_do_not_abandon_receipt_producer(execut
         await asyncio.wait_for(entered.wait(), 3)
         await connection.emit(operation(opening, 'turn.interrupt', {'reason': 'Operator requested stop.'}))
         assert (await observed(receipts, owner))['operation_id'] == 'turn.interrupt'
+        # Publication callback completion precedes the durable local ACK.
+        async with asyncio.timeout(3):
+            while any(item.frame['action'] == 'turn.interrupt' for item in connection.reservations.values()):
+                await asyncio.sleep(.01)
         stopping = asyncio.create_task(owner.stop())
         await asyncio.sleep(0)
         stopping.cancel()

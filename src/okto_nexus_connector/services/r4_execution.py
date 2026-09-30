@@ -18,6 +18,7 @@ from nexus_connector_core import (
 )
 
 from ..errors import ConnectorError
+from ..storage.r4_publications import R4PublicationStore
 from .core_host import ExecutionRuntimeKey
 
 
@@ -58,6 +59,7 @@ class R4ExecutionOwner:
         if type(max_sessions) is not int or max_sessions <= 0:
             raise ValueError('Invalid execution session capacity.')
         self.connection, self.store, self.host = connection, store, host
+        self.publications = R4PublicationStore.for_state(store)
         self.candidate_provider, self.launch_provider = candidate_provider, launch_provider
         self.publish_receipt = publish_receipt
         self.native_factory, self.response_resolver = native_factory, response_resolver
@@ -123,10 +125,13 @@ class R4ExecutionOwner:
 
     async def _produce(self, item):
         try:
+            await asyncio.to_thread(self.publications.reserve, self.connection.require_current(item))
             receipt = await self._execute(item)
             # Once Core has produced a fact, loss of lane/link does not undo
             # it. Publish that same fact; never fabricate a second operation.
+            await asyncio.to_thread(self.publications.record, receipt)
             await self.publish_receipt(receipt)
+            await asyncio.to_thread(self.publications.acknowledge, receipt)
         except Exception as error:
             if self.failure is None:
                 self.failure = error

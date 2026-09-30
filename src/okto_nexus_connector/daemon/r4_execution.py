@@ -19,13 +19,14 @@ class _Lane:
 
 
 class R4DaemonExecution:
-    def __init__(self, control, http, *, native_factory=None, clock=time.monotonic):
+    def __init__(self, control, http, *, native_factory=None, clock=time.monotonic, recovered_lanes=None):
         self.control, self.http, self.clock = control, http, clock
         self.store, self.vault, self.host = control.store, control.vault, control.host
         self.connection = control.connection
         self.native_factory = native_factory
         self.capabilities = SessionCapabilityOwner(self.store, self.vault, clock=clock)
         self.lanes = {}
+        self.recovered_lanes = dict(recovered_lanes or {})
         self.owner = None
         self.closing = False
         self._close_task = None
@@ -100,18 +101,26 @@ class R4DaemonExecution:
         for binding_id, (binding, identity) in records.items():
             if binding_id in self.lanes:
                 continue
-            key = await asyncio.to_thread(self.vault.resolve, identity.secret_handle)
-            if (await asyncio.to_thread(self._bindings)).get(binding_id) != (binding, identity):
-                raise ConnectorError("STALE_GENERATION", "r4_lanes", "The approved identity changed.")
-            started = self.clock()
-            ticket = await self.http.request_r4_binding_ticket(key, binding_id=binding_id,
-                client_intent_id="lane_" + secrets.token_hex(16),
-                credential_request_id="credential_" + secrets.token_hex(16),
-                scopes=("lane:attach", "lease:request", "receipt:publish"))
+            recovered = self.recovered_lanes.pop(binding_id, None)
+            if recovered is not None:
+                if (recovered.binding, recovered.identity) != (binding, identity):
+                    raise ConnectorError("STALE_GENERATION", "r4_lanes", "The recovered authority changed.")
+                ticket = recovered.ticket
+                deadline = recovered.deadline
+            else:
+                key = await asyncio.to_thread(self.vault.resolve, identity.secret_handle)
+                if (await asyncio.to_thread(self._bindings)).get(binding_id) != (binding, identity):
+                    raise ConnectorError("STALE_GENERATION", "r4_lanes", "The approved identity changed.")
+                started = self.clock()
+                ticket = await self.http.request_r4_binding_ticket(key, binding_id=binding_id,
+                    client_intent_id="lane_" + secrets.token_hex(16),
+                    credential_request_id="credential_" + secrets.token_hex(16),
+                    scopes=("lane:attach", "lease:request", "receipt:publish"))
+                deadline = started + ticket.expires_in
             if (ticket.executor_id != binding.executor_id or ticket.agent_id != binding.agent_id
                     or ticket.credential_epoch != identity.credential_epoch
                     or ticket.authorization_revision != binding.authorization_revision
-                    or self.clock() >= started + ticket.expires_in
+                    or self.clock() >= deadline
                     or (await asyncio.to_thread(self._bindings)).get(binding_id) != (binding, identity)):
                 raise ConnectorError("STALE_GENERATION", "r4_lanes", "The returned lane authority is stale.")
             await self.connection.attach_binding(binding_id=binding_id, agent_id=binding.agent_id,
@@ -120,7 +129,7 @@ class R4DaemonExecution:
                 configuration_revision=binding.configuration_revision)
             if (await asyncio.to_thread(self._bindings)).get(binding_id) != (binding, identity):
                 raise ConnectorError("STALE_GENERATION", "r4_lanes", "The binding changed during attachment.")
-            self.lanes[binding_id] = _Lane(binding, identity, ticket, started + ticket.expires_in)
+            self.lanes[binding_id] = _Lane(binding, identity, ticket, deadline)
         if self.lanes and self.owner is None:
             self.owner = R4ExecutionOwner(self.connection, self.store, self.host,
                 candidate_provider=self._candidates, launch_provider=self._launch,
