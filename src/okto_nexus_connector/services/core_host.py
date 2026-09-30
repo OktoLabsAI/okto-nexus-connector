@@ -115,6 +115,8 @@ class CoreRuntimeHost:
         # same textual binding id never share an instance.
         self._runtimes: dict[BindingKey | ExecutionRuntimeKey, LocalRuntimeCore] = {}
         self._execution_selections = {}
+        self._native_action_owners = {}
+        self._native_action_factories = {}
         self._journal: SQLiteJournal | None = None
         self._ledger: SQLiteOwnedSlotLedger | None = None
         # CN1/CN-05.05: single-flight initialization for the shared
@@ -281,7 +283,7 @@ class CoreRuntimeHost:
 
     # -- runtime composition ------------------------------------------------
 
-    async def build_r4(self, store, *, frame, candidates, environment, factory=None):
+    async def build_r4(self, store, *, frame, candidates, environment, factory=None, native_action_factory=None):
         """Compose an R4 runtime only from the approved host realization.
 
         Composition is effect-free and does not install execution authority.
@@ -289,6 +291,7 @@ class CoreRuntimeHost:
         Revalidate after shared-store waits and around the environment callback.
         """
         from .execution_selection import resolve_execution_selection
+        from nexus_connector_core.native_action_socket import PiNativeActionOwner
         from nexus_connector_core import decode_r4_frame, encode_r4_frame
         # Freeze caller-owned input before yielding; no mutable wire dict or
         # candidate generator may retarget a build that is already waiting.
@@ -298,6 +301,10 @@ class CoreRuntimeHost:
             return await asyncio.to_thread(resolve_execution_selection, store,
                 frame=decode_r4_frame(encoded), candidates=candidates)
         selection = await resolve()
+        if native_action_factory is not None and (
+                not callable(native_action_factory) or selection.candidate.adapter_id != "pi_rpc"):
+            raise ConnectorError("VALIDATION_ERROR", "native_action_launch",
+                                 "A native action factory is only valid for an approved Pi installation.")
         key = ExecutionRuntimeKey(selection.server_id, selection.executor_id,
                                   selection.binding_id, selection.session_id)
         journal = await self.ensure_journal()
@@ -306,7 +313,8 @@ class CoreRuntimeHost:
             raise ConnectorError('PROFILE_DRIFT', 'runtime_composition', 'The approved execution selection changed.')
         existing = self._runtimes.get(key)
         if existing is not None:
-            if self._execution_selections.get(key) != selection:
+            if (self._execution_selections.get(key) != selection
+                    or self._native_action_factories.get(key) is not native_action_factory):
                 raise ConnectorError('OPERATION_CONFLICT', 'runtime_composition', 'The runtime has a different opening selection.')
             return existing
         async def checked_environment(prepared):
@@ -316,10 +324,23 @@ class CoreRuntimeHost:
             if await resolve() != selection:
                 raise ConnectorError('PROFILE_DRIFT', 'runtime_environment', 'The approved execution selection changed.')
             return value
+        native_owner = None
+        async def native_launch(prepared, session_id, context):
+            if native_owner is None:
+                raise ConnectorError("BINDING_NOT_AUTHORIZED", "native_action_launch")
+            return await native_owner.launch(prepared, session_id, context)
         runtime = create_runtime(journal=journal, environment=checked_environment,
             candidates={selection.candidate.adapter_id: selection.candidate},
             workspace_roots={selection.workspace_id: selection.workspace_root},
-            native_factory=factory, owned_slot_ledger=ledger)
+            native_factory=factory, owned_slot_ledger=ledger,
+            pi_native_action=native_launch if native_action_factory is not None else None)
+        if native_action_factory is not None:
+            native_owner = native_action_factory(runtime)
+            if not isinstance(native_owner, PiNativeActionOwner):
+                raise ConnectorError("VALIDATION_ERROR", "native_action_launch",
+                                     "The native action factory must return an owned Pi ingress.")
+            self._native_action_owners[key] = native_owner
+            self._native_action_factories[key] = native_action_factory
         self._runtimes[key] = runtime
         self._execution_selections[key] = selection
         return runtime
@@ -379,6 +400,10 @@ class CoreRuntimeHost:
         # Compatibility view for diagnostics that still close stores.
         return [self._journal] if self._journal is not None else []
 
+    async def close_native_actions(self, key: ExecutionRuntimeKey, *, timeout_seconds=0):
+        owner = self._native_action_owners.get(key)
+        return owner is None or await owner.close(timeout_seconds=timeout_seconds)
+
     async def shutdown_all(self) -> list[tuple[str, str]]:
         """Bounded shutdown; unknown outcomes are never discarded.
 
@@ -395,19 +420,29 @@ class CoreRuntimeHost:
         outcomes: list[tuple[str, str]] = []
         any_pending = False
         for key, runtime in list(self._runtimes.items()):
+            owner = self._native_action_owners.get(key)
+            if owner is not None:
+                await owner.close(timeout_seconds=0)
             report = await runtime.shutdown(ShutdownPolicy(30.0, 15.0))
-            resolved = True
+            native_pending = owner is not None and not await owner.close(timeout_seconds=0)
+            resolved = not native_pending
             for session_key, outcome in report.session_outcomes.items():
                 sid = getattr(session_key, "session_id", None)
                 if sid is None and isinstance(session_key, tuple)                         and session_key:
                     sid = session_key[-1]
+                if native_pending and session_key == owner.session_key:
+                    outcome = "unknown"
                 outcomes.append((sid, str(outcome)))
                 if str(outcome) not in ("graceful", "already_closed",
                                         "forced"):
                     resolved = False
+            if native_pending and owner.session_key not in report.session_outcomes:
+                outcomes.append((key.session_id, "unknown"))
             if resolved:
                 del self._runtimes[key]
                 self._execution_selections.pop(key, None)
+                self._native_action_owners.pop(key, None)
+                self._native_action_factories.pop(key, None)
             else:
                 any_pending = True
         if self._runtimes or not any_pending:

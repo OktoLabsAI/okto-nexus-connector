@@ -284,3 +284,38 @@ async def test_native_decision_uses_observed_request_and_same_receipt(execution,
     applied, decision, answer = factory.native.decisions[0]
     assert applied['request_id'] == 7 and applied['request_hash'] == 'a' * 64
     assert decision == 'accept' and answer == response
+
+
+async def test_native_factory_requires_pi_before_native_open(execution):
+    owner, connection, factory, receipts, opening = execution
+    original = owner.launch_provider
+    called = []
+    async def launch(frame):
+        setup = await original(frame)
+        return R4LaunchSetup(setup.environment, native_action_factory=lambda runtime: called.append(runtime))
+    owner.launch_provider = launch
+    await connection.emit(opening)
+    await failed(owner)
+    assert owner.failure.code == "VALIDATION_ERROR"
+    assert not called and not factory.opened and not connection.lease_count
+
+
+async def test_close_fences_native_ingress_before_native_close(execution, monkeypatch):
+    owner, connection, factory, receipts, opening = execution
+    await connection.emit(opening)
+    await observed(receipts, owner)
+    fenced = []
+    original_fence = owner.host.close_native_actions
+    original_close = factory.native.close
+    async def fence(key, **kwargs):
+        fenced.append(key)
+        return await original_fence(key, **kwargs)
+    async def close():
+        assert len(fenced) == 1 and fenced[0].session_id == opening["session_id"]
+        return await original_close()
+    monkeypatch.setattr(owner.host, "close_native_actions", fence)
+    monkeypatch.setattr(factory.native, "close", close)
+    await connection.emit(operation(opening, "runtime.close",
+        {"reason":"Done.", "drain_seconds":1, "interrupt_seconds":1}))
+    assert (await observed(receipts, owner))["operation_id"] == "runtime.close"
+    assert factory.native.stopped

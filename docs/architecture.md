@@ -74,7 +74,7 @@ never stops the daemon or unrelated sessions (TC-09).
 ## R4 development lease exchange
 
 The R4 control path is under development and is separate from the historical
-daemon flow above. Core `0.2.29.dev0` supplies a runtime-owned request nonce,
+daemon flow above. Core `0.2.30.dev0` supplies a runtime-owned request nonce,
 monotonic t0, immutable full authority scope and an application ACK.
 
 After `negotiate_r4_control`, `apply_r4_lease` exchanges a correlated grant
@@ -101,7 +101,7 @@ remain disabled.
 
 ## R4 close receipt policy
 
-Core 0.2.29.dev0 verifies `reason`, `drain_seconds` and `interrupt_seconds`
+Core 0.2.30.dev0 verifies `reason`, `drain_seconds` and `interrupt_seconds`
 against the native journal hash before `publish_core_close_receipt` sends
 the R4 receipt. Hosts use `r4_close_operation(frame)` to retain all three
 fields. An observation timeout or canceled caller does not terminate the
@@ -135,3 +135,17 @@ The installed integration campaign exercises this backend and the Nexus
 embedded backend against the same canonical handoff services. Automatic
 daemon launch, Pi socket ownership and capability renewal remain separate
 host integration work; remote R4 readiness remains false.
+
+## Pi native action ownership
+
+R4LaunchSetup may carry a trusted native_action_factory composed from the
+approved session capability. CoreRuntimeHost passes the resulting owned
+launch callback through the public Core create_runtime API. The factory is
+session scoped, Pi only, and cannot change on runtime reuse.
+
+The execution owner fences native ingress when closing a session. Shutdown
+closes ingress before draining Core, and retains the runtime and shared
+stores when a canonical domain producer is still pending. Socket timeout or
+caller cancellation does not cancel a producer or permit a new action ID.
+Automatic configuration, capability renewal and nonempty reconciliation
+remain required before remote execution readiness can be enabled.

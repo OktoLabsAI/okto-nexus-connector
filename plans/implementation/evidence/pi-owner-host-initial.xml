@@ -1,0 +1,834 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="8" failures="1" skipped="0" tests="30" time="6.195" timestamp="2026-09-30T09:46:42.613593-03:00" hostname="Alienware_m15"><testcase classname="tests.unit.test_r4_execution" name="test_control_and_cancelled_stop_do_not_abandon_receipt_producer" time="0.446"><error message="failed on setup with &quot;Failed: 'test_control_and_cancelled_stop_do_not_abandon_receipt_producer' requested an async fixture 'execution', with no plugin or hook that handled it. This is an error, as pytest does not natively support it.&#10;See: https://docs.pytest.org/en/stable/deprecations.html#sync-test-depending-on-async-fixture&quot;">'test_control_and_cancelled_stop_do_not_abandon_receipt_producer' requested an async fixture 'execution', with no plugin or hook that handled it. This is an error, as pytest does not natively support it.
+See: https://docs.pytest.org/en/stable/deprecations.html#sync-test-depending-on-async-fixture</error></testcase><testcase classname="tests.unit.test_r4_execution" name="test_lane_invalidated_during_launch_wait_never_opens" time="0.044"><error message="failed on setup with &quot;AssertionError&quot;">cls = &lt;class '_pytest.runner.CallInfo'&gt;
+func = &lt;function call_and_report.&lt;locals&gt;.&lt;lambda&gt; at 0x0000020932483600&gt;
+when = 'setup'
+reraise = (&lt;class '_pytest.outcomes.Exit'&gt;, &lt;class 'KeyboardInterrupt'&gt;)
+
+    @classmethod
+    def from_call(
+        cls,
+        func: Callable[[], TResult],
+        when: Literal["collect", "setup", "call", "teardown"],
+        reraise: type[BaseException] | tuple[type[BaseException], ...] | None = None,
+    ) -&gt; CallInfo[TResult]:
+        """Call func, wrapping the result in a CallInfo.
+    
+        :param func:
+            The function to call. Called without arguments.
+        :type func: Callable[[], _pytest.runner.TResult]
+        :param when:
+            The phase in which the function is called.
+        :param reraise:
+            Exception or exceptions that shall propagate if raised by the
+            function, instead of being wrapped in the CallInfo.
+        """
+        excinfo = None
+        instant = timing.Instant()
+        try:
+&gt;           result: TResult | None = func()
+                                     ^^^^^^
+
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:361: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:250: in &lt;lambda&gt;
+    lambda: runtest_hook(item=item, **kwds),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\pluggy\_hooks.py:512: in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\pluggy\_manager.py:120: in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\logging.py:858: in pytest_runtest_setup
+    yield
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\capture.py:895: in pytest_runtest_setup
+    return (yield)
+            ^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:170: in pytest_runtest_setup
+    item.session._setupstate.setup(item)
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:536: in setup
+    col.setup()
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\python.py:1710: in setup
+    self._request._fillfixtures()
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:806: in _fillfixtures
+    item.funcargs[argname] = self.getfixturevalue(argname)
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:630: in getfixturevalue
+    fixturedef = self._get_active_fixturedef(argname)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:726: in _get_active_fixturedef
+    fixturedef.execute(request=subrequest)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;FixtureDef argname='execution' scope='function' baseid='tests/unit/test_r4_execution.py'&gt;
+request = &lt;SubRequest 'execution' for &lt;Function test_lane_invalidated_during_launch_wait_never_opens&gt;&gt;
+
+    def execute(self, request: SubRequest) -&gt; FixtureValue:
+        """Return the value of this fixture, executing it if not cached."""
+        # Ensure that the dependent fixtures requested by this fixture are loaded.
+        # This needs to be done before checking if we have a cached value, since
+        # if a dependent fixture has their cache invalidated, e.g. due to
+        # parametrization, they finalize themselves and fixtures depending on it
+        # (which will likely include this fixture) setting `self.cached_result = None`.
+        # See #4871
+        requested_fixtures_that_should_finalize_us = []
+        for argname in self.argnames:
+            fixturedef = request._get_active_fixturedef(argname)
+            # Saves requested fixtures in a list so we later can add our finalizer
+            # to them, ensuring that if a requested fixture gets torn down we get torn
+            # down first. This is generally handled by SetupState, but still currently
+            # needed when this fixture is not parametrized but depends on a parametrized
+            # fixture.
+            requested_fixtures_that_should_finalize_us.append(fixturedef)
+    
+        # Check for (and return) cached value/exception.
+        if self.cached_result is not None:
+            request_cache_key = self.cache_key(request)
+            cache_key = self.cached_result[1]
+            try:
+                # Attempt to make a normal == check: this might fail for objects
+                # which do not implement the standard comparison (like numpy arrays -- #6497).
+                cache_hit = bool(request_cache_key == cache_key)
+            except (ValueError, RuntimeError):
+                # If the comparison raises, use 'is' as fallback.
+                cache_hit = request_cache_key is cache_key
+    
+            if cache_hit:
+                if self.cached_result[2] is not None:
+                    exc, exc_tb = self.cached_result[2]
+                    raise exc.with_traceback(exc_tb)
+                else:
+                    return self.cached_result[0]
+            # We have a previous but differently parametrized fixture instance
+            # so we need to tear it down before creating a new one.
+            self.finish(request)
+            assert self.cached_result is None
+    
+        # Add finalizer to requested fixtures we saved previously.
+        # We make sure to do this after checking for cached value to avoid
+        # adding our finalizer multiple times. (#12135)
+        finalizer = functools.partial(self.finish, request=request)
+        for parent_fixture in requested_fixtures_that_should_finalize_us:
+            parent_fixture.addfinalizer(finalizer)
+    
+        # Register the pytest_fixture_post_finalizer as the first finalizer,
+        # which is executed last.
+&gt;       assert not self._finalizers
+               ^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:1221: AssertionError</error></testcase><testcase classname="tests.unit.test_r4_execution" name="test_publication_failure_fences_without_repeating_native_open" time="0.039"><error message="failed on setup with &quot;AssertionError&quot;">cls = &lt;class '_pytest.runner.CallInfo'&gt;
+func = &lt;function call_and_report.&lt;locals&gt;.&lt;lambda&gt; at 0x0000020932482980&gt;
+when = 'setup'
+reraise = (&lt;class '_pytest.outcomes.Exit'&gt;, &lt;class 'KeyboardInterrupt'&gt;)
+
+    @classmethod
+    def from_call(
+        cls,
+        func: Callable[[], TResult],
+        when: Literal["collect", "setup", "call", "teardown"],
+        reraise: type[BaseException] | tuple[type[BaseException], ...] | None = None,
+    ) -&gt; CallInfo[TResult]:
+        """Call func, wrapping the result in a CallInfo.
+    
+        :param func:
+            The function to call. Called without arguments.
+        :type func: Callable[[], _pytest.runner.TResult]
+        :param when:
+            The phase in which the function is called.
+        :param reraise:
+            Exception or exceptions that shall propagate if raised by the
+            function, instead of being wrapped in the CallInfo.
+        """
+        excinfo = None
+        instant = timing.Instant()
+        try:
+&gt;           result: TResult | None = func()
+                                     ^^^^^^
+
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:361: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:250: in &lt;lambda&gt;
+    lambda: runtest_hook(item=item, **kwds),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\pluggy\_hooks.py:512: in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\pluggy\_manager.py:120: in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\logging.py:858: in pytest_runtest_setup
+    yield
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\capture.py:895: in pytest_runtest_setup
+    return (yield)
+            ^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:170: in pytest_runtest_setup
+    item.session._setupstate.setup(item)
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:536: in setup
+    col.setup()
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\python.py:1710: in setup
+    self._request._fillfixtures()
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:806: in _fillfixtures
+    item.funcargs[argname] = self.getfixturevalue(argname)
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:630: in getfixturevalue
+    fixturedef = self._get_active_fixturedef(argname)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:726: in _get_active_fixturedef
+    fixturedef.execute(request=subrequest)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;FixtureDef argname='execution' scope='function' baseid='tests/unit/test_r4_execution.py'&gt;
+request = &lt;SubRequest 'execution' for &lt;Function test_publication_failure_fences_without_repeating_native_open&gt;&gt;
+
+    def execute(self, request: SubRequest) -&gt; FixtureValue:
+        """Return the value of this fixture, executing it if not cached."""
+        # Ensure that the dependent fixtures requested by this fixture are loaded.
+        # This needs to be done before checking if we have a cached value, since
+        # if a dependent fixture has their cache invalidated, e.g. due to
+        # parametrization, they finalize themselves and fixtures depending on it
+        # (which will likely include this fixture) setting `self.cached_result = None`.
+        # See #4871
+        requested_fixtures_that_should_finalize_us = []
+        for argname in self.argnames:
+            fixturedef = request._get_active_fixturedef(argname)
+            # Saves requested fixtures in a list so we later can add our finalizer
+            # to them, ensuring that if a requested fixture gets torn down we get torn
+            # down first. This is generally handled by SetupState, but still currently
+            # needed when this fixture is not parametrized but depends on a parametrized
+            # fixture.
+            requested_fixtures_that_should_finalize_us.append(fixturedef)
+    
+        # Check for (and return) cached value/exception.
+        if self.cached_result is not None:
+            request_cache_key = self.cache_key(request)
+            cache_key = self.cached_result[1]
+            try:
+                # Attempt to make a normal == check: this might fail for objects
+                # which do not implement the standard comparison (like numpy arrays -- #6497).
+                cache_hit = bool(request_cache_key == cache_key)
+            except (ValueError, RuntimeError):
+                # If the comparison raises, use 'is' as fallback.
+                cache_hit = request_cache_key is cache_key
+    
+            if cache_hit:
+                if self.cached_result[2] is not None:
+                    exc, exc_tb = self.cached_result[2]
+                    raise exc.with_traceback(exc_tb)
+                else:
+                    return self.cached_result[0]
+            # We have a previous but differently parametrized fixture instance
+            # so we need to tear it down before creating a new one.
+            self.finish(request)
+            assert self.cached_result is None
+    
+        # Add finalizer to requested fixtures we saved previously.
+        # We make sure to do this after checking for cached value to avoid
+        # adding our finalizer multiple times. (#12135)
+        finalizer = functools.partial(self.finish, request=request)
+        for parent_fixture in requested_fixtures_that_should_finalize_us:
+            parent_fixture.addfinalizer(finalizer)
+    
+        # Register the pytest_fixture_post_finalizer as the first finalizer,
+        # which is executed last.
+&gt;       assert not self._finalizers
+               ^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:1221: AssertionError</error></testcase><testcase classname="tests.unit.test_r4_execution" name="test_frozen_open_selection_and_typed_control_projection" time="0.038"><error message="failed on setup with &quot;AssertionError&quot;">cls = &lt;class '_pytest.runner.CallInfo'&gt;
+func = &lt;function call_and_report.&lt;locals&gt;.&lt;lambda&gt; at 0x0000020932482660&gt;
+when = 'setup'
+reraise = (&lt;class '_pytest.outcomes.Exit'&gt;, &lt;class 'KeyboardInterrupt'&gt;)
+
+    @classmethod
+    def from_call(
+        cls,
+        func: Callable[[], TResult],
+        when: Literal["collect", "setup", "call", "teardown"],
+        reraise: type[BaseException] | tuple[type[BaseException], ...] | None = None,
+    ) -&gt; CallInfo[TResult]:
+        """Call func, wrapping the result in a CallInfo.
+    
+        :param func:
+            The function to call. Called without arguments.
+        :type func: Callable[[], _pytest.runner.TResult]
+        :param when:
+            The phase in which the function is called.
+        :param reraise:
+            Exception or exceptions that shall propagate if raised by the
+            function, instead of being wrapped in the CallInfo.
+        """
+        excinfo = None
+        instant = timing.Instant()
+        try:
+&gt;           result: TResult | None = func()
+                                     ^^^^^^
+
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:361: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:250: in &lt;lambda&gt;
+    lambda: runtest_hook(item=item, **kwds),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\pluggy\_hooks.py:512: in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\pluggy\_manager.py:120: in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\logging.py:858: in pytest_runtest_setup
+    yield
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\capture.py:895: in pytest_runtest_setup
+    return (yield)
+            ^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:170: in pytest_runtest_setup
+    item.session._setupstate.setup(item)
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:536: in setup
+    col.setup()
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\python.py:1710: in setup
+    self._request._fillfixtures()
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:806: in _fillfixtures
+    item.funcargs[argname] = self.getfixturevalue(argname)
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:630: in getfixturevalue
+    fixturedef = self._get_active_fixturedef(argname)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:726: in _get_active_fixturedef
+    fixturedef.execute(request=subrequest)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;FixtureDef argname='execution' scope='function' baseid='tests/unit/test_r4_execution.py'&gt;
+request = &lt;SubRequest 'execution' for &lt;Function test_frozen_open_selection_and_typed_control_projection&gt;&gt;
+
+    def execute(self, request: SubRequest) -&gt; FixtureValue:
+        """Return the value of this fixture, executing it if not cached."""
+        # Ensure that the dependent fixtures requested by this fixture are loaded.
+        # This needs to be done before checking if we have a cached value, since
+        # if a dependent fixture has their cache invalidated, e.g. due to
+        # parametrization, they finalize themselves and fixtures depending on it
+        # (which will likely include this fixture) setting `self.cached_result = None`.
+        # See #4871
+        requested_fixtures_that_should_finalize_us = []
+        for argname in self.argnames:
+            fixturedef = request._get_active_fixturedef(argname)
+            # Saves requested fixtures in a list so we later can add our finalizer
+            # to them, ensuring that if a requested fixture gets torn down we get torn
+            # down first. This is generally handled by SetupState, but still currently
+            # needed when this fixture is not parametrized but depends on a parametrized
+            # fixture.
+            requested_fixtures_that_should_finalize_us.append(fixturedef)
+    
+        # Check for (and return) cached value/exception.
+        if self.cached_result is not None:
+            request_cache_key = self.cache_key(request)
+            cache_key = self.cached_result[1]
+            try:
+                # Attempt to make a normal == check: this might fail for objects
+                # which do not implement the standard comparison (like numpy arrays -- #6497).
+                cache_hit = bool(request_cache_key == cache_key)
+            except (ValueError, RuntimeError):
+                # If the comparison raises, use 'is' as fallback.
+                cache_hit = request_cache_key is cache_key
+    
+            if cache_hit:
+                if self.cached_result[2] is not None:
+                    exc, exc_tb = self.cached_result[2]
+                    raise exc.with_traceback(exc_tb)
+                else:
+                    return self.cached_result[0]
+            # We have a previous but differently parametrized fixture instance
+            # so we need to tear it down before creating a new one.
+            self.finish(request)
+            assert self.cached_result is None
+    
+        # Add finalizer to requested fixtures we saved previously.
+        # We make sure to do this after checking for cached value to avoid
+        # adding our finalizer multiple times. (#12135)
+        finalizer = functools.partial(self.finish, request=request)
+        for parent_fixture in requested_fixtures_that_should_finalize_us:
+            parent_fixture.addfinalizer(finalizer)
+    
+        # Register the pytest_fixture_post_finalizer as the first finalizer,
+        # which is executed last.
+&gt;       assert not self._finalizers
+               ^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:1221: AssertionError</error></testcase><testcase classname="tests.unit.test_r4_execution" name="test_duplicate_open_never_requests_a_second_lease" time="0.035"><error message="failed on setup with &quot;AssertionError&quot;">cls = &lt;class '_pytest.runner.CallInfo'&gt;
+func = &lt;function call_and_report.&lt;locals&gt;.&lt;lambda&gt; at 0x00000209324A4680&gt;
+when = 'setup'
+reraise = (&lt;class '_pytest.outcomes.Exit'&gt;, &lt;class 'KeyboardInterrupt'&gt;)
+
+    @classmethod
+    def from_call(
+        cls,
+        func: Callable[[], TResult],
+        when: Literal["collect", "setup", "call", "teardown"],
+        reraise: type[BaseException] | tuple[type[BaseException], ...] | None = None,
+    ) -&gt; CallInfo[TResult]:
+        """Call func, wrapping the result in a CallInfo.
+    
+        :param func:
+            The function to call. Called without arguments.
+        :type func: Callable[[], _pytest.runner.TResult]
+        :param when:
+            The phase in which the function is called.
+        :param reraise:
+            Exception or exceptions that shall propagate if raised by the
+            function, instead of being wrapped in the CallInfo.
+        """
+        excinfo = None
+        instant = timing.Instant()
+        try:
+&gt;           result: TResult | None = func()
+                                     ^^^^^^
+
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:361: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:250: in &lt;lambda&gt;
+    lambda: runtest_hook(item=item, **kwds),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\pluggy\_hooks.py:512: in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\pluggy\_manager.py:120: in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\logging.py:858: in pytest_runtest_setup
+    yield
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\capture.py:895: in pytest_runtest_setup
+    return (yield)
+            ^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:170: in pytest_runtest_setup
+    item.session._setupstate.setup(item)
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:536: in setup
+    col.setup()
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\python.py:1710: in setup
+    self._request._fillfixtures()
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:806: in _fillfixtures
+    item.funcargs[argname] = self.getfixturevalue(argname)
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:630: in getfixturevalue
+    fixturedef = self._get_active_fixturedef(argname)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:726: in _get_active_fixturedef
+    fixturedef.execute(request=subrequest)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;FixtureDef argname='execution' scope='function' baseid='tests/unit/test_r4_execution.py'&gt;
+request = &lt;SubRequest 'execution' for &lt;Function test_duplicate_open_never_requests_a_second_lease&gt;&gt;
+
+    def execute(self, request: SubRequest) -&gt; FixtureValue:
+        """Return the value of this fixture, executing it if not cached."""
+        # Ensure that the dependent fixtures requested by this fixture are loaded.
+        # This needs to be done before checking if we have a cached value, since
+        # if a dependent fixture has their cache invalidated, e.g. due to
+        # parametrization, they finalize themselves and fixtures depending on it
+        # (which will likely include this fixture) setting `self.cached_result = None`.
+        # See #4871
+        requested_fixtures_that_should_finalize_us = []
+        for argname in self.argnames:
+            fixturedef = request._get_active_fixturedef(argname)
+            # Saves requested fixtures in a list so we later can add our finalizer
+            # to them, ensuring that if a requested fixture gets torn down we get torn
+            # down first. This is generally handled by SetupState, but still currently
+            # needed when this fixture is not parametrized but depends on a parametrized
+            # fixture.
+            requested_fixtures_that_should_finalize_us.append(fixturedef)
+    
+        # Check for (and return) cached value/exception.
+        if self.cached_result is not None:
+            request_cache_key = self.cache_key(request)
+            cache_key = self.cached_result[1]
+            try:
+                # Attempt to make a normal == check: this might fail for objects
+                # which do not implement the standard comparison (like numpy arrays -- #6497).
+                cache_hit = bool(request_cache_key == cache_key)
+            except (ValueError, RuntimeError):
+                # If the comparison raises, use 'is' as fallback.
+                cache_hit = request_cache_key is cache_key
+    
+            if cache_hit:
+                if self.cached_result[2] is not None:
+                    exc, exc_tb = self.cached_result[2]
+                    raise exc.with_traceback(exc_tb)
+                else:
+                    return self.cached_result[0]
+            # We have a previous but differently parametrized fixture instance
+            # so we need to tear it down before creating a new one.
+            self.finish(request)
+            assert self.cached_result is None
+    
+        # Add finalizer to requested fixtures we saved previously.
+        # We make sure to do this after checking for cached value to avoid
+        # adding our finalizer multiple times. (#12135)
+        finalizer = functools.partial(self.finish, request=request)
+        for parent_fixture in requested_fixtures_that_should_finalize_us:
+            parent_fixture.addfinalizer(finalizer)
+    
+        # Register the pytest_fixture_post_finalizer as the first finalizer,
+        # which is executed last.
+&gt;       assert not self._finalizers
+               ^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:1221: AssertionError</error></testcase><testcase classname="tests.unit.test_r4_execution" name="test_cross_binding_control_cannot_borrow_a_runtime" time="0.046"><error message="failed on setup with &quot;AssertionError&quot;">cls = &lt;class '_pytest.runner.CallInfo'&gt;
+func = &lt;function call_and_report.&lt;locals&gt;.&lt;lambda&gt; at 0x00000209324A4720&gt;
+when = 'setup'
+reraise = (&lt;class '_pytest.outcomes.Exit'&gt;, &lt;class 'KeyboardInterrupt'&gt;)
+
+    @classmethod
+    def from_call(
+        cls,
+        func: Callable[[], TResult],
+        when: Literal["collect", "setup", "call", "teardown"],
+        reraise: type[BaseException] | tuple[type[BaseException], ...] | None = None,
+    ) -&gt; CallInfo[TResult]:
+        """Call func, wrapping the result in a CallInfo.
+    
+        :param func:
+            The function to call. Called without arguments.
+        :type func: Callable[[], _pytest.runner.TResult]
+        :param when:
+            The phase in which the function is called.
+        :param reraise:
+            Exception or exceptions that shall propagate if raised by the
+            function, instead of being wrapped in the CallInfo.
+        """
+        excinfo = None
+        instant = timing.Instant()
+        try:
+&gt;           result: TResult | None = func()
+                                     ^^^^^^
+
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:361: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:250: in &lt;lambda&gt;
+    lambda: runtest_hook(item=item, **kwds),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\pluggy\_hooks.py:512: in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\pluggy\_manager.py:120: in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\logging.py:858: in pytest_runtest_setup
+    yield
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\capture.py:895: in pytest_runtest_setup
+    return (yield)
+            ^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:170: in pytest_runtest_setup
+    item.session._setupstate.setup(item)
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:536: in setup
+    col.setup()
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\python.py:1710: in setup
+    self._request._fillfixtures()
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:806: in _fillfixtures
+    item.funcargs[argname] = self.getfixturevalue(argname)
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:630: in getfixturevalue
+    fixturedef = self._get_active_fixturedef(argname)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:726: in _get_active_fixturedef
+    fixturedef.execute(request=subrequest)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;FixtureDef argname='execution' scope='function' baseid='tests/unit/test_r4_execution.py'&gt;
+request = &lt;SubRequest 'execution' for &lt;Function test_cross_binding_control_cannot_borrow_a_runtime&gt;&gt;
+
+    def execute(self, request: SubRequest) -&gt; FixtureValue:
+        """Return the value of this fixture, executing it if not cached."""
+        # Ensure that the dependent fixtures requested by this fixture are loaded.
+        # This needs to be done before checking if we have a cached value, since
+        # if a dependent fixture has their cache invalidated, e.g. due to
+        # parametrization, they finalize themselves and fixtures depending on it
+        # (which will likely include this fixture) setting `self.cached_result = None`.
+        # See #4871
+        requested_fixtures_that_should_finalize_us = []
+        for argname in self.argnames:
+            fixturedef = request._get_active_fixturedef(argname)
+            # Saves requested fixtures in a list so we later can add our finalizer
+            # to them, ensuring that if a requested fixture gets torn down we get torn
+            # down first. This is generally handled by SetupState, but still currently
+            # needed when this fixture is not parametrized but depends on a parametrized
+            # fixture.
+            requested_fixtures_that_should_finalize_us.append(fixturedef)
+    
+        # Check for (and return) cached value/exception.
+        if self.cached_result is not None:
+            request_cache_key = self.cache_key(request)
+            cache_key = self.cached_result[1]
+            try:
+                # Attempt to make a normal == check: this might fail for objects
+                # which do not implement the standard comparison (like numpy arrays -- #6497).
+                cache_hit = bool(request_cache_key == cache_key)
+            except (ValueError, RuntimeError):
+                # If the comparison raises, use 'is' as fallback.
+                cache_hit = request_cache_key is cache_key
+    
+            if cache_hit:
+                if self.cached_result[2] is not None:
+                    exc, exc_tb = self.cached_result[2]
+                    raise exc.with_traceback(exc_tb)
+                else:
+                    return self.cached_result[0]
+            # We have a previous but differently parametrized fixture instance
+            # so we need to tear it down before creating a new one.
+            self.finish(request)
+            assert self.cached_result is None
+    
+        # Add finalizer to requested fixtures we saved previously.
+        # We make sure to do this after checking for cached value to avoid
+        # adding our finalizer multiple times. (#12135)
+        finalizer = functools.partial(self.finish, request=request)
+        for parent_fixture in requested_fixtures_that_should_finalize_us:
+            parent_fixture.addfinalizer(finalizer)
+    
+        # Register the pytest_fixture_post_finalizer as the first finalizer,
+        # which is executed last.
+&gt;       assert not self._finalizers
+               ^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:1221: AssertionError</error></testcase><testcase classname="tests.unit.test_r4_execution" name="test_native_decision_uses_observed_request_and_same_receipt[approval.decide]" time="0.057"><error message="failed on setup with &quot;AssertionError&quot;">cls = &lt;class '_pytest.runner.CallInfo'&gt;
+func = &lt;function call_and_report.&lt;locals&gt;.&lt;lambda&gt; at 0x00000209324A7060&gt;
+when = 'setup'
+reraise = (&lt;class '_pytest.outcomes.Exit'&gt;, &lt;class 'KeyboardInterrupt'&gt;)
+
+    @classmethod
+    def from_call(
+        cls,
+        func: Callable[[], TResult],
+        when: Literal["collect", "setup", "call", "teardown"],
+        reraise: type[BaseException] | tuple[type[BaseException], ...] | None = None,
+    ) -&gt; CallInfo[TResult]:
+        """Call func, wrapping the result in a CallInfo.
+    
+        :param func:
+            The function to call. Called without arguments.
+        :type func: Callable[[], _pytest.runner.TResult]
+        :param when:
+            The phase in which the function is called.
+        :param reraise:
+            Exception or exceptions that shall propagate if raised by the
+            function, instead of being wrapped in the CallInfo.
+        """
+        excinfo = None
+        instant = timing.Instant()
+        try:
+&gt;           result: TResult | None = func()
+                                     ^^^^^^
+
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:361: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:250: in &lt;lambda&gt;
+    lambda: runtest_hook(item=item, **kwds),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\pluggy\_hooks.py:512: in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\pluggy\_manager.py:120: in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\logging.py:858: in pytest_runtest_setup
+    yield
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\capture.py:895: in pytest_runtest_setup
+    return (yield)
+            ^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:170: in pytest_runtest_setup
+    item.session._setupstate.setup(item)
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:536: in setup
+    col.setup()
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\python.py:1710: in setup
+    self._request._fillfixtures()
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:806: in _fillfixtures
+    item.funcargs[argname] = self.getfixturevalue(argname)
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:630: in getfixturevalue
+    fixturedef = self._get_active_fixturedef(argname)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:726: in _get_active_fixturedef
+    fixturedef.execute(request=subrequest)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;FixtureDef argname='execution' scope='function' baseid='tests/unit/test_r4_execution.py'&gt;
+request = &lt;SubRequest 'execution' for &lt;Function test_native_decision_uses_observed_request_and_same_receipt[approval.decide]&gt;&gt;
+
+    def execute(self, request: SubRequest) -&gt; FixtureValue:
+        """Return the value of this fixture, executing it if not cached."""
+        # Ensure that the dependent fixtures requested by this fixture are loaded.
+        # This needs to be done before checking if we have a cached value, since
+        # if a dependent fixture has their cache invalidated, e.g. due to
+        # parametrization, they finalize themselves and fixtures depending on it
+        # (which will likely include this fixture) setting `self.cached_result = None`.
+        # See #4871
+        requested_fixtures_that_should_finalize_us = []
+        for argname in self.argnames:
+            fixturedef = request._get_active_fixturedef(argname)
+            # Saves requested fixtures in a list so we later can add our finalizer
+            # to them, ensuring that if a requested fixture gets torn down we get torn
+            # down first. This is generally handled by SetupState, but still currently
+            # needed when this fixture is not parametrized but depends on a parametrized
+            # fixture.
+            requested_fixtures_that_should_finalize_us.append(fixturedef)
+    
+        # Check for (and return) cached value/exception.
+        if self.cached_result is not None:
+            request_cache_key = self.cache_key(request)
+            cache_key = self.cached_result[1]
+            try:
+                # Attempt to make a normal == check: this might fail for objects
+                # which do not implement the standard comparison (like numpy arrays -- #6497).
+                cache_hit = bool(request_cache_key == cache_key)
+            except (ValueError, RuntimeError):
+                # If the comparison raises, use 'is' as fallback.
+                cache_hit = request_cache_key is cache_key
+    
+            if cache_hit:
+                if self.cached_result[2] is not None:
+                    exc, exc_tb = self.cached_result[2]
+                    raise exc.with_traceback(exc_tb)
+                else:
+                    return self.cached_result[0]
+            # We have a previous but differently parametrized fixture instance
+            # so we need to tear it down before creating a new one.
+            self.finish(request)
+            assert self.cached_result is None
+    
+        # Add finalizer to requested fixtures we saved previously.
+        # We make sure to do this after checking for cached value to avoid
+        # adding our finalizer multiple times. (#12135)
+        finalizer = functools.partial(self.finish, request=request)
+        for parent_fixture in requested_fixtures_that_should_finalize_us:
+            parent_fixture.addfinalizer(finalizer)
+    
+        # Register the pytest_fixture_post_finalizer as the first finalizer,
+        # which is executed last.
+&gt;       assert not self._finalizers
+               ^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:1221: AssertionError</error></testcase><testcase classname="tests.unit.test_r4_execution" name="test_native_decision_uses_observed_request_and_same_receipt[input.provide]" time="0.041"><error message="failed on setup with &quot;AssertionError&quot;">cls = &lt;class '_pytest.runner.CallInfo'&gt;
+func = &lt;function call_and_report.&lt;locals&gt;.&lt;lambda&gt; at 0x00000209324A4CC0&gt;
+when = 'setup'
+reraise = (&lt;class '_pytest.outcomes.Exit'&gt;, &lt;class 'KeyboardInterrupt'&gt;)
+
+    @classmethod
+    def from_call(
+        cls,
+        func: Callable[[], TResult],
+        when: Literal["collect", "setup", "call", "teardown"],
+        reraise: type[BaseException] | tuple[type[BaseException], ...] | None = None,
+    ) -&gt; CallInfo[TResult]:
+        """Call func, wrapping the result in a CallInfo.
+    
+        :param func:
+            The function to call. Called without arguments.
+        :type func: Callable[[], _pytest.runner.TResult]
+        :param when:
+            The phase in which the function is called.
+        :param reraise:
+            Exception or exceptions that shall propagate if raised by the
+            function, instead of being wrapped in the CallInfo.
+        """
+        excinfo = None
+        instant = timing.Instant()
+        try:
+&gt;           result: TResult | None = func()
+                                     ^^^^^^
+
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:361: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:250: in &lt;lambda&gt;
+    lambda: runtest_hook(item=item, **kwds),
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\pluggy\_hooks.py:512: in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\pluggy\_manager.py:120: in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\logging.py:858: in pytest_runtest_setup
+    yield
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\capture.py:895: in pytest_runtest_setup
+    return (yield)
+            ^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:170: in pytest_runtest_setup
+    item.session._setupstate.setup(item)
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\runner.py:536: in setup
+    col.setup()
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\python.py:1710: in setup
+    self._request._fillfixtures()
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:806: in _fillfixtures
+    item.funcargs[argname] = self.getfixturevalue(argname)
+                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:630: in getfixturevalue
+    fixturedef = self._get_active_fixturedef(argname)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:726: in _get_active_fixturedef
+    fixturedef.execute(request=subrequest)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;FixtureDef argname='execution' scope='function' baseid='tests/unit/test_r4_execution.py'&gt;
+request = &lt;SubRequest 'execution' for &lt;Function test_native_decision_uses_observed_request_and_same_receipt[input.provide]&gt;&gt;
+
+    def execute(self, request: SubRequest) -&gt; FixtureValue:
+        """Return the value of this fixture, executing it if not cached."""
+        # Ensure that the dependent fixtures requested by this fixture are loaded.
+        # This needs to be done before checking if we have a cached value, since
+        # if a dependent fixture has their cache invalidated, e.g. due to
+        # parametrization, they finalize themselves and fixtures depending on it
+        # (which will likely include this fixture) setting `self.cached_result = None`.
+        # See #4871
+        requested_fixtures_that_should_finalize_us = []
+        for argname in self.argnames:
+            fixturedef = request._get_active_fixturedef(argname)
+            # Saves requested fixtures in a list so we later can add our finalizer
+            # to them, ensuring that if a requested fixture gets torn down we get torn
+            # down first. This is generally handled by SetupState, but still currently
+            # needed when this fixture is not parametrized but depends on a parametrized
+            # fixture.
+            requested_fixtures_that_should_finalize_us.append(fixturedef)
+    
+        # Check for (and return) cached value/exception.
+        if self.cached_result is not None:
+            request_cache_key = self.cache_key(request)
+            cache_key = self.cached_result[1]
+            try:
+                # Attempt to make a normal == check: this might fail for objects
+                # which do not implement the standard comparison (like numpy arrays -- #6497).
+                cache_hit = bool(request_cache_key == cache_key)
+            except (ValueError, RuntimeError):
+                # If the comparison raises, use 'is' as fallback.
+                cache_hit = request_cache_key is cache_key
+    
+            if cache_hit:
+                if self.cached_result[2] is not None:
+                    exc, exc_tb = self.cached_result[2]
+                    raise exc.with_traceback(exc_tb)
+                else:
+                    return self.cached_result[0]
+            # We have a previous but differently parametrized fixture instance
+            # so we need to tear it down before creating a new one.
+            self.finish(request)
+            assert self.cached_result is None
+    
+        # Add finalizer to requested fixtures we saved previously.
+        # We make sure to do this after checking for cached value to avoid
+        # adding our finalizer multiple times. (#12135)
+        finalizer = functools.partial(self.finish, request=request)
+        for parent_fixture in requested_fixtures_that_should_finalize_us:
+            parent_fixture.addfinalizer(finalizer)
+    
+        # Register the pytest_fixture_post_finalizer as the first finalizer,
+        # which is executed last.
+&gt;       assert not self._finalizers
+               ^^^^^^^^^^^^^^^^^^^^
+E       AssertionError
+
+..\okto_labs_okto_nexus\.venv\Lib\site-packages\_pytest\fixtures.py:1221: AssertionError</error></testcase><testcase classname="tests.unit.test_execution_selection" name="test_approved_binding_roundtrip_does_not_downgrade_on_publication_replay" time="0.127" /><testcase classname="tests.unit.test_execution_selection" name="test_cross_scope_or_stale_open_never_resolves[server_id]" time="0.107" /><testcase classname="tests.unit.test_execution_selection" name="test_cross_scope_or_stale_open_never_resolves[executor_id]" time="0.112" /><testcase classname="tests.unit.test_execution_selection" name="test_cross_scope_or_stale_open_never_resolves[agent_id]" time="0.105" /><testcase classname="tests.unit.test_execution_selection" name="test_cross_scope_or_stale_open_never_resolves[workspace_id]" time="0.089" /><testcase classname="tests.unit.test_execution_selection" name="test_cross_scope_or_stale_open_never_resolves[workspace_binding_id]" time="0.087" /><testcase classname="tests.unit.test_execution_selection" name="test_cross_scope_or_stale_open_never_resolves[binding_revision]" time="0.083" /><testcase classname="tests.unit.test_execution_selection" name="test_cross_scope_or_stale_open_never_resolves[authorization_revision]" time="0.076" /><testcase classname="tests.unit.test_execution_selection" name="test_cross_scope_or_stale_open_never_resolves[configuration_revision]" time="0.077" /><testcase classname="tests.unit.test_execution_selection" name="test_cross_scope_or_stale_open_never_resolves[candidate_ref]" time="0.080" /><testcase classname="tests.unit.test_execution_selection" name="test_cross_scope_or_stale_open_never_resolves[realization_ref]" time="0.087" /><testcase classname="tests.unit.test_execution_selection" name="test_cross_scope_or_stale_open_never_resolves[realization_revision]" time="0.082" /><testcase classname="tests.unit.test_execution_selection" name="test_cross_scope_or_stale_open_never_resolves[inventory_revision]" time="0.088" /><testcase classname="tests.unit.test_execution_selection" name="test_physical_or_persisted_drift_never_resolves[binary]" time="0.125" /><testcase classname="tests.unit.test_execution_selection" name="test_physical_or_persisted_drift_never_resolves[root]" time="0.120" /><testcase classname="tests.unit.test_execution_selection" name="test_physical_or_persisted_drift_never_resolves[local_configuration]" time="0.114" /><testcase classname="tests.unit.test_execution_selection" name="test_physical_or_persisted_drift_never_resolves[local_candidate]" time="0.116" /><testcase classname="tests.unit.test_execution_selection" name="test_physical_or_persisted_drift_never_resolves[duplicate_binding]" time="0.103" /><testcase classname="tests.unit.test_execution_selection" name="test_physical_or_persisted_drift_never_resolves[inventory]" time="0.084" /><testcase classname="tests.unit.test_execution_selection" name="test_publication_ack_rejects_concurrent_configuration_change" time="0.065" /><testcase classname="tests.unit.test_execution_selection" name="test_pi_dependency_bytes_remain_part_of_approved_selection" time="0.234" /><testcase classname="tests.unit.test_execution_selection" name="test_host_revalidates_after_shared_store_wait_and_before_cache_reuse" time="0.047"><failure message="Failed: async def functions are not natively supported.&#10;You need to install a suitable plugin for your async framework, for example:&#10;  - anyio&#10;  - pytest-asyncio&#10;  - pytest-tornasync&#10;  - pytest-trio&#10;  - pytest-twisted">async def functions are not natively supported.
+You need to install a suitable plugin for your async framework, for example:
+  - anyio
+  - pytest-asyncio
+  - pytest-tornasync
+  - pytest-trio
+  - pytest-twisted</failure></testcase></testsuite></testsuites>

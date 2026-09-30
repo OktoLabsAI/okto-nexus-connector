@@ -71,3 +71,18 @@ def native_action_bridge(http, capability, runtime, *, connection_id, connection
         connection_generation, scope['authorization_revision'], scope['configuration_revision'],
         cap.deadline_monotonic, frozenset(cap.actions), scope, connection_id)
     return ScopedNativeActionBridge(NexusNativeActions(http, cap), grant, clock=clock, r4_runtime=runtime)
+
+
+def native_action_owner_factory(http, capability, *, connection_id, connection_generation, clock=None):
+    """Freeze one approved capability before the host composes its runtime."""
+    from nexus_connector_core.native_action_socket import PiNativeActionOwner
+    cap = native_capability_snapshot(capability)
+    def build(runtime):
+        bridge = native_action_bridge(http, cap, runtime, connection_id=connection_id,
+                                      connection_generation=connection_generation, clock=clock)
+        def context():
+            return runtime.r4_native_action_context(cap.scope, connection_id=connection_id,
+                                                     connection_generation=connection_generation)
+        return PiNativeActionOwner(bridge, context, capability_ref=cap.capability_ref,
+                                   session_id=cap.scope["session_id"])
+    return build

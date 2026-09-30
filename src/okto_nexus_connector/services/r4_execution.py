@@ -33,6 +33,7 @@ class R4LaunchSetup:
 
     environment: object
     auth_refs: tuple[str, ...] = ()
+    native_action_factory: object | None = None
 
 
 @dataclass(slots=True)
@@ -148,12 +149,14 @@ class R4ExecutionOwner:
             setup = await self.launch_provider(item.frame)
             self.connection.require_current(item)
             if (not isinstance(setup, R4LaunchSetup) or not callable(setup.environment) or
+                    (setup.native_action_factory is not None and not callable(setup.native_action_factory)) or
                     type(setup.auth_refs) is not tuple or
                     any(type(ref) is not str or not ref for ref in setup.auth_refs)):
                 raise ConnectorError('VALIDATION_ERROR', 'r4_execution',
                                      'The approved launch configuration is invalid.')
             runtime = await self.host.build_r4(self.store, frame=item.frame,
-                candidates=candidates, environment=setup.environment, factory=self.native_factory)
+                candidates=candidates, environment=setup.environment, factory=self.native_factory,
+                native_action_factory=setup.native_action_factory)
             self.connection.require_current(item)
             session = _Session(runtime, frame['intent_hash'], 'stream_' + secrets.token_hex(16))
             self._sessions[key] = session
@@ -184,6 +187,7 @@ class R4ExecutionOwner:
                 expected_turn_id=frame.get('expected_turn_id')), context)
             project = project_r4_steer_receipt if action == 'turn.steer' else project_r4_interrupt_receipt
         elif action == 'runtime.close':
+            await self.host.close_native_actions(key)
             receipt = await runtime.close(r4_close_operation(frame), context)
             project = project_r4_close_receipt
         elif action in ('approval.decide', 'input.provide'):

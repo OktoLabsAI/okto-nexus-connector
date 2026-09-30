@@ -1,0 +1,37 @@
+{
+  "status": "PARTIAL_INTEGRATION_VERIFIED",
+  "branch": "feature/v0.2.0",
+  "core_version": "0.2.30.dev0",
+  "core_wheel_sha256": "e060e033be05fdd4c9aff5c90902d191483d400b3f6778fa7bb5395b66f561e6",
+  "installed_campaign": "pi-owner-installed-connector.xml",
+  "commands": "pi-owner-installed-connector.json",
+  "passed": 264,
+  "skipped": [
+    {
+      "test": "unit.test_core02_integration::test_shim_resolution_never_runs_outside_windows",
+      "reason": "covered above"
+    }
+  ],
+  "joint_integration_manifest": "Nexus plans/r4_execution/test_runs_20260930_pi_owner.json",
+  "limitations": [
+    "Technical Pi CLI and synthetic build qualification; no provider acceptance.",
+    "Automatic approved configuration, capability lifecycle and recovery remain pending.",
+    "No G0-G3 gate or full milestone closed."
+  ],
+  "core_head": "770659b7f3404798fe6c59146c7ab9d12b84bbe4",
+  "source_attempts": [
+    {
+      "file": "pi-owner-host-initial.xml",
+      "passed": 21,
+      "failed": 1,
+      "errors": 8,
+      "cause": "The source runner lacked pytest-asyncio; no async product case executed in this attempt."
+    },
+    {
+      "file": "pi-owner-host-source.xml",
+      "passed": 30,
+      "failed": 0,
+      "phase": "Source rerun with pytest-asyncio before two additional owner tests; final installed campaign includes both."
+    }
+  ]
+}
