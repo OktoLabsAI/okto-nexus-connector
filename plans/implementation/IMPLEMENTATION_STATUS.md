@@ -1,5 +1,18 @@
 # Implementation status — 2026-09-29 (CN5 corrected, 0.5.0.dev0)
 
+## R4 automatic control startup — 2026-09-30
+
+[Daemon startup](R4_DAEMON_STARTUP.md) connects explicit registrations to the
+real daemon lifecycle, fresh bootstrap, durable inventory sequence and control
+negotiation. Empty recovery reads the Core journal/ledgers; nonempty history
+stays pending. The Server now fences inventory producer handoff by the
+current reconciled channel. Results: 321 regression passes (two existing
+skips), 61 directed, 107 Nexus R4 and 105 installed, with overlap. Evidence:
+[evidence/r4-startup-report.json](evidence/r4-startup-report.json). Automatic
+lanes/runtime composition and nonempty recovery remain incomplete; no product
+gate is closed.
+
+
 ## R4 durable executor registration — 2026-09-30
 
 [Executor registration](R4_EXECUTOR_REGISTRATION.md) adds schema 5 persisted

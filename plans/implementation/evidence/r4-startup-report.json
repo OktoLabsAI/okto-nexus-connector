@@ -1,0 +1,107 @@
+{
+  "recorded_at": "2026-09-30T09:46:57.034878+00:00",
+  "scope": "Partial M02/M06 automatic R4 control startup, inventory and empty-namespace recovery; no automatic runtime execution acceptance",
+  "parent_commit": "d1c30e8982210060bee549d1095ca4c5e654875e",
+  "nexus_parent_commit": "0e283ef5e988e18089981b9534d0c73c9a4dd100",
+  "core_commit": "9d244cfecc31c817661d560bbcee75cc9f8d5513",
+  "source_sha256": {
+    "src/okto_nexus_connector/daemon/app.py": "66c1cbc353895323b5f86cd3674e5cf343733653b4da9e5dfa5bd65fd34bbfca",
+    "src/okto_nexus_connector/daemon/r4_control.py": "ea7d3af230194f488f195835dccd98ea95ef0b7da79bef4f28b26ae35bfe76aa",
+    "src/okto_nexus_connector/storage/state_store.py": "98cf1acc105cdb8dba81c7c1a6e532c5d9aacdc7e3ad8d9cc75c71d977aa2190",
+    "src/okto_nexus_connector/transport/https_client.py": "cf6eac0d49cbf570eec1e5ffabdaf24ba3347380d24083888f18027146682817",
+    "tests/unit/test_r4_daemon_control.py": "1f82d72b65e75d0d8a1934daba013f73d81b73766dcfa0d379b257f445a649d8",
+    "tests/unit/test_executor_registration.py": "952d019f058c82ced63ab19e606c0925b2d9c154a75762c0b90c0e386d8cc15d",
+    "tests/unit/test_execution_selection.py": "62b9832d3fc7c5e00a8852d1192fdd813f0c255ccf54d6f8bd5090e55d99ea1d"
+  },
+  "runs": [
+    {
+      "file": "plans/implementation/evidence/r4-startup-directed-before-wait-fix.xml",
+      "sha256": "7e9cada1e68156ba4ce1960b42fe21ab6435e69d338989e7f2256f48a3bbecff",
+      "tests": 21,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 20,
+      "skips": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-startup-directed.xml",
+      "sha256": "2af1fbf6e9c440c4e08b0e0d4882bf394f569c82475eb67db1cde8e1953f4df4",
+      "tests": 61,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 61,
+      "skips": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-startup-regression.xml",
+      "sha256": "3f3b747922948262d50b75b852f7c71a2671a1f1ec7f6b0d178df41e0a1fc80d",
+      "tests": 323,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "passed": 321,
+      "skips": [
+        {
+          "test": "tests.regressoes.test_connector_audit::test_27_start_session_capability_is_referenced_in_effective_environment",
+          "reason": "lab peer lacks full contract surface: BINDING_NOT_AUTHORIZED"
+        },
+        {
+          "test": "tests.unit.test_core02_integration::test_shim_resolution_never_runs_outside_windows",
+          "reason": "covered above"
+        }
+      ]
+    }
+  ],
+  "commands": {
+    "directed": "rtk proxy C:/Users/jpamb/AppData/Local/Temp/okto-r4-connection-source-unf1oud0/Scripts/python.exe -X utf8 -m pytest tests/unit/test_r4_daemon_control.py tests/unit/test_executor_registration.py tests/unit/test_execution_selection.py tests/unit/test_state_store.py -q --tb=short --junitxml=plans/implementation/evidence/r4-startup-directed.xml",
+    "regression": "rtk proxy C:/Users/jpamb/AppData/Local/Temp/okto-r4-connection-source-unf1oud0/Scripts/python.exe -X utf8 -m pytest tests -q --tb=line --junitxml=plans/implementation/evidence/r4-startup-regression.xml"
+  },
+  "artifact": {
+    "stage": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-startup-connector-build-un8xxmcc",
+    "wheel": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-startup-connector-wheel-a5gegh2j\\okto_nexus_connector-0.5.0.dev0-py3-none-any.whl",
+    "sha256": "5ff28429e2295935ef22e4a222e9874dff51d1a44fce70a7398c25bb2519a609",
+    "build_log": "plans/r4_execution/evidence/r4-startup-connector-build.log",
+    "command": [
+      "C:\\Python313\\python.exe",
+      "-m",
+      "pip",
+      "wheel",
+      "--no-deps",
+      "--no-build-isolation",
+      "--wheel-dir",
+      "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-startup-connector-wheel-a5gegh2j",
+      "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-startup-connector-build-un8xxmcc"
+    ],
+    "build_log_sha256": "38e34fcc7d5db9b14a5fe89a0899efb29b565779bfc2c50b5428f94c263a5a27"
+  },
+  "core_wheel_sha256": "27df75100dea033ca5456f2d571eb41b6311fa3ce530a723ecd6c606d257953c",
+  "coordinated_evidence": {
+    "repository": "Nexus",
+    "manifest": "plans/r4_execution/test_runs_20260930_startup.json",
+    "installed_passes": 105,
+    "counts_overlap": true
+  },
+  "schema_change": {
+    "previous": 5,
+    "current": 6,
+    "behavior": "Preserve registration and add a monotonically increasing inventory publication sequence, reserved before HTTP.",
+    "rollback": "Older binaries reject schema 6. Full backup/restore and rollback qualification remains M12."
+  },
+  "verification": [
+    "The real daemon starts R4 from CLI-persisted registration without legacy fallback for that Server.",
+    "Fresh bootstrap uses the exact stored actor; URL/origin checks precede credentials and local snapshots are rechecked after waits.",
+    "Restart/reconnect keeps canonical executor identity and advances inventory sequence.",
+    "The empty reporter checks public durable Core claims and both ownership ledgers; unavailable or nonempty recovery does not become empty success.",
+    "Stop joins the inventory producer; status excludes credentials and separates control readiness from execution readiness.",
+    "Directed 61 passes; regression 321 passes and two existing skips; coordinated installed 105 passes. Counts overlap."
+  ],
+  "limitations": [
+    "Automatic lane attachment and production profile/environment/capability ports are not yet connected to operation consumers.",
+    "Nonempty paginated reconciliation, live lane/ticket rotation, runtime lease renewal and durable receipts/events remain pending.",
+    "Preview readiness is explicitly synthetic in positive tests. Production flags are unchanged; no provider, Linux, separate-process or independent-host acceptance is claimed.",
+    "Global shutdown budget, fairness, final migration/rollback, UI and US English audit remain open."
+  ],
+  "product_gates_closed": []
+}

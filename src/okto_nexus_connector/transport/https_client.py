@@ -64,6 +64,13 @@ class InventoryAccepted:
 
 
 @dataclass(frozen=True, slots=True)
+class R4ProtocolInfo:
+    management_revision: str
+    executor_snapshot_format: int
+    remote_execution_ready: bool
+
+
+@dataclass(frozen=True, slots=True)
 class R4Realization:
     server_id: str
     executor_id: str
@@ -359,6 +366,25 @@ class NexusHTTPClient:
         return payload
 
     # -- contract routes (plan A.5) ---------------------------------------
+
+    async def r4_protocol(self) -> R4ProtocolInfo:
+        """Check public compatibility before requesting any credential."""
+        from nexus_connector_core import R4_PREVIEW_REVISION, SNAPSHOT_FORMAT_VERSION, __version__
+        payload = await self._request("GET", "/v1/connections/protocol", key=None,
+                                      require_revision=True)
+        accepted = payload.get("nxl_accepted")
+        ready = payload.get("remote_execution_ready")
+        if (payload.get("management_revision") != MANAGEMENT_REVISION or
+                type(payload.get("protocol_major")) is not int or payload["protocol_major"] != 1 or
+                payload.get("core_version") != __version__ or
+                type(payload.get("executor_snapshot_format")) is not int or
+                payload["executor_snapshot_format"] != SNAPSHOT_FORMAT_VERSION or
+                type(ready) is not bool or not isinstance(accepted, list) or
+                any(type(value) is not str for value in accepted) or
+                (ready and R4_PREVIEW_REVISION not in accepted)):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "protocol",
+                                 "The Server does not advertise a compatible R4 protocol.")
+        return R4ProtocolInfo(MANAGEMENT_REVISION, SNAPSHOT_FORMAT_VERSION, ready)
 
     async def me(self, key: str) -> MeInfo:
         payload = await self._request("GET", "/v1/connections/me", key=key,

@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -159,6 +159,8 @@ class ExecutionExecutorRecord:
     control_capabilities: tuple[str, ...] = ()
     executor_id: str = ""
     state: str = "REGISTRATION_PENDING"
+    # Reserved before publishing; gaps after failure are valid, reuse is not.
+    inventory_publication_sequence: int = 0
 
 
 @dataclass(slots=True)
