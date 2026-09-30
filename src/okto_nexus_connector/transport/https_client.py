@@ -84,6 +84,7 @@ class R4BindingProposal:
     agent_id: str
     binding_id: str
     endpoint_id: str
+    profile_id: str | None
     workspace_id: str
     workspace_binding_id: str
     adapter_id: str
@@ -95,6 +96,8 @@ class R4BindingProposal:
     configuration_revision: int
     approved_diff_hash: str
     summary: str
+    requires_operator: bool
+    fields_changed: tuple[str, ...]
     required_approvals: tuple[str, ...]
     can_apply: bool
 
@@ -528,6 +531,12 @@ class NexusHTTPClient:
                 not isinstance(diff.get("approved_diff_hash"), str) or
                 not diff["approved_diff_hash"].startswith("sha256:") or
                 not isinstance(diff.get("summary"), str) or
+                type(diff.get("requires_operator")) is not bool or
+                not isinstance(diff.get("fields_changed"), list) or
+                any(not isinstance(item, str) or not item for item in diff["fields_changed"]) or
+                "profile_id" not in payload or
+                (payload["profile_id"] is not None and
+                 (not isinstance(payload["profile_id"], str) or not 1 <= len(payload["profile_id"]) <= 160)) or
                 type(payload.get("can_apply")) is not bool or
                 not isinstance(payload.get("required_approvals"), list) or
                 any(not isinstance(item, str) for item in
@@ -542,6 +551,9 @@ class NexusHTTPClient:
             configuration_revision=payload["configuration_revision"],
             approved_diff_hash=diff["approved_diff_hash"],
             summary=diff["summary"],
+            profile_id=payload["profile_id"],
+            requires_operator=diff["requires_operator"],
+            fields_changed=tuple(diff["fields_changed"]),
             required_approvals=tuple(payload["required_approvals"]),
             can_apply=payload["can_apply"],
         )

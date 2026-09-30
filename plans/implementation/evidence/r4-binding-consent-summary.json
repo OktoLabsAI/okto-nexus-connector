@@ -1,0 +1,51 @@
+{
+  "recorded_at": "2026-09-30T06:39:07.443700+00:00",
+  "scope": "R4 binding consent DTO and isolated packaging; no product gate closed",
+  "parent_commit": "0be7faf0040266f2c12185985b132b6343cbc2fe",
+  "core_version": "0.2.28.dev0",
+  "core_wheel_sha256": "27df75100dea033ca5456f2d571eb41b6311fa3ce530a723ecd6c606d257953c",
+  "source_sha256": {
+    "src/okto_nexus_connector/transport/https_client.py": "7c0f2fa52299be36fdb4f5d814c7901575b0cbad971cebdd52d51c77bb8a665e",
+    "tests/contract/test_r4_binding_consent.py": "718d9faf9a7af80d0ac1ff78f6263e9d0b420844fd7b29374df4512ebffe6031",
+    "tests/e2e/test_packaging.py": "c101ba7f6cdf59a0ca57c8b75ec62a63c7cca6d0e82a369a4aba03956e0c70c0"
+  },
+  "runs": [
+    {
+      "file": "plans/implementation/evidence/r4-binding-consent.xml",
+      "sha256": "37799e42bb2ef4ed30d4f2434929d7a1375b7e2ac2c688020ddf0af81edde6cf",
+      "tests": 6,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "file": "plans/implementation/evidence/r4-binding-consent-regression.xml",
+      "sha256": "1a30a0dccc9d9427f2d6f96b268d04f9ebd01a280ccb811815f4609ea7590dc5",
+      "tests": 249,
+      "errors": 0,
+      "failures": 1,
+      "skipped": 2
+    },
+    {
+      "file": "plans/implementation/evidence/r4-binding-consent-packaging-final.xml",
+      "sha256": "475e2ca263b4d3dde6f8a5308fb4a79f50b55d4961231ba3f3447fbc3b7947f0",
+      "tests": 2,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0
+    }
+  ],
+  "runner_python": "C:/Users/jpamb/AppData/Local/Temp/okto-r4-pending-installed-py313/Scripts/python.exe",
+  "source_mode": "PYTHONPATH set to repository src for the source regression",
+  "test_commands": [
+    "python -X utf8 -m pytest tests/contract/test_r4_binding_consent.py -q --tb=short --junitxml=plans/implementation/evidence/r4-binding-consent.xml",
+    "python -X utf8 -m pytest tests -q --tb=short --junitxml=plans/implementation/evidence/r4-binding-consent-regression.xml",
+    "python -X utf8 -m pytest tests/e2e/test_packaging.py -q --tb=short --junitxml=plans/implementation/evidence/r4-binding-consent-packaging-final.xml"
+  ],
+  "failure_resolution": "The full source campaign had 246 passes, 2 skips and one clean-venv installation failure. Inherited PYTHONPATH affected pip distribution discovery. The packaging test now isolates pip, CLI and freeze from source imports, uses an external cwd, and passed both packaging cases on rerun.",
+  "coordinated_installed_evidence": "../okto_labs_okto_nexus/plans/r4_execution/evidence/delegated-binding-installed.xml",
+  "coordinated_installed_result": "27 passed across Nexus operator binding, NS05, optional-Core bootstrap, vertical Connector integration, and six Connector DTO cases; overlaps source tests",
+  "remaining": [
+    "CLI/daemon workflow, self-bind reuse policy, providers, hosts and final delivery acceptance are not closed"
+  ]
+}
