@@ -387,7 +387,7 @@ class DaemonApp:
     # -- transports ------------------------------------------------------------
 
     def own_r4_connection(self, connection, *, candidate_provider, launch_provider=None,
-                          publish_receipt, native_factory=None, response_resolver=None):
+                          publish_receipt, native_factory=None, response_resolver=None, native_tools=None):
         """Adopt a negotiated authenticated connection into daemon ownership.
 
         The startup/credential owner supplies host-local composition ports.
@@ -410,7 +410,7 @@ class DaemonApp:
         owner = R4ExecutionOwner(connection, self.store, self.host,
             candidate_provider=candidate_provider, launch_provider=launch_provider,
             publish_receipt=publish_receipt, native_factory=native_factory,
-            response_resolver=response_resolver)
+            response_resolver=response_resolver, native_tools=native_tools)
         self.r4_executions[key] = owner
         owner.start()
         return owner

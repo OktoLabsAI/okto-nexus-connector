@@ -9,7 +9,7 @@ or silently replaces a credential after uncertain delivery.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 import hashlib
 import secrets
 import time
@@ -43,6 +43,52 @@ class CapabilityLaunchProvider:
             audience=self.audience, actions=self.actions, require_current=guard)
         guard()
         result = await self.configure(frozen, capability)
+        guard()
+        return result
+
+
+@dataclass(frozen=True, slots=True)
+class R4NativeToolServices:
+    """Trusted connection resources retained until native producers settle."""
+    owner: object
+    http: object
+    key: str = field(repr=False)
+
+
+class ApprovedNativeLaunchProvider:
+    """Compose Pi tools from approved local selection and durable issuance.
+
+    The connection owner retains the HTTP client and capability owner through
+    runtime shutdown. No caller-supplied configuration renderer is required.
+    """
+
+    def __init__(self, owner, http, key, host, store, *, candidate_provider, require_current):
+        self.owner, self.http, self.key = owner, http, key
+        self.host, self.store = host, store
+        self.candidate_provider, self.require_current = candidate_provider, require_current
+
+    async def __call__(self, frame):
+        frozen = decode_r4_frame(encode_r4_frame(frame))
+        candidates = tuple(await self.candidate_provider(frozen))
+        # Resolve local consent before requesting a remote credential.
+        from .launch_configuration import _resolve
+        expected = await asyncio.to_thread(_resolve, self.store, frozen, candidates)
+        if expected[1].adapter_id != 'pi_rpc':
+            raise ConnectorError('CAPABILITY_UNSUPPORTED', 'launch_configuration',
+                                 'The approved installation does not use native Pi tools.')
+        def guard():
+            self.require_current(decode_r4_frame(encode_r4_frame(frozen)))
+        guard()
+        cap = await self.owner.reserve(self.http, self.key, frame=frozen,
+            audience='nexus-native-session',
+            actions=('handoff.get', 'handoff.claim', 'handoff.complete'),
+            require_current=guard)
+        guard()
+        if await asyncio.to_thread(_resolve, self.store, frozen, candidates) != expected:
+            raise ConnectorError('PROFILE_DRIFT', 'launch_configuration',
+                                 'The approved launch configuration changed.')
+        result = await self.host.approved_launch(self.store, frame=frozen,
+            candidates=candidates, capability=cap, http=self.http)
         guard()
         return result
 

@@ -23,8 +23,8 @@ def selection(tmp_path, request):
     workspace.mkdir()
     binary = tmp_path / 'codex.exe'
     binary.write_bytes(b'Synthetic approved binary')
-    candidate = InstallationCandidate('codex_app_server', str(binary), fingerprint(binary), 'explicit', 'selected',
-        installation_ref=installation_ref('codex_app_server', str(binary)))
+    candidate = InstallationCandidate('pi_rpc' if getattr(request, 'param', None) == 'pi' else 'codex_app_server', str(binary), fingerprint(binary), 'explicit', 'selected',
+        installation_ref=installation_ref('pi_rpc' if getattr(request, 'param', None) == 'pi' else 'codex_app_server', str(binary)))
     revision = calculate_inventory_revision([candidate])
     store = StateStore(tmp_path / 'state.json')
     digest = 'sha256:' + 'a' * 64

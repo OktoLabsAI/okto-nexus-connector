@@ -104,7 +104,7 @@ def _resolve(store, frame, candidates):
     return selection, record
 
 
-async def approved_launch_setup(store, vault, *, frame, candidates):
+async def approved_launch_setup(store, vault, *, frame, candidates, capability=None, http=None):
     """Compose the standard R4 launch port without raw wire environment or argv."""
     from .core_host import LaunchOverlay, LaunchSecretResolver, make_environment
     from .r4_execution import R4LaunchSetup
@@ -114,6 +114,27 @@ async def approved_launch_setup(store, vault, *, frame, candidates):
         return await asyncio.to_thread(_resolve, store, decode_r4_frame(encoded), candidates)
     expected = await current()
     _, record = expected
+    native_factory = None
+    auth_refs = set(record.secret_bindings.values())
+    if capability is not None:
+        from ..transport.native_actions import native_action_owner_factory
+        # The native bridge preserves the approved provider home and uses the
+        # current Core lease for every action. Its HTTP client is host-owned.
+        if record.adapter_id != 'pi_rpc' or http is None:
+            raise ConnectorError('CAPABILITY_UNSUPPORTED', 'launch_configuration',
+                                 'This adapter requires a qualified direct HTTP configuration.')
+        required_scope = {name: frame[name] for name in (
+            'server_id', 'executor_id', 'binding_id', 'agent_id', 'workspace_id',
+            'workspace_binding_id', 'session_id', 'session_owner_generation',
+            'authorization_revision', 'configuration_revision', 'binding_revision',
+            'credential_epoch')}
+        if dict(capability.scope) != required_scope:
+            raise ConnectorError('BINDING_NOT_AUTHORIZED', 'launch_configuration',
+                                 'The tool capability differs from the approved session.')
+        auth_refs.add(capability.capability_ref)
+        native_factory = native_action_owner_factory(http, capability,
+            connection_id=frame['connection_id'],
+            connection_generation=frame['connection_generation'])
     # Local references are passed to Core prepare. Core remains responsible
     # for environment name/value policy and resolving only prepared refs.
     render = make_environment(LaunchSecretResolver(vault), LaunchOverlay(
@@ -131,4 +152,5 @@ async def approved_launch_setup(store, vault, *, frame, candidates):
             raise ConnectorError('PROFILE_DRIFT', 'launch_configuration',
                                  'The approved launch configuration changed.')
         return result
-    return R4LaunchSetup(environment, auth_refs=tuple(sorted(set(record.secret_bindings.values()))))
+    return R4LaunchSetup(environment, auth_refs=tuple(sorted(auth_refs)),
+                         native_action_factory=native_factory)

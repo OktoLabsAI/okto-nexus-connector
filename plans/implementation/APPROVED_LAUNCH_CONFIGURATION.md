@@ -11,3 +11,11 @@ Verification:
 - Tests use a technical native peer with real Core prepare, leases and journals; they do not qualify a real provider.
 
 Remaining under the existing delivery plan: public onboarding capture, automatic tool capability/MCP/Pi composition, daemon lane adoption, lifecycle renewal, nonempty reconciliation and complete local/remote acceptance. This increment does not close M02 or M06.
+
+## Pi native tool composition
+
+The approved launch port now composes the Core Pi native owner from a durably issued capability. The default R4 execution owner and daemon adoption port accept trusted native tool services, retaining the existing approved environment and including the capability reference in Core prepare. Scope/configuration drift and lane loss stop opening; received material remains vaulted.
+
+Installed Connector validation: 310 passed, one skipped. A Nexus technical Pi child campaign also exercises actual capability issuance, the approved environment, domain claims/completion and pending-action shutdown. This remains technical provider evidence; automatic daemon startup adoption and direct MCP composition remain pending.
+
+During development, the initial fixture omitted the vault directory; after correcting it, the socket launch assertion exposed a missing capability prepare reference. The reference is now included and the real Core owner launches successfully.

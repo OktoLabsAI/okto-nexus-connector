@@ -54,13 +54,18 @@ class R4ExecutionOwner:
 
     def __init__(self, connection, store, host, *, candidate_provider,
                  launch_provider=None, publish_receipt, native_factory=None,
-                 response_resolver=None, max_sessions=64):
+                 response_resolver=None, max_sessions=64, native_tools=None):
         if type(max_sessions) is not int or max_sessions <= 0:
             raise ValueError('Invalid execution session capacity.')
         self.connection, self.store, self.host = connection, store, host
         self.candidate_provider, self.launch_provider = candidate_provider, launch_provider
         self.publish_receipt = publish_receipt
         self.native_factory, self.response_resolver = native_factory, response_resolver
+        if native_tools is not None:
+            from .session_capabilities import R4NativeToolServices
+            if not isinstance(native_tools, R4NativeToolServices) or launch_provider is not None:
+                raise ValueError('Native tools require the default approved launch provider.')
+        self.native_tools = native_tools
         self.max_sessions = max_sessions
         self._sessions = {}
         self._consumers = []
@@ -146,8 +151,20 @@ class R4ExecutionOwner:
                                      'The execution session capacity is exhausted.')
             candidates = tuple(await self.candidate_provider(item.frame))
             self.connection.require_current(item)
-            setup = (await self.launch_provider(item.frame) if self.launch_provider is not None
-                     else await self.host.approved_launch(self.store, frame=item.frame, candidates=candidates))
+            if self.launch_provider is not None:
+                setup = await self.launch_provider(item.frame)
+            elif self.native_tools is not None:
+                from .session_capabilities import ApprovedNativeLaunchProvider
+                async def selected(_):
+                    return candidates
+                def current(_):
+                    self.connection.require_current(item)
+                services = self.native_tools
+                setup = await ApprovedNativeLaunchProvider(services.owner, services.http,
+                    services.key, self.host, self.store, candidate_provider=selected,
+                    require_current=current)(item.frame)
+            else:
+                setup = await self.host.approved_launch(self.store, frame=item.frame, candidates=candidates)
             self.connection.require_current(item)
             if (not isinstance(setup, R4LaunchSetup) or not callable(setup.environment) or
                     (setup.native_action_factory is not None and not callable(setup.native_action_factory)) or
