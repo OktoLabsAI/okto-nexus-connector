@@ -149,3 +149,33 @@ stores when a canonical domain producer is still pending. Socket timeout or
 caller cancellation does not cancel a producer or permit a new action ID.
 Automatic configuration, capability renewal and nonempty reconciliation
 remain required before remote execution readiness can be enabled.
+
+
+## R4 session credential issuance ownership
+
+State schema 7 adds non-secret session capability reservation records. A
+reservation is keyed by Server, executor, session and audience and binds the
+complete opening content, revisions and requested actions. Its request ID and
+deterministic vault handle are committed before HTTP.
+
+SessionCapabilityOwner keeps one bounded producer per reservation. Canceling
+an observer or close waiter does not cancel HTTP, result recording or vault
+persistence. A returned secret is stored before the launch configuration is
+released. CapabilityLaunchProvider composes this service through the existing
+R4ExecutionOwner launch port and rechecks the host's current-lane/configuration
+guard around asynchronous work.
+
+Response loss can replay only the original request identity to obtain the
+Server's recovery metadata. The owner never substitutes a capability or
+converts missing material into a new issuance. Another process recording
+MATERIAL_UNAVAILABLE cannot erase a STORED result. State files contain no
+credential material; the vault remains subject to the existing OS-keyring or
+explicitly approved file-backend policy.
+
+The in-process cached receipt retains its original monotonic deadline. A
+restart preserves the vault secret and reservation but requires authority
+reconciliation before reuse; it does not reanchor a persisted TTL. Automatic
+approved-profile composition, safe rehydration under a reconciled lease,
+capability renewal and terminal reservation retention/cleanup remain pending.
+The durable capacity is 128 reservations by default and fails before HTTP.
+This is an incremental issuance component, not complete daemon onboarding.

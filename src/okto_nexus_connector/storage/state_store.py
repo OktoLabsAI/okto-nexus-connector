@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -164,6 +164,24 @@ class ExecutionExecutorRecord:
 
 
 @dataclass(slots=True)
+class SessionCapabilityRecord:
+    """Durable issuance intent and vault reference; never credential material."""
+
+    reservation_id: str
+    request_id: str
+    request_digest: str
+    server_id: str
+    executor_id: str
+    session_id: str
+    audience: str
+    secret_handle: str
+    status: str = "REQUESTED"
+    capability_id: str = ""
+    capability_ref: str = ""
+    recovery_allowed: bool = False
+
+
+@dataclass(slots=True)
 class ConnectorState:
     schema_version: int = SCHEMA_VERSION
     connector_id: str = ""
@@ -173,6 +191,7 @@ class ConnectorState:
     realizations: list[LocalRealizationRecord] = field(default_factory=list)
     execution_bindings: list[ExecutionBindingRecord] = field(default_factory=list)
     execution_executors: list[ExecutionExecutorRecord] = field(default_factory=list)
+    session_capabilities: list[SessionCapabilityRecord] = field(default_factory=list)
     preferences: dict[str, Any] = field(default_factory=dict)
 
     # -- lookups ---------------------------------------------------------
@@ -302,6 +321,8 @@ def state_from_json(payload: dict[str, Any]) -> ConnectorState:
         record = dict(item)
         record["control_capabilities"] = tuple(record.get("control_capabilities", ()))
         state.execution_executors.append(ExecutionExecutorRecord(**record))
+    for item in payload.get("session_capabilities", []):
+        state.session_capabilities.append(SessionCapabilityRecord(**item))
     preferences = payload.get("preferences", {})
     if isinstance(preferences, dict):
         state.preferences = preferences
@@ -319,6 +340,7 @@ def state_to_json(state: ConnectorState) -> dict[str, Any]:
         "realizations": [asdict(value) for value in state.realizations],
         "execution_bindings": [asdict(value) for value in state.execution_bindings],
         "execution_executors": [asdict(value) for value in state.execution_executors],
+        "session_capabilities": [asdict(value) for value in state.session_capabilities],
         "preferences": state.preferences,
     }
 
