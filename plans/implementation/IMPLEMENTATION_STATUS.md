@@ -1,5 +1,16 @@
 # Implementation status — 2026-09-29 (CN5 corrected, 0.5.0.dev0)
 
+## R4 daemon operation consumers — 2026-09-30
+
+[Execution ownership](R4_EXECUTION_OWNER.md) moves canonical operation
+translation into daemon-owned producers with independent productive/control
+consumers. It installs the initial Core lease before opening, translates seven
+actions through public Core APIs and publishes the same operation's receipt.
+Cancelled observers retain producers; failure fences the channel without a
+second native attempt. Tests and limitations are recorded in
+`evidence/r4-execution-report.json`. Automatic startup, credentials/renewal,
+production environment composition and reconciliation remain incomplete.
+
 ## R4 physical selection — 2026-09-30
 
 [Approved physical selection](R4_PHYSICAL_SELECTION.md) adds schema 4 binding

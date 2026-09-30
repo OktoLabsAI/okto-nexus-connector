@@ -293,6 +293,7 @@ class DaemonApp:
             event_publisher=self.bridge.publisher_for,
             connection_generation=self._generation_for)
         self.transports: dict[str, NXLTransport] = {}
+        self.r4_executions = {}
         self.ipc = IPCServer(self.dispatch)
         self.lock = InstanceLock(paths.pid_dir(root))
         self.started_at = time.time()
@@ -343,8 +344,16 @@ class DaemonApp:
         self._draining = True
         self.runtimes.begin_drain()
         reports: list[dict[str, object]] = []
+        # R4 producers finish before the shared Core host/journal shuts down.
+        # They must never be cancelled as if they were UI observers.
+        for owner in self.r4_executions.values():
+            await owner.stop()
+            await owner.connection.close()
+            if owner.failure is not None:
+                reports.append({"outcome": "unknown", "source": "r4-execution",
+                                "error": "The R4 connection requires reconciliation."})
         try:
-            reports = await self.runtimes.shutdown()
+            reports.extend(await self.runtimes.shutdown())
         except Exception as exc:  # honest reporting, never silent loss
             reports.append({"outcome": "unknown", "error": str(exc)})
         await self.bridge.drain()
@@ -367,6 +376,33 @@ class DaemonApp:
         return 1 if pending else 0
 
     # -- transports ------------------------------------------------------------
+
+    def own_r4_connection(self, connection, *, candidate_provider, launch_provider,
+                          publish_receipt, native_factory=None, response_resolver=None):
+        """Adopt a negotiated authenticated connection into daemon ownership.
+
+        The startup/credential owner supplies host-local composition ports.
+        This method never imports a legacy binding or grants R3 authority.
+        """
+        from ..services.r4_execution import R4ExecutionOwner
+        key = (connection.state.server_id, connection.state.executor_id)
+        if (self._draining or key in self.r4_executions or
+                connection.state.server_id in self.transports):
+            raise ConnectorError('RUNTIME_DRAINING' if self._draining else 'OPERATION_CONFLICT',
+                                 'r4_execution', 'The daemon cannot adopt this connection.')
+        if not connection.online or not connection.state.control_ready:
+            raise ConnectorError('CONTROL_DISCONNECTED', 'r4_execution',
+                                 'The control connection is not ready.')
+        if len(self.r4_executions) >= 32:
+            raise ConnectorError('CAPACITY_EXCEEDED', 'r4_execution',
+                                 'The daemon execution connection capacity is exhausted.')
+        owner = R4ExecutionOwner(connection, self.store, self.host,
+            candidate_provider=candidate_provider, launch_provider=launch_provider,
+            publish_receipt=publish_receipt, native_factory=native_factory,
+            response_resolver=response_resolver)
+        self.r4_executions[key] = owner
+        owner.start()
+        return owner
 
     def _wake_streams_when_online(self, server_id: str) -> None:
         """CN2/N03.2: when the transport becomes READY again, pending

@@ -1,0 +1,211 @@
+{
+  "recorded_at": "2026-09-30T08:53:47.986063+00:00",
+  "scope": "Partial M04/M06 daemon-owned R4 effect consumers; automatic startup, environment/credentials and reconciliation remain pending",
+  "parent_commit": "b1d87106f1ed3abffd438e81ae0ca2fb4383a0af",
+  "core_commit": "9d244cfecc31c817661d560bbcee75cc9f8d5513",
+  "source_sha256": {
+    "src/okto_nexus_connector/daemon/app.py": "9bb8b2135fc4a826445f94277532b253a3b4fa03179fc1a333a00589e9fa343f",
+    "src/okto_nexus_connector/services/r4_execution.py": "e8cea6f7b3a5e7d61e87b76619180e9610050d5c43cfa5b660dc641aa4a057f3",
+    "tests/unit/test_r4_execution.py": "d3103030780968e7c758935d07e2f8f81dea2d720350b9d7a99764b249794b61"
+  },
+  "runs": [
+    {
+      "file": "plans/implementation/evidence/r4-execution-close.xml",
+      "sha256": "56fe77d1f7592dedffda4ce8ade404fb4675ca1c6f88800513d88f4397b9f226",
+      "tests": 1,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 0,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "1",
+          "skipped": "0",
+          "tests": "1",
+          "time": "1.009",
+          "timestamp": "2026-09-30T05:45:34.833456-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ],
+      "skips": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-execution-directed-final.xml",
+      "sha256": "755704172ede36ef067cb83376bb5ffc5f0c71123d6f49cf8b450b75350de05c",
+      "tests": 15,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 14,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "1",
+          "skipped": "0",
+          "tests": "15",
+          "time": "4.903",
+          "timestamp": "2026-09-30T05:45:02.540595-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ],
+      "skips": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-execution-directed-verified.xml",
+      "sha256": "bf657698bf635e835dd0254d03095d9059cb80835e98d977de4fcb893eda3b34",
+      "tests": 15,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 15,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "15",
+          "time": "1.774",
+          "timestamp": "2026-09-30T05:46:09.919940-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ],
+      "skips": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-execution-directed.xml",
+      "sha256": "6bd89873b2215706b779464482af53316419df32f6300d771d43a529acda7314",
+      "tests": 6,
+      "failures": 2,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 4,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "2",
+          "skipped": "0",
+          "tests": "6",
+          "time": "1.534",
+          "timestamp": "2026-09-30T05:43:51.654617-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ],
+      "skips": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-execution-initial.xml",
+      "sha256": "35a5021061ba67c420086a8389ff081bc9d4aecb771856d99b3e7c78da472da7",
+      "tests": 6,
+      "failures": 2,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 4,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "2",
+          "skipped": "0",
+          "tests": "6",
+          "time": "4.566",
+          "timestamp": "2026-09-30T05:43:29.451310-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ],
+      "skips": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-execution-regression.xml",
+      "sha256": "9ca0c45f78eb7921caddb1af59b88f52a25d720fad589e0f61d81f11e5fa3f52",
+      "tests": 288,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "passed": 286,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "2",
+          "tests": "288",
+          "time": "277.926",
+          "timestamp": "2026-09-30T05:48:24.474091-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ],
+      "skips": [
+        {
+          "nodeid": "tests.regressoes.test_connector_audit::test_27_start_session_capability_is_referenced_in_effective_environment",
+          "reason": "lab peer lacks full contract surface: BINDING_NOT_AUTHORIZED"
+        },
+        {
+          "nodeid": "tests.unit.test_core02_integration::test_shim_resolution_never_runs_outside_windows",
+          "reason": "covered above"
+        }
+      ]
+    },
+    {
+      "file": "plans/implementation/evidence/r4-execution-seven-actions.xml",
+      "sha256": "14dc055a223cae016f64cd848d54d0a9060591d009d2312f75aa0d7ce6290a0f",
+      "tests": 17,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 17,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "17",
+          "time": "2.518",
+          "timestamp": "2026-09-30T05:48:06.688666-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ],
+      "skips": []
+    }
+  ],
+  "commands": {
+    "directed": "rtk proxy C:/Users/jpamb/AppData/Local/Temp/okto-r4-connection-source-unf1oud0/Scripts/python.exe -X utf8 -m pytest tests/unit/test_r4_execution.py tests/contract/test_r4_connection.py -q --tb=line --junitxml=plans/implementation/evidence/r4-execution-seven-actions.xml",
+    "regression": "rtk proxy C:/Users/jpamb/AppData/Local/Temp/okto-r4-connection-source-unf1oud0/Scripts/python.exe -X utf8 -m pytest tests -q --tb=line --junitxml=plans/implementation/evidence/r4-execution-regression.xml"
+  },
+  "source_environment": "Editable Connector with pinned installed Core; Windows Python 3.13.",
+  "artifact": {
+    "stage": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-execution-final-build-ary9uwjb",
+    "wheel": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-execution-final-wheel-5yazauq2\\okto_nexus_connector-0.5.0.dev0-py3-none-any.whl",
+    "sha256": "1ff0de4fa9dac562a834c91431ef4d2cc113f899cf921295e37acf6a539f42bf",
+    "installed_env": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-execution-installed-p43ay8hw"
+  },
+  "core_wheel_sha256": "27df75100dea033ca5456f2d571eb41b6311fa3ce530a723ecd6c606d257953c",
+  "coordinated_evidence": {
+    "repository": "Nexus",
+    "manifest": "plans/r4_execution/test_runs_20260930_execution_owner.json",
+    "installed_passes": 63,
+    "counts_overlap": true
+  },
+  "failure_analysis": [
+    "Initial tests incorrectly expected an action field in a wire receipt. The fixture now observes operation_id.",
+    "A cancelled stop waiter exposed completed producers still awaiting their done callbacks. Stop now explicitly observes completed tasks after draining.",
+    "The close fixture omitted required policy fields, then used zero drain/interrupt budgets and correctly received OUTCOME_UNKNOWN. The successful-close case now grants a nonzero budget.",
+    "The initial Nexus cleanup closed the channel before stopping consumers and correctly produced a disconnect/unknown shutdown status. Cleanup now goes through the daemon lifecycle.",
+    "All attempts and raw failure XML are preserved. The final installed campaign verifies the final wheel and workspace production bytes."
+  ],
+  "limitations": [
+    "The daemon adopts an already negotiated connection. Automatic startup, executor registration/persistence, credential and lease renewal, reconnect and approved-revision refresh are pending.",
+    "Production profile/environment/capability mapping must supply the trusted host ports; tests use empty environments and synthetic qualification.",
+    "Seven action translations are exercised with real Core and a synthetic native peer. Canonical native request ingress and UI/CLI decision journeys remain M08/M10 work.",
+    "The real loopback WSS journey exercises five actions; no separate daemon process, real provider, Linux or independent-host acceptance is claimed.",
+    "A failed receipt publisher fences the connection without repeating effects. Durable retry/reconciliation/event publication remains incomplete.",
+    "Consumers serialize each class; global shutdown deadline, control fairness and live recovery ownership under uncertainty remain M11 qualification.",
+    "No schema/Core wire change or readiness promotion. Counts overlap; two historical regression skips remain."
+  ],
+  "product_gates_closed": []
+}

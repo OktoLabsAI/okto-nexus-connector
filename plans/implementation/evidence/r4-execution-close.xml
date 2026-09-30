@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="1.009" timestamp="2026-09-30T05:45:34.833456-03:00" hostname="Alienware_m15"><testcase classname="tests.unit.test_r4_execution" name="test_frozen_open_selection_and_typed_control_projection" time="0.434"><failure message="nexus_connector_core.models.CoreError: OUTCOME_UNKNOWN">tests\unit\test_r4_execution.py:225: in test_frozen_open_selection_and_typed_control_projection
+    assert (await observed(receipts, owner))['operation_id'] == 'runtime.close'
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests\unit\test_r4_execution.py:130: in observed
+    raise owner.failure
+src\okto_nexus_connector\services\r4_execution.py:120: in _produce
+    receipt = await self._execute(item)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+src\okto_nexus_connector\services\r4_execution.py:187: in _execute
+    receipt = await runtime.close(r4_close_operation(frame), context)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\jpamb\AppData\Local\Temp\okto-r4-connection-source-unf1oud0\Lib\site-packages\nexus_connector_core\runtime.py:912: in close
+    return await self._close_policy(semantic, context, operation.policy)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Users\jpamb\AppData\Local\Temp\okto-r4-connection-source-unf1oud0\Lib\site-packages\nexus_connector_core\close_runtime.py:60: in _close_policy
+    raise CoreError("OUTCOME_UNKNOWN", "close", possible_effect=True,
+E   nexus_connector_core.models.CoreError: OUTCOME_UNKNOWN</failure></testcase></testsuite></testsuites>
