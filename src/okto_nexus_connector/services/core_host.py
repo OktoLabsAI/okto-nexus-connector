@@ -71,9 +71,9 @@ class LaunchSecretResolver:
         if reference in self._capabilities:
             return self._capabilities[reference]
         if reference.startswith("vault:"):
-            return self._vault.resolve(reference)
+            return await asyncio.to_thread(self._vault.resolve, reference)
         if reference.startswith("provider:"):
-            return self._vault.resolve(f"vault:{reference}")
+            return await asyncio.to_thread(self._vault.resolve, f"vault:{reference}")
         raise ConnectorError("PROVIDER_AUTH_REQUIRED", "secret_resolver",
                              f"unknown secret reference kind",
                              action="Import the provider credential or use "
@@ -282,6 +282,10 @@ class CoreRuntimeHost:
         )
 
     # -- runtime composition ------------------------------------------------
+
+    async def approved_launch(self, store, *, frame, candidates):
+        from .launch_configuration import approved_launch_setup
+        return await approved_launch_setup(store, self._vault, frame=frame, candidates=candidates)
 
     async def build_r4(self, store, *, frame, candidates, environment, factory=None, native_action_factory=None):
         """Compose an R4 runtime only from the approved host realization.

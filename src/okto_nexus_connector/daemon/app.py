@@ -386,7 +386,7 @@ class DaemonApp:
 
     # -- transports ------------------------------------------------------------
 
-    def own_r4_connection(self, connection, *, candidate_provider, launch_provider,
+    def own_r4_connection(self, connection, *, candidate_provider, launch_provider=None,
                           publish_receipt, native_factory=None, response_resolver=None):
         """Adopt a negotiated authenticated connection into daemon ownership.
 

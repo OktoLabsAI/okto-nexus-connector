@@ -83,6 +83,8 @@ class ExecutionSelection:
     binding_digest: str
     realization_digest: str
     opening_intent_hash: str
+    configuration_digest: str
+    local_consent_id: str
 
 
 def resolve_execution_selection(store: StateStore, *, frame: dict, candidates) -> ExecutionSelection:
@@ -134,4 +136,5 @@ def resolve_execution_selection(store: StateStore, *, frame: dict, candidates) -
         raise ConnectorError('PROFILE_DRIFT', 'execution_selection', 'The approved root or installation has changed.')
     return ExecutionSelection(binding.server_id, binding.executor_id, binding.binding_id, parsed['session_id'],
         binding.agent_id, binding.workspace_id, physical_root, selected, _digest(binding),
-        binding.realization_snapshot_digest, parsed['intent_hash'])
+        binding.realization_snapshot_digest, parsed['intent_hash'],
+        local.configuration_digest, local.local_consent_id)

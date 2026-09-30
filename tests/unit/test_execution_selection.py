@@ -18,7 +18,7 @@ from okto_nexus_connector.transport.https_client import R4BindingView, R4Realiza
 
 
 @pytest.fixture
-def selection(tmp_path):
+def selection(tmp_path, request):
     workspace = tmp_path / 'workspace'
     workspace.mkdir()
     binary = tmp_path / 'codex.exe'
@@ -27,11 +27,21 @@ def selection(tmp_path):
         installation_ref=installation_ref('codex_app_server', str(binary)))
     revision = calculate_inventory_revision([candidate])
     store = StateStore(tmp_path / 'state.json')
+    digest = 'sha256:' + 'a' * 64
+    if getattr(request, 'param', False):
+        from okto_nexus_connector.services.launch_configuration import stage_launch_configuration
+        home = tmp_path / 'provider-home'
+        home.mkdir()
+        config = stage_launch_configuration(store, server_id='srv', executor_id='exe',
+            agent_id='agent', local_consent_id='consent', adapter_id=candidate.adapter_id,
+            profile_revision=1, provider_home=home,
+            secret_bindings={'OPENAI_API_KEY': 'vault:provider-demo'})
+        digest = config.configuration_digest
     local = stage_local_realization(store, server_id='srv', executor_id='exe', agent_id='agent',
         client_intent_id='realize', candidates=[candidate], adapter_id=candidate.adapter_id,
         candidate_ref=candidate.installation_ref, inventory_revision=revision,
         workspace_root=workspace, workspace_id=None, workspace_label='Workspace',
-        configuration_digest='sha256:' + 'a' * 64, local_consent_id='consent')
+        configuration_digest=digest, local_consent_id='consent')
     published = R4Realization('srv', 'exe', 'realization', local.local_realization_ref, 1,
         'agent', 'workspace', 'wxb', revision, local.configuration_digest)
     acknowledged = acknowledge_local_realization(store, record=local, published=published)
@@ -61,7 +71,7 @@ def test_approved_binding_roundtrip_does_not_downgrade_on_publication_replay(sel
     assert selected.workspace_root == str(store.path.parent / 'workspace')
     assert len(store.load().execution_bindings) == 1
     old = state_from_json({'schema_version': 3, 'connector_id': 'legacy', 'preferences': {'keep': True}})
-    assert old.schema_version == 7 and old.execution_bindings == []
+    assert old.schema_version == 8 and old.execution_bindings == []
     assert state_to_json(old)['preferences'] == {'keep': True}
     with pytest.raises(ConnectorError):
         acknowledge_execution_binding(store, binding=replace(binding, endpoint_id='another'))

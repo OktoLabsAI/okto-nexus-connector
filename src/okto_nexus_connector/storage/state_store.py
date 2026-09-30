@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -182,6 +182,23 @@ class SessionCapabilityRecord:
 
 
 @dataclass(slots=True)
+class LaunchConfigurationRecord:
+    """Executor-local approved configuration; the Server receives only its digest."""
+
+    server_id: str
+    executor_id: str
+    agent_id: str
+    local_consent_id: str
+    adapter_id: str
+    profile_revision: int
+    secret_bindings: dict[str, str]
+    provider_home: str | None
+    home_device: str | None
+    home_inode: str | None
+    configuration_digest: str
+
+
+@dataclass(slots=True)
 class ConnectorState:
     schema_version: int = SCHEMA_VERSION
     connector_id: str = ""
@@ -192,6 +209,7 @@ class ConnectorState:
     execution_bindings: list[ExecutionBindingRecord] = field(default_factory=list)
     execution_executors: list[ExecutionExecutorRecord] = field(default_factory=list)
     session_capabilities: list[SessionCapabilityRecord] = field(default_factory=list)
+    launch_configurations: list[LaunchConfigurationRecord] = field(default_factory=list)
     preferences: dict[str, Any] = field(default_factory=dict)
 
     # -- lookups ---------------------------------------------------------
@@ -323,6 +341,8 @@ def state_from_json(payload: dict[str, Any]) -> ConnectorState:
         state.execution_executors.append(ExecutionExecutorRecord(**record))
     for item in payload.get("session_capabilities", []):
         state.session_capabilities.append(SessionCapabilityRecord(**item))
+    for item in payload.get("launch_configurations", []):
+        state.launch_configurations.append(LaunchConfigurationRecord(**item))
     preferences = payload.get("preferences", {})
     if isinstance(preferences, dict):
         state.preferences = preferences
@@ -341,6 +361,7 @@ def state_to_json(state: ConnectorState) -> dict[str, Any]:
         "execution_bindings": [asdict(value) for value in state.execution_bindings],
         "execution_executors": [asdict(value) for value in state.execution_executors],
         "session_capabilities": [asdict(value) for value in state.session_capabilities],
+        "launch_configurations": [asdict(value) for value in state.launch_configurations],
         "preferences": state.preferences,
     }
 

@@ -53,7 +53,7 @@ class R4ExecutionOwner:
     """
 
     def __init__(self, connection, store, host, *, candidate_provider,
-                 launch_provider, publish_receipt, native_factory=None,
+                 launch_provider=None, publish_receipt, native_factory=None,
                  response_resolver=None, max_sessions=64):
         if type(max_sessions) is not int or max_sessions <= 0:
             raise ValueError('Invalid execution session capacity.')
@@ -146,7 +146,8 @@ class R4ExecutionOwner:
                                      'The execution session capacity is exhausted.')
             candidates = tuple(await self.candidate_provider(item.frame))
             self.connection.require_current(item)
-            setup = await self.launch_provider(item.frame)
+            setup = (await self.launch_provider(item.frame) if self.launch_provider is not None
+                     else await self.host.approved_launch(self.store, frame=item.frame, candidates=candidates))
             self.connection.require_current(item)
             if (not isinstance(setup, R4LaunchSetup) or not callable(setup.environment) or
                     (setup.native_action_factory is not None and not callable(setup.native_action_factory)) or
