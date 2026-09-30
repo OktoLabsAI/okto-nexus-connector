@@ -18,6 +18,9 @@ async def dispatch(args, output: Output):
     if command == "identity":
         from .identity import run_identity
         return await run_identity(args, output, root)
+    if command == "executor":
+        from .executor import run_executor
+        return await run_executor(args, output, root)
     if command == "discover":
         from .discover import run_discover
         return await run_discover(args, output, root)

@@ -84,6 +84,17 @@ def build_parser() -> argparse.ArgumentParser:
     replace.add_argument("--credential-stdin", action="store_true")
     replace.add_argument("--credential-env", default=None)
 
+    executor = sub.add_parser("executor", help="R4 executor registration")
+    executor_sub = executor.add_subparsers(dest="subcommand", required=True)
+    register = executor_sub.add_parser("register", help="register this host using an imported identity")
+    register.add_argument("--identity", required=True, help="imported identity alias")
+    register.add_argument("--label", required=True, help="host label shown by the Server")
+    register.add_argument("--client-intent-id", default=None,
+                          help="explicit registration intent ID; otherwise persisted automatically")
+    executor_sub.add_parser("list", help="list local registration intents and executor IDs")
+    executor_show = executor_sub.add_parser("show", help="show one Server's executor registration")
+    executor_show.add_argument("server_id")
+
     discover = sub.add_parser("discover",
                               help="local harness inventory (redacted)")
     discover.add_argument("--harness", default=None)

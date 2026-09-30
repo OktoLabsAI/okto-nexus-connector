@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -148,6 +148,20 @@ class ExecutionBindingRecord:
 
 
 @dataclass(slots=True)
+class ExecutionExecutorRecord:
+    """Durable R4 registration intent and result; never a stored ticket."""
+
+    server_id: str
+    connector_id: str
+    registration_agent_id: str
+    client_intent_id: str
+    label: str
+    control_capabilities: tuple[str, ...] = ()
+    executor_id: str = ""
+    state: str = "REGISTRATION_PENDING"
+
+
+@dataclass(slots=True)
 class ConnectorState:
     schema_version: int = SCHEMA_VERSION
     connector_id: str = ""
@@ -156,6 +170,7 @@ class ConnectorState:
     bindings: list[BindingRecord] = field(default_factory=list)
     realizations: list[LocalRealizationRecord] = field(default_factory=list)
     execution_bindings: list[ExecutionBindingRecord] = field(default_factory=list)
+    execution_executors: list[ExecutionExecutorRecord] = field(default_factory=list)
     preferences: dict[str, Any] = field(default_factory=dict)
 
     # -- lookups ---------------------------------------------------------
@@ -284,6 +299,10 @@ def state_from_json(payload: dict[str, Any]) -> ConnectorState:
         state.realizations.append(LocalRealizationRecord(**item))
     for item in payload.get("execution_bindings", []):
         state.execution_bindings.append(ExecutionBindingRecord(**item))
+    for item in payload.get("execution_executors", []):
+        record = dict(item)
+        record["control_capabilities"] = tuple(record.get("control_capabilities", ()))
+        state.execution_executors.append(ExecutionExecutorRecord(**record))
     preferences = payload.get("preferences", {})
     if isinstance(preferences, dict):
         state.preferences = preferences
@@ -300,6 +319,7 @@ def state_to_json(state: ConnectorState) -> dict[str, Any]:
         "bindings": [asdict(value) for value in state.bindings],
         "realizations": [asdict(value) for value in state.realizations],
         "execution_bindings": [asdict(value) for value in state.execution_bindings],
+        "execution_executors": [asdict(value) for value in state.execution_executors],
         "preferences": state.preferences,
     }
 

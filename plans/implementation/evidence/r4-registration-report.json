@@ -1,0 +1,111 @@
+{
+  "recorded_at": "2026-09-30T09:10:59.883793+00:00",
+  "scope": "Partial M02/M06 durable executor registration and public CLI; automatic daemon startup is not yet integrated",
+  "parent_commit": "23a28467e2da141c5dff389e838792ebe820e229",
+  "core_commit": "9d244cfecc31c817661d560bbcee75cc9f8d5513",
+  "source_sha256": {
+    "src/okto_nexus_connector/storage/state_store.py": "5549c902aaeb43f3c816e0d8acbe2a89aa316885525d7a9b1eca0a9bedc07382",
+    "src/okto_nexus_connector/transport/https_client.py": "37778121ffd3dfe9a1feb4b677884236d310d24b449561bbb263e002e1e9fe0f",
+    "src/okto_nexus_connector/services/executor_registration.py": "b659af34bd51cb1c2cce44654f9ccd63301b858663c481e2e22589e56c41d397",
+    "src/okto_nexus_connector/cli/main.py": "1497329e293cf6baf504b4c09d4cf9ffcc8f44a6e674439ac31ac8a8dbf2bcb1",
+    "src/okto_nexus_connector/cli/commands/__init__.py": "a6c9169a0af2c6daba7d0c683e50e2ca6adc31dbd1008c29fdef9fb4172206bc",
+    "src/okto_nexus_connector/cli/commands/identity.py": "e75da38af0e4fcd9ece820194e0f37b4570510f6c0a2698b0ebb44c4723ae8a0",
+    "src/okto_nexus_connector/cli/commands/executor.py": "d6e7458629ba97b020135d55267f9faafa05642e79975907169096fba0e6438b",
+    "tests/unit/test_executor_registration.py": "7ca4ac219221352eebc47e4e84d1976076db10671440e21c8ad357d4cf6efb3b",
+    "tests/unit/test_execution_selection.py": "711505f069a425aa4eb291b2ec347a54c1907a31e3658c488595fdbb97b6e803"
+  },
+  "runs": [
+    {
+      "file": "plans/implementation/evidence/r4-registration-directed.xml",
+      "sha256": "e821ddcc683814d2fe5a7b71630f668a9046687b21a2f0faf198d1809d2c0e87",
+      "tests": 40,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 40,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "40",
+          "time": "2.677",
+          "timestamp": "2026-09-30T06:04:17.533118-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ],
+      "skips": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-registration-regression.xml",
+      "sha256": "1f513eee45df84818bb5a79cdaf66e791a25a3265d0777de0a8dfbc7b75ca388",
+      "tests": 302,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "passed": 300,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "2",
+          "tests": "302",
+          "time": "246.242",
+          "timestamp": "2026-09-30T06:05:51.032718-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ],
+      "skips": [
+        {
+          "nodeid": "tests.regressoes.test_connector_audit::test_27_start_session_capability_is_referenced_in_effective_environment",
+          "reason": "lab peer lacks full contract surface: BINDING_NOT_AUTHORIZED"
+        },
+        {
+          "nodeid": "tests.unit.test_core02_integration::test_shim_resolution_never_runs_outside_windows",
+          "reason": "covered above"
+        }
+      ]
+    }
+  ],
+  "commands": {
+    "directed": "rtk proxy C:/Users/jpamb/AppData/Local/Temp/okto-r4-connection-source-unf1oud0/Scripts/python.exe -X utf8 -m pytest tests/unit/test_executor_registration.py tests/unit/test_execution_selection.py tests/unit/test_state_store.py -q --tb=line --junitxml=plans/implementation/evidence/r4-registration-directed.xml",
+    "regression": "rtk proxy C:/Users/jpamb/AppData/Local/Temp/okto-r4-connection-source-unf1oud0/Scripts/python.exe -X utf8 -m pytest tests -q --tb=line --junitxml=plans/implementation/evidence/r4-registration-regression.xml"
+  },
+  "source_environment": "Editable Connector with pinned installed Core; Windows Python 3.13.",
+  "artifact": {
+    "stage": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-registration-build-u58look0",
+    "wheel": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-registration-wheel-w0m3kkhd\\okto_nexus_connector-0.5.0.dev0-py3-none-any.whl",
+    "sha256": "927bb98c9956fea8f688b972e7b1e2193a437fc07ef16b8c674c8ce103a86a42",
+    "installed_env": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-registration-installed-qa2si_je"
+  },
+  "core_wheel_sha256": "27df75100dea033ca5456f2d571eb41b6311fa3ce530a723ecd6c606d257953c",
+  "coordinated_evidence": {
+    "repository": "Nexus",
+    "manifest": "plans/r4_execution/test_runs_20260930_registration.json",
+    "installed_passes": 78,
+    "counts_overlap": true
+  },
+  "schema_change": {
+    "previous": 4,
+    "current": 5,
+    "behavior": "Add explicit execution_executors intent/result records; preserve existing bindings and never infer executor authorization.",
+    "rollback": "Older binaries reject schema 5; verified backup and full migration/rollback qualification remain M12."
+  },
+  "verified": [
+    "Persist the immutable registration intent before HTTP; response loss/restart replays it rather than creating a new local identity.",
+    "Validate Server/Connector/agent and canonical ticket revisions; CAS rejects local identity/profile/request changes or a conflicting executor result.",
+    "Keep bootstrap tickets out of state, public CLI output and ExecutorBootstrap repr; capture local ticket lifetime before HTTP.",
+    "Expose executor register/list/show and retain the authenticated Server profile from identity add.",
+    "The public Nexus test invokes the real CLI main entry point over loopback HTTP, verifies one canonical executor/intent and requests a fresh bootstrap from reloaded state."
+  ],
+  "limitations": [
+    "This provides the persistent prerequisite and CLI. Automatic R4 daemon startup, inventory publication, lane attachment, renewal/reconnect and runtime environment composition remain pending.",
+    "Live ticket/lease rotation, approved-revision refresh, nonempty reconciliation and durable publishers still require integration.",
+    "The schema upgrade is additive; the complete upgrade/restore/rollback campaign remains M12.",
+    "Core and Nexus production bytes are unchanged. No executable/readiness flag or product gate is promoted.",
+    "Installed campaigns include earlier synthetic runtime peers; no real provider, Linux or independent-host acceptance is claimed. Counts overlap and two existing regression skips remain."
+  ],
+  "product_gates_closed": []
+}

@@ -49,6 +49,9 @@ class ExecutorRegistration:
     state: str
     bootstrap_ticket: str
     ticket_expires_in: int
+    registration_agent_id: str = ""
+    credential_epoch: int = 0
+    authorization_revision: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,6 +436,9 @@ class NexusHTTPClient:
             connector_id=payload["connector_id"], state=payload["state"],
             bootstrap_ticket=ticket["ticket"],
             ticket_expires_in=ticket["expires_in"],
+            registration_agent_id=ticket["agent_id"],
+            credential_epoch=ticket["credential_epoch"],
+            authorization_revision=ticket["authorization_revision"],
         )
 
     async def publish_inventory(self, ticket: str, *, executor_id: str,

@@ -1,5 +1,15 @@
 # Implementation status — 2026-09-29 (CN5 corrected, 0.5.0.dev0)
 
+## R4 durable executor registration — 2026-09-30
+
+[Executor registration](R4_EXECUTOR_REGISTRATION.md) adds schema 5 persisted
+registration intent/result, CAS against the selected identity/profile and a
+process-local bootstrap ticket API. The CLI registers, lists and queries the
+same executor; response loss reuses the original intent. `identity add` now
+persists its authenticated Server profile. Evidence is recorded in
+`evidence/r4-registration-report.json`. Automatic R4 daemon startup and live
+credential/lease renewal remain pending; no gate is closed.
+
 ## R4 daemon operation consumers — 2026-09-30
 
 [Execution ownership](R4_EXECUTION_OWNER.md) moves canonical operation

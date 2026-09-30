@@ -61,7 +61,7 @@ def test_approved_binding_roundtrip_does_not_downgrade_on_publication_replay(sel
     assert selected.workspace_root == str(store.path.parent / 'workspace')
     assert len(store.load().execution_bindings) == 1
     old = state_from_json({'schema_version': 3, 'connector_id': 'legacy', 'preferences': {'keep': True}})
-    assert old.schema_version == 4 and old.execution_bindings == []
+    assert old.schema_version == 5 and old.execution_bindings == []
     assert state_to_json(old)['preferences'] == {'keep': True}
     with pytest.raises(ConnectorError):
         acknowledge_execution_binding(store, binding=replace(binding, endpoint_id='another'))
