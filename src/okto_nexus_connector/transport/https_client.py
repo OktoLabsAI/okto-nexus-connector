@@ -10,7 +10,8 @@ requests (A.15).
 from __future__ import annotations
 
 import ipaddress
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
         ExecutionContext, OperationReceipt, PreparedLaunch,
     )
 
-from ..errors import ConnectorError
+from ..errors import CapabilityMaterialUnavailable, ConnectorError
 from ..redaction import redact_text
 
 DEFAULT_TIMEOUT = httpx.Timeout(15.0, connect=10.0)
@@ -197,6 +198,19 @@ class SessionCapability:
     capability_ref: str
     capability: str
     expires_in: float
+
+
+@dataclass(frozen=True, slots=True)
+class R4SessionCapability:
+    capability_id: str
+    capability_ref: str
+    capability: str = field(repr=False)
+    scope: dict[str, object]
+    audience: str
+    actions: tuple[str, ...]
+    expires_in: int
+    deadline_monotonic: float
+    mcp_url: str | None
 
 
 def origin_of(base_url: str) -> str:
@@ -976,6 +990,59 @@ class NexusHTTPClient:
         return await self._request(
             "GET", f"/v1/runtime/operations/{operation_id}", key=key)
 
+    async def request_r4_session_capability(
+            self, key: str, *, frame: dict, capability_request_id: str,
+            audience: str, actions: tuple[str, ...],
+            replaces_capability_id: str | None = None) -> R4SessionCapability:
+        """Reserve one session secret from an immutable canonical opening.
+
+        No automatic replacement or retry is safe after a lost issuance reply.
+        The approved host persists the request identity before calling this port.
+        """
+        from nexus_connector_core import decode_r4_frame, encode_r4_frame
+        frame = decode_r4_frame(encode_r4_frame(frame))
+        if (frame['type'] != 'operation.submit' or frame['action'] != 'runtime.open' or
+                audience not in ('nexus-mcp-session', 'nexus-native-session') or
+                type(capability_request_id) is not str or not 1 <= len(capability_request_id) <= 160 or
+                type(actions) is not tuple or len(actions) > 128 or
+                any(type(a) is not str or not 1 <= len(a) <= 160 for a in actions) or
+                len(set(actions)) != len(actions) or
+                (replaces_capability_id is not None and
+                 (type(replaces_capability_id) is not str or not 1 <= len(replaces_capability_id) <= 160))):
+            raise ConnectorError('VALIDATION_ERROR', 'capability', 'Invalid R4 session capability request.')
+        scope = {k: frame[k] for k in (
+            'server_id', 'executor_id', 'binding_id', 'agent_id', 'workspace_id',
+            'workspace_binding_id', 'session_id', 'session_owner_generation',
+            'binding_revision', 'credential_epoch', 'authorization_revision', 'configuration_revision')}
+        sent_at = time.monotonic()
+        payload = await self._request('POST', f"/v1/runtime/sessions/{scope['session_id']}/capability",
+            key=key, json_body=dict(capability_request_id=capability_request_id,
+                binding_id=scope['binding_id'], audience=audience, actions=list(actions),
+                replaces_capability_id=replaces_capability_id), require_revision=True)
+        expected_fields = {'capability_id', 'capability_ref', 'capability', 'scope',
+                           'audience', 'actions', 'expires_in', 'mcp_url'}
+        prefix = 'mcp-cap:' if audience == 'nexus-mcp-session' else 'native-cap:'
+        if (set(payload) != expected_fields or payload.get('scope') != scope or
+                # Python bools compare equal to ints; preserve exact scope types.
+                any(type(payload['scope'].get(k)) is not type(v) for k, v in scope.items()) or
+                payload.get('audience') != audience or payload.get('actions') != sorted(actions) or
+                type(payload.get('capability_id')) is not str or not 1 <= len(payload['capability_id']) <= 160 or
+                payload.get('capability_ref') != prefix + payload['capability_id'] or
+                type(payload.get('capability')) is not str or not 32 <= len(payload['capability']) <= 4096 or
+                type(payload.get('expires_in')) is not int or not 1 <= payload['expires_in'] <= 120 or
+                (audience == 'nexus-native-session' and payload.get('mcp_url') is not None) or
+                (audience == 'nexus-mcp-session' and payload.get('mcp_url') != self.base_url + '/mcp')):
+            raise ConnectorError('VERSION_INCOMPATIBLE', 'capability',
+                                 'The Server returned an invalid R4 session capability.')
+        deadline = sent_at + payload['expires_in'] - 0.5
+        if time.monotonic() >= deadline:
+            raise ConnectorError('AUTH_EXPIRED', 'capability', 'The session capability response arrived too late.')
+        return R4SessionCapability(
+            capability_id=payload['capability_id'], capability_ref=payload['capability_ref'],
+            capability=payload['capability'], scope=dict(scope), audience=audience,
+            actions=tuple(payload['actions']), expires_in=payload['expires_in'],
+            deadline_monotonic=deadline, mcp_url=payload['mcp_url'])
+
     async def session_capability(self, key: str, *, binding_id: str,
                                  session_id: str,
                                  actions: tuple[str, ...]
@@ -1072,6 +1139,15 @@ def _error_from(response: httpx.Response) -> ConnectorError:
 
 def _error_payload(payload: dict[str, object], stage: str) -> ConnectorError:
     error = payload["error"]
+    if error.get('code') == 'CREDENTIAL_MATERIAL_UNAVAILABLE' and 'capability_id' in error:
+        if (type(error['capability_id']) is not str or not 1 <= len(error['capability_id']) <= 160 or
+                type(error.get('recovery_allowed')) is not bool):
+            return ConnectorError('VERSION_INCOMPATIBLE', stage, 'Invalid capability recovery metadata.')
+        return CapabilityMaterialUnavailable('CREDENTIAL_MATERIAL_UNAVAILABLE', 'capability',
+            'The capability secret is returned only once.', capability_id=error['capability_id'],
+            recovery_allowed=error['recovery_allowed'], action=
+            'Request a replacement only after checking the current session state.'
+            if error['recovery_allowed'] else 'Recover the existing executor configuration.')
     return ConnectorError(
         str(error.get("code", "UNKNOWN")), str(error.get("stage", stage)),
         redact_text(str(error.get("message", ""))),

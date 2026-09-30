@@ -1,5 +1,13 @@
 # Implementation status — 2026-09-29 (CN5 corrected, 0.5.0.dev0)
 
+## R4 session capability consumer — 2026-09-30
+
+[The capability client](R4_SESSION_CAPABILITIES.md) validates exact opening
+scope, audience, actions, origin and deadline, keeps secrets out of its DTO
+representation, and retains safe replay recovery metadata. Final source
+regression: 343 passes and two existing skips. The daemon's durable launch
+configuration and MCP/native handler integration remain pending; no gate closed.
+
 ## R4 automatic control startup — 2026-09-30
 
 [Daemon startup](R4_DAEMON_STARTUP.md) connects explicit registrations to the

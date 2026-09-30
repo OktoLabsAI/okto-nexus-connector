@@ -15,6 +15,7 @@ from typing import Iterable
 _BEARER = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}")
 _TICKET = re.compile(r"\b\w{0,3}tkt_[A-Za-z0-9._-]{6,}")
 _CAP = re.compile(r"(?:mcp-cap|native-cap)(?::|_)[A-Za-z0-9._:-]{4,}")
+_R4_CREDENTIAL = re.compile(r"\bnx[ct]4_[A-Za-z0-9_-]{16,}")
 _KEY = re.compile(r"nxs_[A-Za-z0-9._-]{16,}")
 _HEX64 = re.compile(r"\b[0-9a-f]{64}\b", re.IGNORECASE)
 
@@ -29,6 +30,7 @@ def redact_text(value: str, extra: Iterable[str] = ()) -> str:
     value = _BEARER.sub(r"\1" + _REDACTED, value)
     value = _TICKET.sub(_REDACTED, value)
     value = _CAP.sub(_REDACTED, value)
+    value = _R4_CREDENTIAL.sub(_REDACTED, value)
     value = _KEY.sub(_REDACTED, value)
     value = _HEX64.sub(_REDACTED, value)
     return value
