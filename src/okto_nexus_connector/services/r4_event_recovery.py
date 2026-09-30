@@ -1,9 +1,9 @@
 """Recover durable event obligations before the control-ready transition."""
 import asyncio
-import secrets
 import time
 from nexus_connector_core import EventCursor
 from ..errors import ConnectorError
+from .r4_tickets import acquire_ticket
 from .r4_events import R4EventPublisher,event_page
 from .r4_publications import PublicationAuthority,_binding
 
@@ -36,21 +36,14 @@ async def recover_event_streams(store,vault,http,host,channel,*,require_current,
                     authorities.pop(binding.binding_id,None)
                     authority=None
                 if authority is None:
-                    key=await asyncio.to_thread(vault.resolve,identity.secret_handle)
-                    await require_current()
-                    if await asyncio.to_thread(_binding,store,http,server_id,executor_id,scope)!=(binding,identity):
-                        raise ConnectorError("STALE_GENERATION","r4_event_recovery","The event publication authority changed.")
-                    started=clock()
-                    ticket=await http.request_r4_binding_ticket(key,binding_id=binding.binding_id,
-                        client_intent_id="event_recovery_"+secrets.token_hex(16),
-                        credential_request_id="credential_"+secrets.token_hex(16),
-                        scopes=("lane:attach","lease:request","receipt:publish"))
-                    if (ticket.executor_id!=executor_id or ticket.binding_id!=binding.binding_id or
-                            ticket.agent_id!=binding.agent_id or ticket.credential_epoch!=identity.credential_epoch or
-                            ticket.authorization_revision!=binding.authorization_revision):
-                        raise ConnectorError("STALE_GENERATION","r4_event_recovery","The returned event authority is stale.")
-                    authority=PublicationAuthority(binding,identity,ticket,started+ticket.expires_in)
-                    authorities[binding.binding_id]=authority
+                    async def ticket_current():
+                        await require_current()
+                        if await asyncio.to_thread(_binding, store, http, server_id, executor_id, scope) != (binding, identity):
+                            raise ConnectorError("STALE_GENERATION", "r4_event_recovery", "The event publication authority changed.")
+                    ticket, deadline = await acquire_ticket(store, vault, http, binding, identity,
+                        require_current=ticket_current, clock=clock)
+                    authority = PublicationAuthority(binding, identity, ticket, deadline)
+                    authorities[binding.binding_id] = authority
                 async def current():
                     await require_current()
                     if (clock()>=authority.deadline or (binding,identity)!=(authority.binding,authority.identity) or

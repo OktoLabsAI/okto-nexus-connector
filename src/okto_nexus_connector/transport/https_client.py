@@ -22,7 +22,7 @@ if TYPE_CHECKING:
         ExecutionContext, OperationReceipt, PreparedLaunch,
     )
 
-from ..errors import CapabilityMaterialUnavailable, ConnectorError
+from ..errors import CapabilityMaterialUnavailable, ConnectorError, TicketMaterialUnavailable
 from ..redaction import redact_text
 
 DEFAULT_TIMEOUT = httpx.Timeout(15.0, connect=10.0)
@@ -330,7 +330,8 @@ class NexusHTTPClient:
     async def _request(self, method: str, path: str, *, key: str | None,
                         json_body: dict[str, object] | None = None,
                         expect: int | tuple[int, ...] = 200,
-                        require_revision: bool = False) -> dict[str, object]:
+                        require_revision: bool = False,
+                        binding_ticket_errors: bool = False) -> dict[str, object]:
         assert self._client is not None, "use 'async with NexusHTTPClient'"
         headers: dict[str, str] = {}
         if key is not None:
@@ -381,6 +382,8 @@ class NexusHTTPClient:
         if isinstance(expect, int):
             expect = (expect,)
         if response.status_code not in expect:
+            if binding_ticket_errors and response.status_code == 409:
+                raise _ticket_error_from(response)
             raise _error_from(response)
         try:
             payload = response.json()
@@ -887,7 +890,7 @@ class NexusHTTPClient:
                 "replaces_ticket_id": replaces_ticket_id,
                 "audience": "nexus-executor-control",
                 "scopes": list(scopes), "expires_in": expires_in,
-            }, require_revision=True,
+            }, require_revision=True, binding_ticket_errors=True,
         )
         if (payload.get("audience") != "nexus-executor-control" or
                 payload.get("binding_id") != binding_id or
@@ -1295,3 +1298,32 @@ def _error_payload(payload: dict[str, object], stage: str) -> ConnectorError:
         error.get("operation_id") if isinstance(
             error.get("operation_id"), str) else None,
         error.get("action") if isinstance(error.get("action"), str) else None)
+
+
+def _ticket_error_from(response: httpx.Response) -> ConnectorError:
+    try:
+        payload = response.json()
+    except ValueError:
+        return ConnectorError("VERSION_INCOMPATIBLE", "binding_ticket",
+                              "Invalid ticket recovery metadata.")
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(error, dict):
+        return ConnectorError("VERSION_INCOMPATIBLE", "binding_ticket",
+                              "Invalid ticket recovery metadata.")
+    if error.get("code") != "CREDENTIAL_MATERIAL_UNAVAILABLE":
+        return _error_from(response)
+    ticket_id = error.get("ticket_id")
+    if (type(ticket_id) is not str or not 5 <= len(ticket_id) <= 160
+            or not ticket_id.startswith("ept_")
+            or not all(c.isascii() and (c.isalnum() or c in "_-") for c in ticket_id)
+            or error.get("stage") != "credential"
+            or error.get("possible_effect") is not False
+            or error.get("retry_safe") is not False
+            or error.get("operation_id") is not None):
+        return ConnectorError("VERSION_INCOMPATIBLE", "binding_ticket",
+                              "Invalid ticket recovery metadata.")
+    return TicketMaterialUnavailable(
+        "CREDENTIAL_MATERIAL_UNAVAILABLE", "credential",
+        "The ticket secret is returned only once.",
+        action="Recover the persisted intent before requesting a replacement.",
+        ticket_id=ticket_id)

@@ -1,12 +1,12 @@
 """Connection-scoped lane attachment and approved execution composition."""
 import asyncio
 from dataclasses import dataclass
-import secrets
 import time
 
 from ..errors import ConnectorError
 from ..services.executor_registration import _identity, _profile
 from ..services.r4_execution import R4ExecutionOwner
+from ..services.r4_tickets import acquire_ticket
 from ..services.session_capabilities import SessionCapabilityOwner, ApprovedToolLaunchProvider
 
 
@@ -108,15 +108,13 @@ class R4DaemonExecution:
                 ticket = recovered.ticket
                 deadline = recovered.deadline
             else:
-                key = await asyncio.to_thread(self.vault.resolve, identity.secret_handle)
-                if (await asyncio.to_thread(self._bindings)).get(binding_id) != (binding, identity):
-                    raise ConnectorError("STALE_GENERATION", "r4_lanes", "The approved identity changed.")
-                started = self.clock()
-                ticket = await self.http.request_r4_binding_ticket(key, binding_id=binding_id,
-                    client_intent_id="lane_" + secrets.token_hex(16),
-                    credential_request_id="credential_" + secrets.token_hex(16),
-                    scopes=("lane:attach", "lease:request", "receipt:publish"))
-                deadline = started + ticket.expires_in
+                async def current():
+                    if self.closing or not self.connection.online:
+                        raise ConnectorError("CONTROL_DISCONNECTED", "r4_lanes", "The execution connection is closed.")
+                    if (await asyncio.to_thread(self._bindings)).get(binding_id) != (binding, identity):
+                        raise ConnectorError("STALE_GENERATION", "r4_lanes", "The approved identity changed.")
+                ticket, deadline = await acquire_ticket(self.store, self.vault, self.http,
+                    binding, identity, require_current=current, clock=self.clock)
             if (ticket.executor_id != binding.executor_id or ticket.agent_id != binding.agent_id
                     or ticket.credential_epoch != identity.credential_epoch
                     or ticket.authorization_revision != binding.authorization_revision

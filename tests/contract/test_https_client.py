@@ -557,3 +557,49 @@ async def test_r4_control_resolution_preserves_target_content_and_hash(intent, t
                     response['intent_hash'] = digest(response['semantic_intent'])
                 with pytest.raises(ConnectorError, match='does not match'):
                     await resolve()
+
+@pytest.mark.parametrize("change", [
+    {}, {"ticket_id": ""}, {"ticket_id": "nxt4_secret"}, {"ticket_id": "ept_" + "x"*157},
+    {"ticket_id": "ept_bad\n"}, {"ticket_id": 1}, {"stage": "http"},
+    {"possible_effect": True}, {"retry_safe": True}, {"operation_id": "op"},
+])
+async def test_ticket_material_loss_is_typed_only_with_valid_metadata(change):
+    from okto_nexus_connector.errors import TicketMaterialUnavailable
+    error = dict(code="CREDENTIAL_MATERIAL_UNAVAILABLE", stage="credential",
+                 ticket_id="ept_original", possible_effect=False, retry_safe=False,
+                 operation_id=None, message="untrusted secret", action="untrusted action")
+    error.update(change)
+    def handler(request):
+        return httpx.Response(409, headers={"X-Nexus-Connections-Revision": "nexus-connections-2026-09-29-r4"},
+                              json={"error": error})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        async with NexusHTTPClient("http://127.0.0.1:8202", client=client) as http:
+            with pytest.raises(ConnectorError) as caught:
+                await http.request_r4_binding_ticket("key", binding_id="binding", client_intent_id="intent",
+                    credential_request_id="request", scopes=("lane:attach",))
+    if not change:
+        assert isinstance(caught.value, TicketMaterialUnavailable)
+        assert caught.value.to_json()["ticket_id"] == "ept_original"
+    else:
+        assert caught.value.code == "VERSION_INCOMPATIBLE"
+        assert not isinstance(caught.value, TicketMaterialUnavailable)
+    assert "untrusted" not in str(caught.value)
+
+
+@pytest.mark.parametrize("status,code", [
+    (409, "CREDENTIAL_REPLACEMENT_REQUIRED"), (409, "CONFLICT"),
+    (403, "CREDENTIAL_MATERIAL_UNAVAILABLE"), (503, "CREDENTIAL_MATERIAL_UNAVAILABLE"),
+])
+async def test_ticket_conflict_or_http_refusal_never_authorizes_recovery(status, code):
+    from okto_nexus_connector.errors import TicketMaterialUnavailable
+    def handler(request):
+        return httpx.Response(status, headers={"X-Nexus-Connections-Revision": "nexus-connections-2026-09-29-r4"},
+            json={"error": dict(code=code, stage="credential", ticket_id="ept_original",
+                               possible_effect=False, retry_safe=False, operation_id=None)})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        async with NexusHTTPClient("http://127.0.0.1:8202", client=client) as http:
+            with pytest.raises(ConnectorError) as caught:
+                await http.request_r4_binding_ticket("key", binding_id="binding", client_intent_id="intent",
+                    credential_request_id="request", scopes=("lane:attach",))
+    assert caught.value.code == code
+    assert not isinstance(caught.value, TicketMaterialUnavailable)

@@ -1,12 +1,12 @@
 """Replay only persisted receipts under fresh, scoped Server authority."""
 import asyncio
 from dataclasses import dataclass
-import secrets
 import time
 
 from nexus_connector_core import OperationKey, project_r4_bound_receipt
 
 from ..errors import ConnectorError
+from .r4_tickets import acquire_ticket
 from ..storage.r4_publications import R4PublicationStore
 from .executor_registration import _identity, _profile
 
@@ -73,20 +73,13 @@ async def recover_publications(store, vault, http, *, server_id, executor_id,
                 authorities.pop(binding.binding_id,None)
                 authority = None
             if authority is None:
-                key = await asyncio.to_thread(vault.resolve, identity.secret_handle)
-                await require_current()
-                if await asyncio.to_thread(_binding, store, http, server_id, executor_id, frame) != (binding, identity):
-                    raise ConnectorError('STALE_GENERATION', 'r4_publication', 'The receipt authority changed.')
-                started = clock()
-                ticket = await http.request_r4_binding_ticket(key, binding_id=binding.binding_id,
-                    client_intent_id='recovery_' + secrets.token_hex(16),
-                    credential_request_id='credential_' + secrets.token_hex(16),
-                    scopes=('lane:attach', 'lease:request', 'receipt:publish'))
-                if (ticket.executor_id != executor_id or ticket.binding_id != binding.binding_id or
-                        ticket.agent_id != binding.agent_id or ticket.credential_epoch != identity.credential_epoch or
-                        ticket.authorization_revision != binding.authorization_revision):
-                    raise ConnectorError('STALE_GENERATION', 'r4_publication', 'The returned receipt authority is stale.')
-                authority = PublicationAuthority(binding, identity, ticket, started + ticket.expires_in)
+                async def ticket_current():
+                    await require_current()
+                    if await asyncio.to_thread(_binding, store, http, server_id, executor_id, frame) != (binding, identity):
+                        raise ConnectorError("STALE_GENERATION", "r4_publication", "The receipt authority changed.")
+                ticket, deadline = await acquire_ticket(store, vault, http, binding, identity,
+                    require_current=ticket_current, clock=clock)
+                authority = PublicationAuthority(binding, identity, ticket, deadline)
                 authorities[binding.binding_id] = authority
             await require_current()
             if (clock() >= authority.deadline or
