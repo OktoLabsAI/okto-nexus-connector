@@ -20,7 +20,7 @@
     },
     {
       "file": "plans/implementation/evidence/r4-binding-consent-regression.xml",
-      "sha256": "1a30a0dccc9d9427f2d6f96b268d04f9ebd01a280ccb811815f4609ea7590dc5",
+      "sha256": "b2e8f29460aedadaba5abf0e444295fd869ccd44789c07ca7cb599d5d8afbb46",
       "tests": 249,
       "errors": 0,
       "failures": 1,
@@ -47,5 +47,6 @@
   "coordinated_installed_result": "27 passed across Nexus operator binding, NS05, optional-Core bootstrap, vertical Connector integration, and six Connector DTO cases; overlaps source tests",
   "remaining": [
     "CLI/daemon workflow, self-bind reuse policy, providers, hosts and final delivery acceptance are not closed"
-  ]
+  ],
+  "evidence_normalization": "Trailing whitespace removed from recorded failure text; test outcomes unchanged."
 }
