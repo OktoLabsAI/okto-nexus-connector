@@ -202,7 +202,9 @@ async def test_nonempty_or_unavailable_history_cannot_be_reported_empty(control,
     owner.start()
     try:
         await eventually(lambda: owner.phase == 'RECOVERING' and owner.error_code is not None)
-        assert not peer.sockets and not owner.status()['control_ready']
+        assert all(not socket.online for socket in peer.sockets) and not owner.status()['control_ready']
+        if history == 'claim':
+            assert peer.report['claims'][0]['state'] == 'UNKNOWN'
         assert 'synthetic-secret' not in str(owner.status())
     finally:
         await dispose(owner, host)
@@ -239,13 +241,12 @@ async def test_requested_recovery_facts_never_become_an_empty_report(control, fi
     owner, _, _, host, _ = control
     owner.executor_id = 'executor'
     request = dict(server_id='srv', executor_id='executor', operation_ids=[], session_ids=[],
-                   stream_watermarks=[], cursor=None)
+                   stream_watermarks=[], cursor=None, connection_id='connection', connection_generation=1, reconcile_id='reconcile')
     request[field] = value
     try:
         with pytest.raises(ConnectorError) as refused:
-            await owner._empty_reconciliation(request)
-        assert refused.value.code == 'RECONCILIATION_REQUIRED'
-        assert host.journal_if_open() is None
+            await owner._reconcile(request)
+        assert refused.value.code == ('STALE_GENERATION' if field == 'cursor' else 'RECONCILIATION_REQUIRED')
     finally:
         await dispose(owner, host)
 
@@ -270,3 +271,35 @@ async def test_public_protocol_is_checked_without_credentials(change):
             else:
                 with pytest.raises(ConnectorError) as error: await http.r4_protocol()
                 assert error.value.code == 'VERSION_INCOMPATIBLE'
+
+
+async def test_claim_history_is_paged_without_inventing_release_proofs(control):
+    from nexus_connector_core import OperationKey
+    from okto_nexus_connector.services.r4_reconciliation import R4ReconciliationReporter
+    owner, _, store, host, _ = control
+    journal = await host.ensure_history_journal()
+    try:
+        for index in range(257):
+            await journal.admit(OperationKey("srv","executor",f"open-{index}"),"digest",
+                                f"session-{index}",claim_session=True,
+                                connection_generation=1,session_owner_generation=1)
+        reporter = R4ReconciliationReporter(store,host,"srv","executor")
+        request = dict(protocol_major=1,contract_revision=R4_PREVIEW_REVISION,
+            server_id="srv",executor_id="executor",connection_id="connection",connection_generation=2,
+            reconcile_id="cycle",cursor=None,operation_ids=[],session_ids=[],stream_watermarks=[])
+        reports = []
+        for _ in range(3):
+            report = await reporter.report(request)
+            reports.append(report)
+            request = {**request,"cursor":report["next_cursor"]}
+        assert [len(r["claims"]) for r in reports] == [128,128,1]
+        assert [r["complete"] for r in reports] == [False,False,True]
+        assert len({c["session_id"] for r in reports for c in r["claims"]}) == 257
+        assert all(c["state"] == "UNKNOWN" for r in reports for c in r["claims"])
+        assert all(not r["stream_watermarks"] for r in reports)
+        assert reporter.blocked
+        with pytest.raises(ConnectorError) as refused:
+            await reporter.report({**request,"cursor":reports[0]["next_cursor"]})
+        assert refused.value.code == "STALE_GENERATION"
+    finally:
+        await dispose(owner,host)

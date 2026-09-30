@@ -2,7 +2,7 @@
 
 Reserve before invoking Core. A reservation without a projected receipt stays
 unresolved after a crash. Only a correlated durable Server acknowledgment can
-remove a ready receipt. Raw operation payloads and credentials are not stored.
+acknowledge a ready receipt. Confirmed associations remain available for reconciliation. Raw operation payloads and credentials are not stored.
 """
 from contextlib import contextmanager
 import hashlib
@@ -10,7 +10,10 @@ import json
 from pathlib import Path
 import sqlite3
 
-from nexus_connector_core import decode_r4_frame, encode_r4_frame, validate_r4_receipt_binding
+from nexus_connector_core import (
+    CoreError, R4ReceiptProjection, decode_r4_frame, encode_r4_frame,
+    validate_r4_receipt_binding, reduce_r4_receipt,
+)
 from nexus_connector_core.protocol import canonical_json
 
 from ..errors import ConnectorError
@@ -39,11 +42,11 @@ class R4PublicationStore:
             connection = sqlite3.connect(self.path, timeout=10)
             connection.row_factory = sqlite3.Row
             connection.execute('PRAGMA synchronous=FULL')
-            # Reuse freed pages after acknowledgment; bound physical growth.
+            # Acknowledged associations remain queryable; bound physical growth.
             connection.execute('PRAGMA max_page_count=65536')
             connection.execute('BEGIN IMMEDIATE')
             version = connection.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2):
+            if version not in (0, 1, 2, 3):
                 raise ConnectorError('VERSION_INCOMPATIBLE', 'r4_publication',
                                      'The publication store requires a newer Connector.')
             connection.execute('CREATE TABLE IF NOT EXISTS publications ('
@@ -52,7 +55,15 @@ class R4PublicationStore:
                 'PRIMARY KEY(server_id,executor_id,operation_id))')
             if version < 2:
                 connection.execute('ALTER TABLE publications ADD COLUMN projection_binding TEXT')
-            connection.execute('PRAGMA user_version=2')
+            if version < 3:
+                connection.execute('ALTER TABLE publications ADD COLUMN acknowledged INTEGER NOT NULL DEFAULT 0')
+                connection.execute('ALTER TABLE publications ADD COLUMN metadata_digest TEXT')
+                for row in connection.execute('SELECT rowid,metadata FROM publications').fetchall():
+                    connection.execute('UPDATE publications SET metadata_digest=? WHERE rowid=?',
+                                       (hashlib.sha256(row['metadata'].encode()).hexdigest(), row['rowid']))
+            connection.execute('PRAGMA user_version=3')
+            connection.execute("CREATE INDEX IF NOT EXISTS publication_sessions ON publications "
+                "(server_id,executor_id,json_extract(metadata,'$.session_id'),json_extract(metadata,'$.action'))")
             yield connection
             connection.commit()
         except (OSError, sqlite3.Error, ValueError, TypeError, KeyError) as error:
@@ -72,20 +83,20 @@ class R4PublicationStore:
 
     def reserve(self, frame):
         frame = self._frame(frame, 'operation.submit')
-        metadata = canonical_json({k: frame[k] for k in (*_PROVENANCE, 'action')}).decode()
+        metadata = canonical_json({k: frame[k] for k in (*_PROVENANCE, 'action', 'session_owner_generation')}).decode()
         with self._transaction() as conn:
             key = tuple(frame[k] for k in _KEY)
-            prior = conn.execute('SELECT metadata FROM publications WHERE '
+            prior = conn.execute('SELECT metadata,acknowledged FROM publications WHERE '
                                  'server_id=? AND executor_id=? AND operation_id=?', key).fetchone()
             if prior is not None:
-                code = 'RECONCILIATION_REQUIRED' if prior['metadata'] == metadata else 'OPERATION_CONFLICT'
+                code = 'RECONCILIATION_REQUIRED' if prior['metadata'] == metadata and not prior['acknowledged'] else 'OPERATION_CONFLICT'
                 raise ConnectorError(code, 'r4_publication',
                                      'An existing publication obligation must be reconciled.')
-            if conn.execute('SELECT count(*) FROM publications').fetchone()[0] >= self.capacity:
+            if conn.execute('SELECT count(*) FROM publications WHERE acknowledged=0').fetchone()[0] >= self.capacity:
                 raise ConnectorError('CAPACITY_EXCEEDED', 'r4_publication',
                                      'The durable publication capacity is exhausted.')
-            conn.execute('INSERT INTO publications(server_id,executor_id,operation_id,metadata) '
-                         'VALUES (?,?,?,?)', (*key, metadata))
+            conn.execute('INSERT INTO publications(server_id,executor_id,operation_id,metadata,metadata_digest) '
+                         'VALUES (?,?,?,?,?)', (*key, metadata, hashlib.sha256(metadata.encode()).hexdigest()))
 
     def record(self, frame):
         frame = self._frame(frame, 'operation.receipt')
@@ -93,58 +104,77 @@ class R4PublicationStore:
         digest = hashlib.sha256(raw.encode()).hexdigest()
         with self._transaction() as conn:
             key = tuple(frame[k] for k in _KEY)
-            row = conn.execute('SELECT metadata,receipt,digest FROM publications WHERE '
+            row = conn.execute('SELECT * FROM publications WHERE '
                                'server_id=? AND executor_id=? AND operation_id=?', key).fetchone()
-            if (row is None or any(json.loads(row['metadata'])[k] != frame[k] for k in _PROVENANCE)
-                    or (row['receipt'] is not None and (row['receipt'] != raw or row['digest'] != digest))):
+            if row is None:
                 raise ConnectorError('OPERATION_CONFLICT', 'r4_publication',
                                      'The receipt does not match its publication obligation.')
-            conn.execute('UPDATE publications SET receipt=?,digest=? WHERE '
+            stored = self._decode(row)
+            if any(stored['metadata'][k] != frame[k] for k in _PROVENANCE):
+                raise ConnectorError('OPERATION_CONFLICT', 'r4_publication',
+                                     'The receipt does not match its publication obligation.')
+            previous = stored['receipt']
+            if previous == frame:
+                return
+            if previous is not None:
+                projection = R4ReceiptProjection(*(previous[k] for k in (
+                    'server_id','executor_id','binding_id','agent_id','session_id','operation_id','intent_hash',
+                    'receipt_revision','stage','possible_effect','retry_safe')),
+                    previous.get('native_id'), previous['connection_id'], previous['connection_generation'],
+                    ((previous['receipt_revision'], 'sha256:' + row['digest']),))
+                try:
+                    reduce_r4_receipt(projection, frame)
+                except CoreError as error:
+                    raise ConnectorError('OPERATION_CONFLICT', 'r4_publication',
+                                         'The receipt revision does not advance its stored fact.') from error
+            if row['acknowledged'] and conn.execute('SELECT count(*) FROM publications WHERE acknowledged=0').fetchone()[0] >= self.capacity:
+                raise ConnectorError('CAPACITY_EXCEEDED', 'r4_publication', 'The durable publication capacity is exhausted.')
+            conn.execute('UPDATE publications SET receipt=?,digest=?,acknowledged=0 WHERE '
                          'server_id=? AND executor_id=? AND operation_id=?', (raw, digest, *key))
 
-    def bind(self, binding):
+    def bind(self, binding, *, stream_epoch=None):
         binding = validate_r4_receipt_binding(binding)
         source = binding['source']
         raw = canonical_json(binding).decode()
         with self._transaction() as conn:
             key = tuple(source[k] for k in _KEY)
-            row = conn.execute('SELECT metadata,projection_binding FROM publications WHERE '
+            row = conn.execute('SELECT * FROM publications WHERE '
                                'server_id=? AND executor_id=? AND operation_id=?', key).fetchone()
-            if (row is None or json.loads(row['metadata'])['action'] != binding['action'] or
-                    any(json.loads(row['metadata'])[k] != source[k] for k in _PROVENANCE) or
+            stored = self._decode(row) if row is not None else None
+            if (stored is None or stored['metadata']['action'] != binding['action'] or
+                    any(stored['metadata'][k] != source[k] for k in _PROVENANCE) or
                     row['projection_binding'] not in (None, raw)):
                 raise ConnectorError('OPERATION_CONFLICT', 'r4_publication',
                                      'The Core receipt binding conflicts with its reserved operation.')
             conn.execute('UPDATE publications SET projection_binding=? WHERE '
                          'server_id=? AND executor_id=? AND operation_id=?', (raw, *key))
+            if stream_epoch is not None:
+                if binding['action'] != 'runtime.open' or type(stream_epoch) is not str or not 1 <= len(stream_epoch) <= 160:
+                    raise ValueError('Invalid opening stream epoch.')
+                metadata = stored['metadata']
+                if metadata.get('stream_epoch') not in (None, stream_epoch):
+                    raise ConnectorError('OPERATION_CONFLICT', 'r4_publication', 'The opening stream changed.')
+                metadata['stream_epoch'] = stream_epoch
+                encoded = canonical_json(metadata).decode()
+                conn.execute('UPDATE publications SET metadata=?,metadata_digest=? WHERE '
+                    'server_id=? AND executor_id=? AND operation_id=?',
+                    (encoded, hashlib.sha256(encoded.encode()).hexdigest(), *key))
 
     def unprojected(self, server_id, executor_id, *, after='', limit=128):
         if type(limit) is not int or not 1 <= limit <= 256 or type(after) is not str:
             raise ValueError('Invalid publication page cursor.')
         with self._transaction() as conn:
-            rows = conn.execute('SELECT operation_id,metadata,projection_binding FROM publications '
+            rows = conn.execute('SELECT * FROM publications '
                 'WHERE server_id=? AND executor_id=? AND operation_id>? AND receipt IS NULL '
                 'AND projection_binding IS NOT NULL ORDER BY operation_id LIMIT ?',
                 (server_id, executor_id, after, limit)).fetchall()
-            result = []
-            for row in rows:
-                binding = validate_r4_receipt_binding(json.loads(row['projection_binding']))
-                source = binding['source']
-                metadata = json.loads(row['metadata'])
-                if ((source['server_id'], source['executor_id'], source['operation_id']) !=
-                        (server_id, executor_id, row['operation_id']) or
-                        any(metadata[k] != source[k] for k in _PROVENANCE) or
-                        metadata['action'] != binding['action']):
-                    raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_publication',
-                                         'The stored Core receipt binding has inconsistent provenance.')
-                result.append(binding)
-            return result
+            return [self._decode(row)['binding'] for row in rows]
 
     def acknowledge(self, frame):
         frame = self._frame(frame, 'operation.receipt')
         raw = canonical_json(frame).decode()
         with self._transaction() as conn:
-            changed = conn.execute('DELETE FROM publications WHERE server_id=? AND executor_id=? '
+            changed = conn.execute('UPDATE publications SET acknowledged=1 WHERE server_id=? AND executor_id=? '
                 'AND operation_id=? AND receipt=? AND digest=?',
                 (*(frame[k] for k in _KEY), raw, hashlib.sha256(raw.encode()).hexdigest())).rowcount
             if changed != 1:
@@ -155,24 +185,53 @@ class R4PublicationStore:
         if type(limit) is not int or not 1 <= limit <= 256:
             raise ValueError('Invalid publication page size.')
         with self._transaction() as conn:
-            rows = conn.execute('SELECT operation_id,metadata,receipt,digest FROM publications WHERE server_id=? '
-                'AND executor_id=? AND receipt IS NOT NULL ORDER BY operation_id LIMIT ?',
+            rows = conn.execute('SELECT * FROM publications WHERE server_id=? '
+                'AND executor_id=? AND acknowledged=0 AND receipt IS NOT NULL ORDER BY operation_id LIMIT ?',
                 (server_id, executor_id, limit)).fetchall()
-            result = []
-            for row in rows:
-                if hashlib.sha256(row['receipt'].encode()).hexdigest() != row['digest']:
-                    raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_publication',
-                                         'The stored receipt failed its integrity check.')
-                frame = self._frame(json.loads(row['receipt']), 'operation.receipt')
-                if ((frame['server_id'], frame['executor_id'], frame['operation_id']) !=
-                        (server_id, executor_id, row['operation_id']) or
-                        any(json.loads(row['metadata'])[k] != frame[k] for k in _PROVENANCE)):
-                    raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_publication',
-                                         'The stored receipt has inconsistent provenance.')
-                result.append(frame)
-            return result
+            return [self._decode(row)['receipt'] for row in rows]
 
     def pending(self, server_id, executor_id):
         with self._transaction() as conn:
-            return conn.execute('SELECT 1 FROM publications WHERE server_id=? AND executor_id=? LIMIT 1',
+            return conn.execute('SELECT 1 FROM publications WHERE server_id=? AND executor_id=? AND acknowledged=0 LIMIT 1',
                                 (server_id, executor_id)).fetchone() is not None
+
+    def _decode(self, row):
+        if hashlib.sha256(row['metadata'].encode()).hexdigest() != row['metadata_digest']:
+            raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_publication', 'The stored metadata failed its integrity check.')
+        metadata = json.loads(row['metadata'])
+        if tuple(metadata[k] for k in _KEY) != tuple(row[k] for k in _KEY):
+            raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_publication', 'The stored operation scope is inconsistent.')
+        receipt = json.loads(row['receipt']) if row['receipt'] is not None else None
+        if receipt is not None:
+            if hashlib.sha256(row['receipt'].encode()).hexdigest() != row['digest']:
+                raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_publication', 'The stored receipt failed its integrity check.')
+            self._frame(receipt, 'operation.receipt')
+            if any(receipt[k] != metadata[k] for k in _PROVENANCE):
+                raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_publication', 'The receipt provenance is inconsistent.')
+        binding = validate_r4_receipt_binding(json.loads(row['projection_binding'])) if row['projection_binding'] else None
+        if binding is not None and (binding['action'] != metadata['action'] or
+                any(binding['source'][k] != metadata[k] for k in _PROVENANCE)):
+            raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_publication', 'The Core association is inconsistent.')
+        return dict(metadata=metadata, receipt=receipt, binding=binding, acknowledged=bool(row['acknowledged']))
+
+    def lookup(self, server_id, executor_id, operation_ids):
+        if not isinstance(operation_ids, (tuple, list)) or len(operation_ids) > 256 or any(type(i) is not str for i in operation_ids):
+            raise ValueError('Invalid operation lookup page.')
+        with self._transaction() as conn:
+            result = {}
+            for operation_id in operation_ids:
+                row = conn.execute('SELECT * FROM publications WHERE server_id=? AND executor_id=? AND operation_id=?',
+                                   (server_id, executor_id, operation_id)).fetchone()
+                if row is not None:
+                    result[operation_id] = self._decode(row)
+            return result
+
+    def session_history(self, server_id, executor_id, session_id):
+        with self._transaction() as conn:
+            rows = conn.execute("SELECT * FROM publications WHERE server_id=? AND executor_id=? "
+                "AND json_extract(metadata,'$.session_id')=? AND json_extract(metadata,'$.action') "
+                "IN ('runtime.open','runtime.close') ORDER BY operation_id LIMIT 257",
+                (server_id, executor_id, session_id)).fetchall()
+            if len(rows) > 256:
+                raise ConnectorError('CAPACITY_EXCEEDED', 'r4_reconcile', 'Session reconciliation requires another history page.')
+            return [self._decode(row) for row in rows]

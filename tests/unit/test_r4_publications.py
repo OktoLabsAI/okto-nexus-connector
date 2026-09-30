@@ -62,6 +62,45 @@ def test_payload_is_not_persisted_and_receipt_corruption_fails_closed(selection)
     assert store.pending('srv', 'exe')
 
 
+def test_confirmed_history_advances_and_old_ack_cannot_erase_new_fact(selection):
+    state, _, _, frame, *_ = selection
+    store = R4PublicationStore.for_state(state)
+    store.reserve(frame)
+    first = receipt(frame)
+    store.record(first)
+    store.acknowledge(first)
+    saved = R4PublicationStore(store.path).lookup('srv', 'exe', [frame['operation_id']])[frame['operation_id']]
+    assert saved['acknowledged'] and saved['receipt'] == first
+    assert not store.ready('srv', 'exe') and not store.pending('srv', 'exe')
+    second = dict(first, receipt_revision=2, stage='RUNNING')
+    store.record(second)
+    with pytest.raises(ConnectorError, match='OPERATION_CONFLICT'):
+        store.acknowledge(first)
+    assert store.ready('srv', 'exe') == [second]
+    store.acknowledge(second)
+    with pytest.raises(ConnectorError, match='OPERATION_CONFLICT'):
+        store.record(dict(first, receipt_revision=3))
+    terminal = dict(second, receipt_revision=3, stage='SUCCEEDED')
+    store.record(terminal)
+    store.acknowledge(terminal)
+    assert store.lookup('srv', 'exe', [frame['operation_id']])[frame['operation_id']]['receipt'] == terminal
+    assert store.lookup('foreign', 'exe', [frame['operation_id']]) == {}
+    with pytest.raises(ConnectorError, match='OPERATION_CONFLICT'):
+        store.reserve(frame)
+
+
+def test_corrupted_confirmed_metadata_is_not_a_release_proof(selection):
+    state, _, _, frame, *_ = selection
+    store = R4PublicationStore.for_state(state)
+    store.reserve(frame)
+    store.record(receipt(frame))
+    store.acknowledge(receipt(frame))
+    with sqlite3.connect(store.path) as conn:
+        conn.execute("UPDATE publications SET metadata=json_set(metadata,'$.session_owner_generation',2)")
+    with pytest.raises(ConnectorError, match='JOURNAL_UNAVAILABLE'):
+        store.session_history('srv', 'exe', frame['session_id'])
+
+
 async def test_publication_failure_leaves_exact_durable_receipt(execution):
     owner, connection, native, _, opening = execution
     sent = []
@@ -88,7 +127,7 @@ async def test_failed_reservation_never_reaches_native_open(execution, monkeypat
 
 async def test_failed_binding_commit_never_reaches_native_open(execution, monkeypatch):
     owner, connection, native, _, opening = execution
-    def unavailable(binding):
+    def unavailable(binding, **options):
         raise ConnectorError('JOURNAL_UNAVAILABLE', 'test', 'The disk is unavailable.')
     monkeypatch.setattr(owner.publications, 'bind', unavailable)
     await connection.emit(opening)
@@ -142,8 +181,8 @@ async def test_binding_without_core_admission_stays_pending(lifecycle, monkeypat
     owner, http, state, frame, native, _, published, keys = lifecycle
     await owner.sync()
     persist = owner.owner.publications.bind
-    def interrupted(binding):
-        persist(binding)
+    def interrupted(binding, **options):
+        persist(binding, **options)
         raise OSError('The process stopped before Core admission.')
     monkeypatch.setattr(owner.owner.publications, 'bind', interrupted)
     await owner.connection.emit(frame)
@@ -218,7 +257,7 @@ async def test_startup_recovers_before_connect_and_pending_reservation_blocks_em
     owner.executor_id = 'exe'
     request = dict(server_id='srv', executor_id='exe', operation_ids=[], session_ids=[], cursor=None)
     with pytest.raises(ConnectorError, match='RECONCILIATION_REQUIRED'):
-        await owner._empty_reconciliation(request)
+        await owner._reconcile(request)
     journal.record(receipt(opening))
     peer.origin = peer.base_url = 'https://nexus.test'
     posted = []

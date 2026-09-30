@@ -119,6 +119,7 @@ async def negotiate_r4_control(
     generation = welcome["connection_generation"]
     pending: R4ReconcileAttempt | None = None
     attempts = 0
+    cycle_id, next_cursor, pages = None, None, 0
     while True:
         frame = await _receive(websocket)
         if not _scope(frame, server_id=server_id,
@@ -127,7 +128,14 @@ async def negotiate_r4_control(
             raise ValueError("The R4 control frame changed scope.")
         kind = frame["type"]
         if kind == "reconcile.request":
-            attempts += 1
+            if frame['cursor'] is None:
+                attempts += 1
+                cycle_id, pages = frame['reconcile_id'], 0
+            elif frame['reconcile_id'] != cycle_id or frame['cursor'] != next_cursor:
+                raise ValueError("The R4 reconciliation page is stale.")
+            pages += 1
+            if pages > 128:
+                raise ValueError("R4 reconciliation exceeded its page budget.")
             if attempts > max_reconcile_attempts:
                 raise ValueError("R4 reconciliation did not complete.")
             pending = R4ReconcileAttempt(
@@ -150,6 +158,7 @@ async def negotiate_r4_control(
                             "ownership_facts"))):
                     raise ValueError("The R4 reconciliation report is incomplete.")
                 encoded = encode_r4_frame(report)
+                next_cursor = report['next_cursor']
             except Exception:
                 # A report failure is observable. It must never become an
                 # invented empty report or a readiness transition.
@@ -208,7 +217,7 @@ async def connect_r4_control(
     websocket = await websockets.connect(
         link_url, subprotocols=["nxl.v1"],
         additional_headers=[("Authorization", f"Bearer {ticket}")],
-        max_size=64 * 1024, open_timeout=15, ping_interval=None,
+        max_size=1024 * 1024, open_timeout=15, ping_interval=None,
     )
     try:
         state = await negotiate_r4_control(

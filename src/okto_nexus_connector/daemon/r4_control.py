@@ -1,8 +1,8 @@
 """Daemon-owned R4 bootstrap, inventory and control negotiation.
 
-Control readiness is independent of lane/session execution readiness. Until
-nonempty reconciliation is integrated, durable claims keep this owner in
-recovery; they are never replaced with an invented empty report.
+Control readiness is independent of lane/session execution readiness. Confirmed
+closed sessions and receipt history can be reconciled in bounded pages. Active
+ownership, missing evidence and nonzero event streams keep this owner in recovery.
 """
 
 from __future__ import annotations
@@ -71,6 +71,7 @@ class R4DaemonControl:
         self.attempts = 0
         self._task = None
         self._recovery_error = None
+        self._reporter = None
         self.cleanup_pending = False
         self._stopped = asyncio.Event()
 
@@ -167,51 +168,18 @@ class R4DaemonControl:
         self.inventory_revision = accepted.inventory_revision
         return self.clock() + max(0.5, accepted.fresh_for_ms / 1000 * 0.7)
 
-    async def _empty_reconciliation(self, request):
-        """Only prove an empty namespace, using public durable Core readers."""
-        if (request['server_id'] != self.server_id or request['executor_id'] != self.executor_id):
-            raise ConnectorError('SCOPE_MISMATCH', 'r4_reconcile', 'The reconciliation scope changed.')
-        from ..storage.r4_publications import R4PublicationStore
-        if await asyncio.to_thread(R4PublicationStore.for_state(self.store).pending,
-                                   self.server_id, self.executor_id):
-            raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile',
-                                 'Durable publication obligations require recovery.')
-        if (request['operation_ids'] or request['session_ids'] or request.get('stream_watermarks') or
-                request['cursor'] is not None):
-            raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile',
-                                 'The Server requires durable nonempty reconciliation.')
-        journal = await self.host.ensure_history_journal()
-        claims = await journal.claimed_sessions(self.server_id, self.executor_id, limit=1)
-        if claims.claims or claims.next_after_rowid is not None:
-            raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile',
-                                 'Durable session claims require recovery before control readiness.')
-        ledger = await self.host.ensure_ledger()
-        for source in (journal, ledger):
-            after, high = 0, None
-            for _ in range(32):
-                page = await source.owned_slot_page(after_rowid=after, high_water_rowid=high, limit=128)
-                if any((row.key.server_id, row.key.executor_id) == (self.server_id, self.executor_id)
-                       for row in page.reservations):
-                    raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile',
-                                         'Owned resources require recovery before control readiness.')
-                high = page.high_water_rowid
-                if page.next_after_rowid is None:
-                    break
-                if page.next_after_rowid <= after:
-                    raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_reconcile',
-                                         'The durable ownership cursor did not advance.')
-                after = page.next_after_rowid
-            else:
-                raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile',
-                                     'The ownership scan requires another recovery page.')
-        return {k: request[k] for k in ('protocol_major', 'contract_revision', 'server_id', 'executor_id',
-            'connection_id', 'connection_generation', 'reconcile_id', 'cursor')} | dict(
-                type='reconcile.report', next_cursor=None, complete=True, receipts=[], claims=[],
-                stream_watermarks=[], ownership_facts=[])
+    async def _reconcile(self, request):
+        from ..services.r4_reconciliation import R4ReconciliationReporter
+        if self._reporter is None:
+            self._reporter = R4ReconciliationReporter(self.store, self.host, self.server_id, self.executor_id)
+        report = await self._reporter.report(request)
+        if self._reporter.blocked:
+            self._recovery_error = 'RECONCILIATION_REQUIRED'
+        return report
 
     async def _report_reconciliation(self, request):
         try:
-            return await self._empty_reconciliation(request)
+            return await self._reconcile(request)
         except Exception as error:
             code = getattr(error, 'code', None)
             self._recovery_error = code if type(code) is str and code in _STATUS_ERRORS else 'JOURNAL_UNAVAILABLE'
@@ -220,6 +188,7 @@ class R4DaemonControl:
 
     async def _attempt(self):
         self._recovery_error = None
+        self._reporter = None
         snapshot = await asyncio.to_thread(self._snapshot)
         record, _, profile = snapshot
         self.phase = 'CHECKING_PROTOCOL'
@@ -256,6 +225,9 @@ class R4DaemonControl:
                 management_revision=protocol.management_revision,
                 snapshot_format=protocol.executor_snapshot_format, boot_id=self.boot_id,
                 report_reconciliation=self._report_reconciliation), min(30, remaining))
+            if self._reporter is not None and self._reporter.blocked:
+                raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile',
+                                     'Local recovery facts do not permit control readiness.')
             await self._require(snapshot)
             self.phase = 'PUBLISHING_INVENTORY'
             refresh_at = await self._publish(http, bootstrap, snapshot)

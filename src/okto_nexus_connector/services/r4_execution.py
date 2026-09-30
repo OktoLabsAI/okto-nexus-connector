@@ -126,7 +126,8 @@ class R4ExecutionOwner:
 
     async def _bind(self, item, runtime, context, **options):
         binding = prepare_r4_receipt_binding(item.frame, context, **options)
-        await asyncio.to_thread(self.publications.bind, binding)
+        await asyncio.to_thread(self.publications.bind, binding,
+                               **({'stream_epoch': options['stream_epoch']} if 'stream_epoch' in options else {}))
         # Persistence can yield while the lane, link or lease is superseded.
         return self._context(item, runtime)
 
