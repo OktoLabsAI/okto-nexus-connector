@@ -128,6 +128,7 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
     templates, material = (), {}
     home = record.provider_home
     session_home = None
+    process_http = False
     auth_refs = set(record.secret_bindings.values())
     if capability is not None:
         required_scope = {name: frame[name] for name in (
@@ -146,13 +147,13 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
                 connection_generation=frame['connection_generation'], metadata_provider=capability_metadata)
         elif record.adapter_id in ('codex_app_server', 'claude_stream') and http is not None and tool_root is not None:
             from .mcp_launch import mcp_template, session_mcp_home
-            if record.provider_home is not None and not record.secret_bindings:
-                raise ConnectorError('PROVIDER_AUTH_REQUIRED', 'launch_configuration',
-                                     'Import provider credentials before using an isolated MCP session home.')
-            template = mcp_template(capability, adapter_id=record.adapter_id, approved_origin=http.origin)
-            session_home = await asyncio.to_thread(session_mcp_home, tool_root, frame=frame,
-                configuration_digest=record.configuration_digest, template=template)
-            home = str(session_home.home)
+            process_http = record.provider_home is not None and not record.secret_bindings
+            template = mcp_template(capability, adapter_id=record.adapter_id, approved_origin=http.origin,
+                                    process_http=process_http)
+            if not process_http:
+                session_home = await asyncio.to_thread(session_mcp_home, tool_root, frame=frame,
+                    configuration_digest=record.configuration_digest, template=template)
+                home = str(session_home.home)
             templates = (template,)
             material = {capability.capability_ref: capability.capability}
         else:
@@ -162,7 +163,7 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
     # for environment name/value policy and resolving only prepared refs.
     render = make_environment(LaunchSecretResolver(vault, material), LaunchOverlay(
         secret_bindings=dict(record.secret_bindings), provider_home=home,
-        trusted_home=home is not None, http_templates=templates))
+        trusted_home=home is not None, http_templates=templates, process_http=process_http))
     async def tools_current():
         if capability is not None and time.monotonic() >= capability.deadline_monotonic:
             raise ConnectorError('AUTH_EXPIRED', 'launch_configuration',

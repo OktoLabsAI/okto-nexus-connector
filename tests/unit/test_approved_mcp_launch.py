@@ -16,7 +16,7 @@ from tests.unit.test_execution_selection import selection
 from tests.unit.test_r4_execution import execution, observed, failed
 
 
-@pytest.mark.parametrize("selection", [True, "claude"], indirect=True)
+@pytest.mark.parametrize("selection", [True, "claude", "no_refs", "claude_no_refs"], indirect=True)
 @pytest.mark.parametrize("fault", [None, "scope", "origin", "expired"])
 async def test_default_owner_mcp_configuration_and_secret_environment(execution, selection, tmp_path, fault):
     owner, connection, factory, receipts, opening = execution
@@ -56,6 +56,17 @@ async def test_default_owner_mcp_configuration_and_secret_environment(execution,
         setup = await owner.host.approved_launch(store, frame=opening, candidates=[candidate],
                                                 capability=issued[0], http=http)
         env = await setup.environment(factory.opened[0])
+        if not store.load().launch_configurations[0].secret_bindings:
+            from nexus_connector_core.environment import ProcessHTTPEnvironment
+            assert isinstance(env,ProcessHTTPEnvironment)
+            assert Path(env['HOME'])==tmp_path/'provider-home'
+            assert not list((tmp_path/'provider-home').iterdir())
+            assert 'OPENAI_API_KEY' not in env
+            template=env.http_templates[0]
+            assert template.entry_name.startswith('nexus_') and template.entry_name!='nexus'
+            assert env[template.bearer_env_name]==issued[0].capability
+            assert not (owner.host.root/'runtime/r4-mcp').exists()
+            return
         assert env["OPENAI_API_KEY"] == "provider-test-secret"
         home = Path(env["HOME"])
         assert home != tmp_path / "provider-home"

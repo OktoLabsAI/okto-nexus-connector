@@ -77,9 +77,6 @@ class ApprovedToolLaunchProvider:
         if record.adapter_id == 'pi_rpc':
             audience, actions = 'nexus-native-session', ('handoff.get', 'handoff.claim', 'handoff.complete')
         elif record.adapter_id in ('codex_app_server', 'claude_stream'):
-            if record.provider_home is not None and not record.secret_bindings:
-                raise ConnectorError('PROVIDER_AUTH_REQUIRED', 'launch_configuration',
-                                     'Import provider credentials before using an isolated MCP session home.')
             from .mcp_launch import MCP_SESSION_ACTIONS
             audience, actions = 'nexus-mcp-session', MCP_SESSION_ACTIONS
         else:

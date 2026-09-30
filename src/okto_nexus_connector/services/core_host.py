@@ -86,6 +86,7 @@ class LaunchOverlay:
 
     secret_bindings: dict[str, str] = field(default_factory=dict)
     http_templates: tuple[HarnessHTTPTemplate, ...] = ()
+    process_http: bool = False
     provider_home: str | None = None
     trusted_home: bool = False
     public_overrides: dict[str, str] = field(default_factory=dict)
@@ -99,7 +100,8 @@ def make_environment(resolver: LaunchSecretResolver, overlay: LaunchOverlay):
             http_templates=overlay.http_templates,
             provider_home=overlay.provider_home,
             trusted_home=overlay.trusted_home,
-            public_overrides=overlay.public_overrides)
+            public_overrides=overlay.public_overrides,
+            process_http=overlay.process_http)
     return environment
 
 

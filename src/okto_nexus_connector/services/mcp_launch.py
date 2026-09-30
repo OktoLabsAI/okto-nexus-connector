@@ -109,7 +109,7 @@ def session_mcp_home(root, *, frame, configuration_digest, template):
     return result
 
 
-def mcp_template(capability, *, adapter_id, approved_origin):
+def mcp_template(capability, *, adapter_id, approved_origin, process_http=False):
     """The HTTP exchange validates the result; composition validates it again."""
     cap = capability
     if (not isinstance(cap, R4SessionCapability) or cap.audience != "nexus-mcp-session"
@@ -130,5 +130,6 @@ def mcp_template(capability, *, adapter_id, approved_origin):
     from urllib.parse import urlsplit
     loopback = urlsplit(cap.mcp_url).hostname in ("localhost", "127.0.0.1", "::1")
     return harness_http_template(adapter_id, cap.mcp_url, cap.capability_ref,
-        entry_name="nexus", approved_origins={approved_origin},
+        entry_name="nexus_"+hashlib.sha256(capability.capability_ref.encode()).hexdigest()[:16] if process_http else "nexus",
+        approved_origins={approved_origin},
         harness_is_local=loopback, loopback_reachable=loopback, format_qualified=True)
