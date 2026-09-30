@@ -206,7 +206,10 @@ class R4ExecutionOwner:
             project = project_r4_steer_receipt if action == 'turn.steer' else project_r4_interrupt_receipt
         elif action == 'runtime.close':
             await self.host.close_native_actions(key)
-            receipt = await runtime.close(r4_close_operation(frame), context)
+            # The daemon owns the operation, not merely an observation window.
+            # Core keeps its physical deadline and commits the eventual fact.
+            receipt = await runtime.close(r4_close_operation(frame), context,
+                                          wait_for_completion=True)
             project = project_r4_close_receipt
         elif action in ('approval.decide', 'input.provide'):
             response = None

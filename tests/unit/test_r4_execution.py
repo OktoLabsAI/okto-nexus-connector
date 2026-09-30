@@ -321,3 +321,40 @@ async def test_close_fences_native_ingress_before_native_close(execution, monkey
     terminal = await observed(receipts, owner)
     assert terminal["operation_id"] == "runtime.close" and terminal["stage"] == "SUCCEEDED"
     assert factory.native.stopped
+
+
+async def test_close_owner_publishes_after_deadline_and_retains_commit_on_stop(execution, monkeypatch):
+    owner, connection, factory, receipts, opening = execution
+    await connection.emit(opening)
+    await observed(receipts, owner)
+    runtime = next(iter(owner._sessions.values())).runtime
+    entered, release = asyncio.Event(), asyncio.Event()
+    record = runtime._journal.record_receipt
+    async def held_record(key, receipt):
+        if key.operation_id == 'runtime.close' and receipt.stage == 'SUCCEEDED':
+            entered.set()
+            await release.wait()
+        return await record(key, receipt)
+    monkeypatch.setattr(runtime._journal, 'record_receipt', held_record)
+    stopping = None
+    try:
+        await connection.emit(operation(opening, 'runtime.close',
+            {'reason': 'Done.', 'drain_seconds': .02, 'interrupt_seconds': .02}))
+        await asyncio.wait_for(entered.wait(), 3)
+        await asyncio.sleep(.1)
+        assert owner.failure is None and receipts.empty()
+        assert owner.pending_count == 1 and len(connection.reservations) == 1
+        stopping = asyncio.create_task(owner.stop())
+        await asyncio.sleep(0)
+        stopping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+        release.set()
+        receipt = await observed(receipts, owner)
+        assert receipt['operation_id'] == 'runtime.close' and receipt['stage'] == 'SUCCEEDED'
+        await owner.stop()
+        assert not connection.reservations and not owner.pending_count
+    finally:
+        release.set()
+        if stopping is not None:
+            await asyncio.gather(stopping, return_exceptions=True)
