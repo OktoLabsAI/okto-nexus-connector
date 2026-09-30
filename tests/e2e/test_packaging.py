@@ -11,20 +11,24 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tomllib
 import venv
 from pathlib import Path
 
 import pytest
 
 PROJECT = Path(__file__).parents[2]
-CORE_DIST = Path(__file__).parents[3] / "okto-nexus-connector-core" / \
-    "dist"
+CORE_DIST = PROJECT / "vendor" / "wheels"
 
 
 def _core_wheel() -> Path:
-    wheels = sorted(CORE_DIST.glob("nexus_connector_core-*-py3-none-any.whl"))
-    assert wheels, f"no core wheel under {CORE_DIST}"
-    return wheels[-1]
+    dependencies = tomllib.loads((PROJECT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["dependencies"]
+    pinned = [item.removeprefix("nexus-connector-core==") for item in dependencies
+              if item.startswith("nexus-connector-core==")]
+    assert len(pinned) == 1, "Exactly one Core version must be pinned"
+    wheel = CORE_DIST / f"nexus_connector_core-{pinned[0]}-py3-none-any.whl"
+    assert wheel.is_file(), f"The pinned Core wheel is missing: {wheel}"
+    return wheel
 
 
 @pytest.fixture(scope="module")
@@ -59,6 +63,9 @@ def test_clean_venv_install(built_wheel: Path, tmp_path: Path):
 import sys
 mods_before = set(sys.modules)
 import okto_nexus_connector as connector
+import nexus_connector_core as core
+from importlib.metadata import requires
+assert f'nexus-connector-core=={core.__version__}' in requires('okto-nexus-connector')
 leaked = [m for m in sys.modules if m.split(".")[0] in
           ("okto_nexus",) and m != "okto_nexus_connector"]
 assert not leaked, leaked
