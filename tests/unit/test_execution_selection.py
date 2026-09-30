@@ -23,8 +23,9 @@ def selection(tmp_path, request):
     workspace.mkdir()
     binary = tmp_path / 'codex.exe'
     binary.write_bytes(b'Synthetic approved binary')
-    candidate = InstallationCandidate('pi_rpc' if getattr(request, 'param', None) == 'pi' else 'codex_app_server', str(binary), fingerprint(binary), 'explicit', 'selected',
-        installation_ref=installation_ref('pi_rpc' if getattr(request, 'param', None) == 'pi' else 'codex_app_server', str(binary)))
+    adapter_id = {'pi': 'pi_rpc', 'claude': 'claude_stream'}.get(getattr(request, 'param', None), 'codex_app_server')
+    candidate = InstallationCandidate(adapter_id, str(binary), fingerprint(binary), 'explicit', 'selected',
+        installation_ref=installation_ref(adapter_id, str(binary)))
     revision = calculate_inventory_revision([candidate])
     store = StateStore(tmp_path / 'state.json')
     digest = 'sha256:' + 'a' * 64
@@ -35,7 +36,7 @@ def selection(tmp_path, request):
         config = stage_launch_configuration(store, server_id='srv', executor_id='exe',
             agent_id='agent', local_consent_id='consent', adapter_id=candidate.adapter_id,
             profile_revision=1, provider_home=home,
-            secret_bindings={'OPENAI_API_KEY': 'vault:provider-demo'})
+            secret_bindings={} if getattr(request, 'param', None) == 'no_refs' else {'OPENAI_API_KEY': 'vault:provider-demo'})
         digest = config.configuration_digest
     local = stage_local_realization(store, server_id='srv', executor_id='exe', agent_id='agent',
         client_intent_id='realize', candidates=[candidate], adapter_id=candidate.adapter_id,

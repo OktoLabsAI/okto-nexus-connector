@@ -7,6 +7,8 @@ from dataclasses import asdict, replace
 import hashlib
 from pathlib import Path
 import re
+import time
+from types import MappingProxyType
 
 from nexus_connector_core import decode_r4_frame, encode_r4_frame
 from nexus_connector_core.protocol import canonical_json
@@ -104,10 +106,17 @@ def _resolve(store, frame, candidates):
     return selection, record
 
 
-async def approved_launch_setup(store, vault, *, frame, candidates, capability=None, http=None):
+async def approved_launch_setup(store, vault, *, frame, candidates, capability=None, http=None, tool_root=None):
     """Compose the standard R4 launch port without raw wire environment or argv."""
     from .core_host import LaunchOverlay, LaunchSecretResolver, make_environment
     from .r4_execution import R4LaunchSetup
+    if capability is not None:
+        from ..transport.https_client import R4SessionCapability
+        from nexus_connector_core.native_action_bridge import native_action_scope
+        if not isinstance(capability, R4SessionCapability):
+            raise ConnectorError('VALIDATION_ERROR', 'launch_configuration',
+                                 'A typed session capability is required.')
+        capability = replace(capability, scope=MappingProxyType(native_action_scope(capability.scope)))
     encoded = encode_r4_frame(frame)
     candidates = tuple(candidates)
     async def current():
@@ -115,14 +124,11 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
     expected = await current()
     _, record = expected
     native_factory = None
+    templates, material = (), {}
+    home = record.provider_home
+    session_home = None
     auth_refs = set(record.secret_bindings.values())
     if capability is not None:
-        from ..transport.native_actions import native_action_owner_factory
-        # The native bridge preserves the approved provider home and uses the
-        # current Core lease for every action. Its HTTP client is host-owned.
-        if record.adapter_id != 'pi_rpc' or http is None:
-            raise ConnectorError('CAPABILITY_UNSUPPORTED', 'launch_configuration',
-                                 'This adapter requires a qualified direct HTTP configuration.')
         required_scope = {name: frame[name] for name in (
             'server_id', 'executor_id', 'binding_id', 'agent_id', 'workspace_id',
             'workspace_binding_id', 'session_id', 'session_owner_generation',
@@ -132,14 +138,36 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
             raise ConnectorError('BINDING_NOT_AUTHORIZED', 'launch_configuration',
                                  'The tool capability differs from the approved session.')
         auth_refs.add(capability.capability_ref)
-        native_factory = native_action_owner_factory(http, capability,
-            connection_id=frame['connection_id'],
-            connection_generation=frame['connection_generation'])
+        if record.adapter_id == 'pi_rpc' and http is not None:
+            from ..transport.native_actions import native_action_owner_factory
+            native_factory = native_action_owner_factory(http, capability,
+                connection_id=frame['connection_id'],
+                connection_generation=frame['connection_generation'])
+        elif record.adapter_id in ('codex_app_server', 'claude_stream') and http is not None and tool_root is not None:
+            from .mcp_launch import mcp_template, session_mcp_home
+            if record.provider_home is not None and not record.secret_bindings:
+                raise ConnectorError('PROVIDER_AUTH_REQUIRED', 'launch_configuration',
+                                     'Import provider credentials before using an isolated MCP session home.')
+            template = mcp_template(capability, adapter_id=record.adapter_id, approved_origin=http.origin)
+            session_home = await asyncio.to_thread(session_mcp_home, tool_root, frame=frame,
+                configuration_digest=record.configuration_digest, template=template)
+            home = str(session_home.home)
+            templates = (template,)
+            material = {capability.capability_ref: capability.capability}
+        else:
+            raise ConnectorError('CAPABILITY_UNSUPPORTED', 'launch_configuration',
+                                 'The selected adapter has no approved tool configuration.')
     # Local references are passed to Core prepare. Core remains responsible
     # for environment name/value policy and resolving only prepared refs.
-    render = make_environment(LaunchSecretResolver(vault), LaunchOverlay(
-        secret_bindings=dict(record.secret_bindings), provider_home=record.provider_home,
-        trusted_home=record.provider_home is not None))
+    render = make_environment(LaunchSecretResolver(vault, material), LaunchOverlay(
+        secret_bindings=dict(record.secret_bindings), provider_home=home,
+        trusted_home=home is not None, http_templates=templates))
+    async def tools_current():
+        if capability is not None and time.monotonic() >= capability.deadline_monotonic:
+            raise ConnectorError('AUTH_EXPIRED', 'launch_configuration',
+                                 'The session tool capability has expired.')
+        if session_home is not None:
+            await asyncio.to_thread(session_home.require_current)
     async def environment(prepared):
         if await current() != expected:
             raise ConnectorError('PROFILE_DRIFT', 'launch_configuration',
@@ -147,10 +175,13 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
         if prepared.intent.adapter_id != record.adapter_id:
             raise ConnectorError('BINDING_NOT_AUTHORIZED', 'launch_configuration',
                                  'The prepared adapter differs from the approved configuration.')
+        await tools_current()
         result = await render(prepared)
+        await tools_current()
         if await current() != expected:
             raise ConnectorError('PROFILE_DRIFT', 'launch_configuration',
                                  'The approved launch configuration changed.')
         return result
+    await tools_current()
     return R4LaunchSetup(environment, auth_refs=tuple(sorted(auth_refs)),
                          native_action_factory=native_factory)

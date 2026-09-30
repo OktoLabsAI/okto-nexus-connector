@@ -77,8 +77,8 @@ async def test_approved_native_launch_owns_bridge_and_rejects_changed_authority(
         await capability_owner.close()
 
 
-@pytest.mark.parametrize("selection", [True], indirect=True)
-async def test_non_pi_configuration_refuses_before_credential_request(execution, selection, tmp_path):
+@pytest.mark.parametrize("selection", ["no_refs"], indirect=True)
+async def test_home_login_without_imported_references_refuses_before_credential_request(execution, selection, tmp_path):
     owner, connection, factory, receipts, opening = execution
     store, candidate, *_ = selection
     cap_owner = SessionCapabilityOwner(store, RestrictedFileVault(tmp_path, approved=True))
@@ -88,6 +88,6 @@ async def test_non_pi_configuration_refuses_before_credential_request(execution,
         candidate_provider=candidates, require_current=lambda frame: None)
     await connection.emit(opening)
     await failed(owner)
-    assert owner.failure.code == "CAPABILITY_UNSUPPORTED"
+    assert owner.failure.code == "PROVIDER_AUTH_REQUIRED"
     assert not factory.opened and not store.load().session_capabilities
     await cap_owner.close()

@@ -48,15 +48,15 @@ class CapabilityLaunchProvider:
 
 
 @dataclass(frozen=True, slots=True)
-class R4NativeToolServices:
+class R4ToolServices:
     """Trusted connection resources retained until native producers settle."""
     owner: object
     http: object
     key: str = field(repr=False)
 
 
-class ApprovedNativeLaunchProvider:
-    """Compose Pi tools from approved local selection and durable issuance.
+class ApprovedToolLaunchProvider:
+    """Compose native or direct HTTP tools from approved local configuration.
 
     The connection owner retains the HTTP client and capability owner through
     runtime shutdown. No caller-supplied configuration renderer is required.
@@ -73,15 +73,23 @@ class ApprovedNativeLaunchProvider:
         # Resolve local consent before requesting a remote credential.
         from .launch_configuration import _resolve
         expected = await asyncio.to_thread(_resolve, self.store, frozen, candidates)
-        if expected[1].adapter_id != 'pi_rpc':
+        record = expected[1]
+        if record.adapter_id == 'pi_rpc':
+            audience, actions = 'nexus-native-session', ('handoff.get', 'handoff.claim', 'handoff.complete')
+        elif record.adapter_id in ('codex_app_server', 'claude_stream'):
+            if record.provider_home is not None and not record.secret_bindings:
+                raise ConnectorError('PROVIDER_AUTH_REQUIRED', 'launch_configuration',
+                                     'Import provider credentials before using an isolated MCP session home.')
+            from .mcp_launch import MCP_SESSION_ACTIONS
+            audience, actions = 'nexus-mcp-session', MCP_SESSION_ACTIONS
+        else:
             raise ConnectorError('CAPABILITY_UNSUPPORTED', 'launch_configuration',
-                                 'The approved installation does not use native Pi tools.')
+                                 'The approved installation has no qualified tool configuration.')
         def guard():
             self.require_current(decode_r4_frame(encode_r4_frame(frozen)))
         guard()
         cap = await self.owner.reserve(self.http, self.key, frame=frozen,
-            audience='nexus-native-session',
-            actions=('handoff.get', 'handoff.claim', 'handoff.complete'),
+            audience=audience, actions=actions,
             require_current=guard)
         guard()
         if await asyncio.to_thread(_resolve, self.store, frozen, candidates) != expected:
@@ -91,6 +99,12 @@ class ApprovedNativeLaunchProvider:
             candidates=candidates, capability=cap, http=self.http)
         guard()
         return result
+
+
+
+# Preserve the preceding development composition API.
+R4NativeToolServices = R4ToolServices
+ApprovedNativeLaunchProvider = ApprovedToolLaunchProvider
 
 
 class SessionCapabilityOwner:

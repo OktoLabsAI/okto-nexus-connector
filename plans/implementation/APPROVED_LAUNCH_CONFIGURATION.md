@@ -19,3 +19,13 @@ The approved launch port now composes the Core Pi native owner from a durably is
 Installed Connector validation: 310 passed, one skipped. A Nexus technical Pi child campaign also exercises actual capability issuance, the approved environment, domain claims/completion and pending-action shutdown. This remains technical provider evidence; automatic daemon startup adoption and direct MCP composition remain pending.
 
 During development, the initial fixture omitted the vault directory; after correcting it, the socket launch assertion exposed a missing capability prepare reference. The reference is now included and the real Core owner launches successfully.
+
+## Direct HTTP MCP session configuration
+
+ApprovedToolLaunchProvider selects native Pi or direct HTTP MCP composition from the approved adapter. Codex and Claude receive a dedicated session home containing only the Core-rendered client entry and an ownership marker. Provider secrets and the session capability are resolved into the process environment. The original approved provider home is not modified.
+
+The capability requests the protocol ceiling and eight canonical tool permissions. Configuration, scope, origin, expiry, directory identity and file content are checked before launch/environment return. Conflicting files are never overwritten. Home-only provider login without imported secret references is explicitly refused for isolated MCP configuration; importing/migrating native login remains part of the incomplete onboarding work.
+
+Installed Connector campaign: 328 passed, one skipped. The initial run had 320 passes, one failure and one skip because the boundary test matched the local helper name as an SDK import. The test now checks Python import nodes and includes seven cases, including combined imports and aliases. The initial evidence is preserved in Nexus under approved-mcp-installed-connector-initial.*.
+
+A source integration obtained the capability over Nexus HTTP, applied a real Core lease, rendered the approved environment and used its bearer for agent identity, handoff claim and completion. Native provider behavior remains unqualified; automatic daemon boot adoption, renew/reconcile and full acceptance remain pending.
