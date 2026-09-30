@@ -990,6 +990,87 @@ class NexusHTTPClient:
         return await self._request(
             "GET", f"/v1/runtime/operations/{operation_id}", key=key)
 
+    async def native_action(self, capability: R4SessionCapability, *, request) -> dict:
+        """One bounded native-domain request, with no redirect or automatic retry."""
+        import re
+        from nexus_connector_core import CoreError
+        from nexus_connector_core.native_action_bridge import native_action_request_body
+        from nexus_connector_core.protocol import canonical_json, strict_json
+        from .native_actions import native_capability_snapshot
+        capability = native_capability_snapshot(capability)
+        try:
+            body = native_action_request_body(request, capability.scope)
+        except CoreError as error:
+            raise ConnectorError(error.code, 'native_action', 'Invalid native action request.') from None
+        domain_action = {'context': 'handoff.get', 'claim': 'handoff.claim', 'complete': 'handoff.complete'}[body['action']]
+        if request.capability_ref != capability.capability_ref or domain_action not in capability.actions:
+            raise ConnectorError('BINDING_NOT_AUTHORIZED', 'native_action', 'The native action is outside the capability scope.')
+        if time.monotonic() >= capability.deadline_monotonic:
+            raise ConnectorError('AUTH_EXPIRED', 'native_action', 'The native capability has expired.')
+        assert self._client is not None, "Use 'async with NexusHTTPClient'."
+        mutation = body['action'] != 'context'
+
+        def uncertain():
+            return ConnectorError('OUTCOME_UNKNOWN' if mutation else 'EXECUTOR_OFFLINE', 'native_action',
+                'The native action response could not be confirmed.', possible_effect=mutation,
+                retry_safe=not mutation, operation_id=request.operation_id,
+                action='Recover the same action ID and payload. Do not create a new action ID.')
+
+        try:
+            async with self._client.stream('POST', self.base_url + '/v1/runtime/native-actions',
+                    headers={'Authorization': 'Bearer ' + capability.capability,
+                             'Content-Type': 'application/json', 'Accept-Encoding': 'identity'},
+                    content=canonical_json(body), follow_redirects=False, timeout=self._timeout) as response:
+                if (response.is_redirect or
+                        response.headers.get('X-Nexus-Connections-Revision') != MANAGEMENT_REVISION or
+                        response.headers.get('Content-Encoding', 'identity').lower() != 'identity'):
+                    raise uncertain()
+                length = response.headers.get('Content-Length')
+                if length is not None and (not length.isdecimal() or int(length) > 16384):
+                    raise uncertain()
+                parts, size = [], 0
+                async for chunk in response.aiter_bytes(chunk_size=4096):
+                    size += len(chunk)
+                    if size > 16384:
+                        raise uncertain()
+                    parts.append(chunk)
+                data = strict_json(b''.join(parts).decode('utf-8', errors='strict'))
+                if response.status_code != 200:
+                    error = data.get('error') if type(data) is dict else None
+                    if (response.status_code not in (400, 401, 403, 404, 409, 413, 422)
+                            or type(error) is not dict
+                            or type(error.get('code')) is not str
+                            or re.fullmatch(r'[A-Z][A-Z0-9_]{0,79}', error['code']) is None
+                            or error.get('possible_effect') is not False
+                            or error.get('retry_safe') is not False
+                            or error.get('operation_id') not in (None, request.operation_id)):
+                        raise uncertain()
+                    raise ConnectorError(error['code'], 'native_action',
+                        'The Server rejected the native action.', operation_id=request.operation_id)
+                if (type(data) is not dict or set(data) != {'action_id', 'action', 'state', 'result'}
+                        or data['action_id'] != request.operation_id or data['action'] != body['action']
+                        or type(data['state']) is not str or not 1 <= len(data['state']) <= 160
+                        or type(data['result']) is not dict or len(data['result']) > 64
+                        or data['result'].get('handoff_id') != request.handoff_id
+                        or data['result'].get('status') != data['state']
+                        or {'jsonrpc', 'method', 'params', 'tools', 'mcpServers'} & data['result'].keys()):
+                    raise uncertain()
+                # A late response cannot refresh an expired credential or disclose
+                # scoped content. A mutation may already have committed.
+                if time.monotonic() >= capability.deadline_monotonic:
+                    raise uncertain()
+                return data['result']
+        except ConnectorError:
+            raise
+        except httpx.HTTPError as error:
+            if isinstance(error, (httpx.ConnectError, httpx.ConnectTimeout)):
+                raise ConnectorError('EXECUTOR_OFFLINE', 'native_action',
+                    'The native action could not reach the Server.', retry_safe=True,
+                    operation_id=request.operation_id) from None
+            raise uncertain() from None
+        except (ValueError, UnicodeError, RecursionError):
+            raise uncertain() from None
+
     async def request_r4_session_capability(
             self, key: str, *, frame: dict, capability_request_id: str,
             audience: str, actions: tuple[str, ...],

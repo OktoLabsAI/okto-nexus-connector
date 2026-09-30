@@ -1,0 +1,70 @@
+{
+  "status": "PARTIAL_INTEGRATION_VERIFIED",
+  "branch": "feature/v0.2.0",
+  "core_head": "cfcf121a69bb324ae34d06a267a37d130246d847",
+  "core_version": "0.2.29.dev0",
+  "core_wheel_sha256": "a465c1ec1aaba9814872b21984a436bbf4cac5f28c2b4bed776f1a7042426cba",
+  "connector_artifact": {
+    "wheel": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-native-domain-connector-final-wheel-8tle55i5\\okto_nexus_connector-0.5.0.dev0-py3-none-any.whl",
+    "sha256": "60bf3d03e8888a243b7769f41e31986a8914a456d4275b98f0fc76d0ddcfa291",
+    "command": [
+      "C:\\Python313\\python.exe",
+      "-m",
+      "pip",
+      "wheel",
+      "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-native-domain-connector-final-stage-poc4gppr",
+      "--no-deps",
+      "--no-build-isolation",
+      "--wheel-dir",
+      "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-native-domain-connector-final-wheel-8tle55i5"
+    ]
+  },
+  "campaigns": [
+    {
+      "file": "native-domain-transport.xml",
+      "passed": 43,
+      "phase": "source transport"
+    },
+    {
+      "file": "native-domain-installed-connector.xml",
+      "passed": 107,
+      "phase": "installed before state read locking"
+    },
+    {
+      "file": "native-domain-state-red.xml",
+      "failed": 1,
+      "cause": "Readers did not participate in the writer lock."
+    },
+    {
+      "file": "native-domain-state-final.xml",
+      "passed": 7,
+      "phase": "source state regression"
+    },
+    {
+      "file": "native-domain-installed-connector-final.xml",
+      "passed": 262,
+      "skipped": 1,
+      "phase": "final installed unit and contract regression"
+    }
+  ],
+  "skips": [
+    {
+      "test": {
+        "classname": "unit.test_core02_integration",
+        "name": "test_shim_resolution_never_runs_outside_windows",
+        "time": "0.002"
+      },
+      "reason": {
+        "type": "pytest.skip",
+        "message": "covered above"
+      }
+    }
+  ],
+  "integration": "Nexus plans/r4_execution/test_runs_20260930_native_domain.json",
+  "gates_closed": [],
+  "remaining": [
+    "Automatic approved runtime and native socket composition",
+    "Capability renewal and nonempty recovery",
+    "Real provider, platform and independent-host acceptance"
+  ]
+}

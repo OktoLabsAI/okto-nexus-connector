@@ -206,14 +206,11 @@ class StateStore:
         self.lock_path = path.with_suffix(".lock")
 
     def load(self) -> ConnectorState:
-        try:
-            raw = self.path.read_bytes()
-        except FileNotFoundError:
-            return ConnectorState()
-        if len(raw) > 4 * 1024 * 1024:
-            raise ConnectorError("CAPACITY_EXCEEDED", "state_load")
-        payload = json.loads(raw.decode("utf-8"))
-        return state_from_json(payload)
+        # Windows readers must not open the snapshot during os.replace.
+        # Use the same cross-process lock as writers, including across
+        # separate StateStore instances used by CLI and daemon IPC.
+        with self.locked():
+            return _load_unlocked(self.path)
 
     def save(self, state: ConnectorState) -> None:
         """Replace the whole state snapshot atomically under the lock.
@@ -331,6 +328,8 @@ def _load_unlocked(path: Path) -> ConnectorState:
         raw = path.read_bytes()
     except FileNotFoundError:
         return ConnectorState()
+    if len(raw) > 4 * 1024 * 1024:
+        raise ConnectorError("CAPACITY_EXCEEDED", "state_load")
     return state_from_json(json.loads(raw.decode("utf-8")))
 
 

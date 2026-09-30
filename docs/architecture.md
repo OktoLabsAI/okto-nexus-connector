@@ -74,7 +74,7 @@ never stops the daemon or unrelated sessions (TC-09).
 ## R4 development lease exchange
 
 The R4 control path is under development and is separate from the historical
-daemon flow above. Core `0.2.28.dev0` supplies a runtime-owned request nonce,
+daemon flow above. Core `0.2.29.dev0` supplies a runtime-owned request nonce,
 monotonic t0, immutable full authority scope and an application ACK.
 
 After `negotiate_r4_control`, `apply_r4_lease` exchanges a correlated grant
@@ -101,7 +101,7 @@ remain disabled.
 
 ## R4 close receipt policy
 
-Core 0.2.28.dev0 verifies `reason`, `drain_seconds` and `interrupt_seconds`
+Core 0.2.29.dev0 verifies `reason`, `drain_seconds` and `interrupt_seconds`
 against the native journal hash before `publish_core_close_receipt` sends
 the R4 receipt. Hosts use `r4_close_operation(frame)` to retain all three
 fields. An observation timeout or canceled caller does not terminate the
@@ -121,3 +121,17 @@ fenced. The Core reserves productive admission before releasing session
 locks for storage, and late renewal cannot revive a closing session.
 See `plans/implementation/evidence/r4-pending-containment.json` for this
 increment's separate consumer campaign and limits.
+
+## R4 native domain backend
+
+The public transport.native_actions.native_action_bridge factory binds a
+Server-issued native capability to the current Core runtime incarnation.
+The HTTP backend preserves the original action ID and claim idempotency key,
+refuses redirects, bounds request/response JSON, and never automatically
+retries an uncertain mutation. The capability secret stays in the trusted
+backend; the Core receives the scoped reference and current authority.
+
+The installed integration campaign exercises this backend and the Nexus
+embedded backend against the same canonical handoff services. Automatic
+daemon launch, Pi socket ownership and capability renewal remain separate
+host integration work; remote R4 readiness remains false.

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0.276" timestamp="2026-09-30T09:29:32.741410-03:00" hostname="Alienware_m15"><testcase classname="tests.unit.test_state_store" name="test_reader_waits_for_concurrent_writer_snapshot" time="0.033"><failure message="Failed: DID NOT RAISE TimeoutError">tmp_path = WindowsPath('C:/Users/jpamb/AppData/Local/Temp/pytest-of-jpamb/pytest-3934/test_reader_waits_for_concurre0')
+
+    def test_reader_waits_for_concurrent_writer_snapshot(tmp_path):
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError
+        import threading
+        path = tmp_path / "state.json"
+        writer, reader = StateStore(path), StateStore(path)
+        writer.save(ConnectorState(connector_id="old"))
+        entered, release, reading = threading.Event(), threading.Event(), threading.Event()
+        def change(state):
+            entered.set()
+            assert release.wait(5)
+            state.connector_id = "new"
+        def read():
+            reading.set()
+            return reader.load()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            writing = pool.submit(writer.update, change)
+            assert entered.wait(5)
+            observing = pool.submit(read)
+            try:
+                assert reading.wait(5)
+&gt;               with pytest.raises(TimeoutError):
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               Failed: DID NOT RAISE TimeoutError
+
+tests\unit\test_state_store.py:92: Failed</failure></testcase></testsuite></testsuites>

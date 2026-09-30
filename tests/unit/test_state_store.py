@@ -67,3 +67,61 @@ def test_file_permissions_restricted(tmp_path: Path):
     if os.name != "nt":
         mode = (tmp_path / "state.json").stat().st_mode & 0o777
         assert mode == 0o600
+
+
+def test_reader_waits_for_concurrent_writer_snapshot(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError
+    import threading
+    path = tmp_path / "state.json"
+    writer, reader = StateStore(path), StateStore(path)
+    writer.save(ConnectorState(connector_id="old"))
+    entered, release, reading = threading.Event(), threading.Event(), threading.Event()
+    def change(state):
+        entered.set()
+        assert release.wait(5)
+        state.connector_id = "new"
+    def read():
+        reading.set()
+        return reader.load()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        writing = pool.submit(writer.update, change)
+        assert entered.wait(5)
+        observing = pool.submit(read)
+        try:
+            assert reading.wait(5)
+            with pytest.raises(TimeoutError):
+                observing.result(timeout=.2)
+        finally:
+            release.set()
+        writing.result(timeout=5)
+        assert observing.result(timeout=5).connector_id == "new"
+
+
+def test_readers_and_writers_share_cross_instance_lock(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    path = tmp_path / "state.json"
+    StateStore(path).save(ConnectorState())
+    def write():
+        for _ in range(40):
+            StateStore(path).update(lambda state: state.preferences.update(
+                counter=state.preferences.get("counter", 0) + 1))
+    def read():
+        previous = 0
+        for _ in range(80):
+            count = StateStore(path).load().preferences.get("counter", 0)
+            assert count >= previous
+            previous = count
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        tasks = [pool.submit(fn) for fn in (write, read, write, read)]
+        for task in tasks:
+            task.result(timeout=15)
+    assert StateStore(path).load().preferences["counter"] == 80
+
+
+def test_oversized_state_is_refused_by_read_and_update(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_bytes(b" " * (4 * 1024 * 1024 + 1))
+    store = StateStore(path)
+    for operation in (store.load, lambda: store.update(lambda _: None)):
+        with pytest.raises(ConnectorError, match="CAPACITY_EXCEEDED"):
+            operation()
