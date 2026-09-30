@@ -231,7 +231,8 @@ async def test_frozen_open_selection_and_typed_control_projection(execution):
     assert factory.native.sent[-1][3] == 'native-turn'
     await connection.emit(operation(opening, 'runtime.close',
         {'reason': 'Finished.', 'drain_seconds': 1, 'interrupt_seconds': 1}))
-    assert (await observed(receipts, owner))['operation_id'] == 'runtime.close'
+    terminal = await observed(receipts, owner)
+    assert terminal['operation_id'] == 'runtime.close' and terminal['stage'] == 'SUCCEEDED'
     assert factory.native.stopped
 
 
@@ -317,5 +318,6 @@ async def test_close_fences_native_ingress_before_native_close(execution, monkey
     monkeypatch.setattr(factory.native, "close", close)
     await connection.emit(operation(opening, "runtime.close",
         {"reason":"Done.", "drain_seconds":1, "interrupt_seconds":1}))
-    assert (await observed(receipts, owner))["operation_id"] == "runtime.close"
+    terminal = await observed(receipts, owner)
+    assert terminal["operation_id"] == "runtime.close" and terminal["stage"] == "SUCCEEDED"
     assert factory.native.stopped
