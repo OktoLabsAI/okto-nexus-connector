@@ -74,7 +74,7 @@ never stops the daemon or unrelated sessions (TC-09).
 ## R4 development lease exchange
 
 The R4 control path is under development and is separate from the historical
-daemon flow above. Core `0.2.27.dev0` supplies a runtime-owned request nonce,
+daemon flow above. Core `0.2.28.dev0` supplies a runtime-owned request nonce,
 monotonic t0, immutable full authority scope and an application ACK.
 
 After `negotiate_r4_control`, `apply_r4_lease` exchanges a correlated grant
@@ -101,7 +101,7 @@ remain disabled.
 
 ## R4 close receipt policy
 
-Core 0.2.27.dev0 verifies `reason`, `drain_seconds` and `interrupt_seconds`
+Core 0.2.28.dev0 verifies `reason`, `drain_seconds` and `interrupt_seconds`
 against the native journal hash before `publish_core_close_receipt` sends
 the R4 receipt. Hosts use `r4_close_operation(frame)` to retain all three
 fields. An observation timeout or canceled caller does not terminate the
@@ -112,3 +112,12 @@ lease expiry, cancel/replay and transactional receipt/session projection.
 Full Connector source regression with the same Core: 241 passed, 2 skipped.
 See `plans/implementation/evidence/r4-close-policy.json`. This increment
 does not wire close into the R4 daemon or qualify a native provider.
+
+With Core 0.2.28, an unchanged-scope renewal may remain pending while an
+already authorized interrupt, close or strictly negative decision proceeds.
+The same source connection, scope and grant and an action retained by the
+pending grant are required. Reconnect, changed scope and revocation remain
+fenced. The Core reserves productive admission before releasing session
+locks for storage, and late renewal cannot revive a closing session.
+See `plans/implementation/evidence/r4-pending-containment.json` for this
+increment's separate consumer campaign and limits.
