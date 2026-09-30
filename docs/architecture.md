@@ -70,3 +70,30 @@ independent namespaces (`server_id → agent/binding → session`). The
 technical journal and the installation-wide owned-slot ledger are shared
 files owned by the daemon. CLI processes are observers: closing them
 never stops the daemon or unrelated sessions (TC-09).
+
+## R4 development lease exchange
+
+The R4 control path is under development and is separate from the historical
+daemon flow above. Core `0.2.25.dev0` supplies a runtime-owned request nonce,
+monotonic t0, immutable full authority scope and an application ACK.
+
+After `negotiate_r4_control`, `apply_r4_lease` exchanges a correlated grant
+over the same authenticated socket. The caller must exclusively own its
+reader during this phase. The function calls `RuntimeCore.install_r4_lease`
+before sending `lease.applied`; receiving `lease.granted` does not authorize
+the Connector to manufacture a context or extend a deadline.
+
+Operation dispatch must obtain its context with
+`runtime.r4_operation_context(frame, connection_id=..., connection_generation=...)`.
+The Core checks the complete scope, current grant, action and expiry. Live
+renewal uses the durable Core CAS. Revocation through `revoke_r4_lease` fences
+native effects immediately and acknowledges only a confirmed application.
+
+The transport contract test uses the negotiated state and installed Core.
+The coordinated Nexus vertical test exercises lease installation followed
+by five Core operations and receipt publication. Both use synthetic grant
+issuers and native peers. Canonical Server issuance, durable grant recovery,
+socket multiplexing and daemon integration remain open. A lost application
+ACK requires reconciliation; it does not permit another initial grant or
+another operation ID. The executable R4 bundle and host readiness gates
+remain disabled.

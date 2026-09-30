@@ -7,9 +7,14 @@ import json
 
 import pytest
 
-from nexus_connector_core import R4_PREVIEW_REVISION, SNAPSHOT_FORMAT_VERSION, decode_r4_frame
+from nexus_connector_core import (
+    CoreError, InstallationCandidate, R4_PREVIEW_REVISION, SNAPSHOT_FORMAT_VERSION, ShutdownPolicy,
+    create_runtime, decode_r4_frame,
+)
+from nexus_connector_core.journal import open_journal
+from nexus_connector_core.discovery import fingerprint
 
-from okto_nexus_connector.transport.wss_r4 import negotiate_r4_control
+from okto_nexus_connector.transport.wss_r4 import apply_r4_lease, negotiate_r4_control
 
 
 BASE = {"protocol_major": 1, "contract_revision": R4_PREVIEW_REVISION,
@@ -47,6 +52,14 @@ class Peer:
                 "reconcile_id": frame["reconcile_id"],
                 "recovery_remaining": False,
                 "ready_lane_ids": [], "session_lease_requirements": [],
+            })
+        elif frame["type"] == "lease.renew":
+            await self.inbox.put({
+                "protocol_major": 1, "contract_revision": R4_PREVIEW_REVISION,
+                "type": "lease.granted", "request_id": frame["request_id"],
+                "grant_id": frame["grant_id"], "scope": frame["scope"],
+                "lease_id": "lease", "lease_serial": frame["expected_lease_serial"] + 1,
+                "valid_for_ms": 60000, "allowed_actions": [],
             })
 
     async def _request(self):
@@ -141,3 +154,51 @@ async def test_r4_control_refuses_empty_report_for_pending_operation():
             max_reconcile_attempts=1), 2)
     assert [frame["type"] for frame in peer.sent] == [
         "hello", "error", "heartbeat"]
+
+
+@pytest.mark.asyncio
+async def test_r4_control_applies_core_authority_before_ack_and_rejects_bad_reply(tmp_path):
+    peer = Peer()
+    journal = await open_journal(tmp_path / "core.db")
+    async def environment(_launch):
+        raise AssertionError("A lease exchange must not start a harness.")
+    binary = tmp_path / "codex.exe"
+    binary.write_bytes(b"Synthetic lease-only candidate")
+    candidate = InstallationCandidate("codex_app_server", str(binary), fingerprint(binary),
+                                      "explicit", "selected")
+    runtime = create_runtime(journal=journal, environment=environment,
+                             candidates={candidate.adapter_id: candidate},
+                             workspace_roots={"ws": str(tmp_path)})
+    scope = dict(server_id="srv", executor_id="exe", binding_id="binding",
+                 agent_id="agent", workspace_id="ws", workspace_binding_id="wxb",
+                 session_id="session", session_owner_generation=1,
+                 authorization_revision=1, configuration_revision=1,
+                 binding_revision=1, credential_epoch=1)
+    async def report(request):
+        return {**BASE, **peer.connection, "type": "reconcile.report",
+                "reconcile_id": request["reconcile_id"], "cursor": None,
+                "next_cursor": None, "complete": True, "receipts": [],
+                "claims": [], "stream_watermarks": [], "ownership_facts": []}
+    try:
+        state = await negotiate_r4_control(
+            peer, server_id="srv", executor_id="exe", management_revision=MANAGEMENT,
+            snapshot_format=SNAPSHOT_FORMAT_VERSION, boot_id=runtime.r4_boot_id,
+            report_reconciliation=report)
+        installed = await apply_r4_lease(peer, state, runtime, scope=scope, grant_id="grant")
+        assert installed.context.r4_authority.connection_id == state.connection_id
+        assert not installed.context.allowed_actions
+        assert [frame["type"] for frame in peer.sent][-2:] == ["lease.renew", "lease.applied"]
+        assert peer.sent[-1] == installed.acknowledgement
+        old_recv = peer.recv
+        async def wrong_reply():
+            frame = json.loads(await old_recv())
+            frame["scope"]["workspace_binding_id"] = "other"
+            return json.dumps(frame)
+        peer.recv = wrong_reply
+        with pytest.raises(CoreError):
+            await apply_r4_lease(peer, state, runtime, scope=scope, grant_id="grant", purpose="renew")
+        assert peer.sent[-1]["type"] == "lease.renew"
+        assert sum(frame["type"] == "lease.applied" for frame in peer.sent) == 1
+    finally:
+        await runtime.shutdown(ShutdownPolicy(0, 0))
+        await journal.aclose()

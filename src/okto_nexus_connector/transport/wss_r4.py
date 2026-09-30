@@ -15,7 +15,9 @@ import websockets
 
 from nexus_connector_core import (
     R4_PREVIEW_REVISION, R4ReconcileAttempt, __version__ as CORE_VERSION,
+    CoreError, R4LeaseApplication, RuntimeCore,
     decode_r4_frame, encode_r4_frame, reduce_r4_reconcile_accepted,
+    r4_lease_renew_frame,
 )
 
 from .wss_client import validate_link_url
@@ -40,6 +42,32 @@ class R4ControlState:
     connection_id: str
     connection_generation: int
     control_ready: bool
+
+
+async def apply_r4_lease(
+        websocket, state: R4ControlState, runtime: RuntimeCore, *,
+        scope: Mapping[str, object], grant_id: str,
+        purpose: str = "initial") -> R4LeaseApplication:
+    """Exchange a lease on an authenticated, exclusively owned control socket.
+
+    This phase requires the caller to own the socket reader. It does not
+    provide the daemon's future multiplexing or durable grant recovery.
+    A lost ACK requires reconciliation of the same request, never a new
+    initial grant or a fabricated local deadline.
+    """
+    scope = dict(scope)
+    if (not state.control_ready or scope.get("server_id") != state.server_id or
+            scope.get("executor_id") != state.executor_id):
+        raise CoreError("LEASE_REVALIDATION_REQUIRED", "r4_link")
+    attempt = await runtime.begin_r4_lease_request(
+        scope=scope, grant_id=grant_id, connection_id=state.connection_id,
+        connection_generation=state.connection_generation, purpose=purpose)
+    await _send(websocket, r4_lease_renew_frame(attempt))
+    grant = await _receive(websocket)
+    application = await runtime.install_r4_lease(attempt, grant)
+    # Core may need a durable CAS here. Receipt of a grant alone is not an ACK.
+    await _send(websocket, application.acknowledgement)
+    return application
 
 
 def _scope(frame: Mapping[str, object], *, server_id: str,
