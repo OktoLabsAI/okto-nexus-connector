@@ -2,7 +2,7 @@
 
 Control readiness is independent of lane/session execution readiness. Confirmed
 closed sessions and receipt history can be reconciled in bounded pages. Active
-ownership, missing evidence and nonzero event streams keep this owner in recovery.
+ownership and missing evidence keep this owner in recovery; durable event obligations are replayed before readiness.
 """
 
 from __future__ import annotations
@@ -72,6 +72,7 @@ class R4DaemonControl:
         self._task = None
         self._recovery_error = None
         self._reporter = None
+        self._retained_lanes = {}
         self.cleanup_pending = False
         self._stopped = asyncio.Event()
 
@@ -173,8 +174,7 @@ class R4DaemonControl:
         if self._reporter is None:
             self._reporter = R4ReconciliationReporter(self.store, self.host, self.server_id, self.executor_id)
         report = await self._reporter.report(request)
-        if self._reporter.blocked:
-            self._recovery_error = 'RECONCILIATION_REQUIRED'
+        self._recovery_error = 'RECONCILIATION_REQUIRED' if self._reporter.blocked else None
         return report
 
     async def _report_reconciliation(self, request):
@@ -211,20 +211,43 @@ class R4DaemonControl:
                                      'The Server has not qualified remote R4 execution.')
             await self._require(snapshot)
             from ..services.r4_publications import recover_publications
+            self._retained_lanes = {k:v for k,v in self._retained_lanes.items() if self.clock()<v.deadline}
             recovered_lanes = await recover_publications(self.store, self.vault, http,
                 server_id=self.server_id, executor_id=self.executor_id,
                 require_current=lambda: self._require(snapshot), clock=self.clock,
-                journal=await self.host.ensure_history_journal())
+                journal=await self.host.ensure_history_journal(),
+                authorities=self._retained_lanes)
+            self._retained_lanes = recovered_lanes
             remaining = bootstrap.deadline_monotonic - self.clock()
             if remaining <= 0:
                 raise ConnectorError('CONTROL_DISCONNECTED', 'r4_startup', 'The bootstrap ticket expired.')
             self.phase = 'RECOVERING'
-            self.connection = await asyncio.wait_for(self.connect(
-                _link_url(profile, self.executor_id), bootstrap.ticket,
-                server_id=self.server_id, executor_id=self.executor_id,
-                management_revision=protocol.management_revision,
-                snapshot_format=protocol.executor_snapshot_format, boot_id=self.boot_id,
-                report_reconciliation=self._report_reconciliation), min(30, remaining))
+            from ..services.r4_event_recovery import recover_event_streams
+            recovery_tasks = set()
+            async def recover_events(channel):
+                task = asyncio.create_task(recover_event_streams(self.store,self.vault,http,self.host,channel,
+                    require_current=lambda: self._require(snapshot),authorities=recovered_lanes,clock=self.clock),
+                    name='r4-event-recovery')
+                recovery_tasks.add(task)
+                try:
+                    return await asyncio.shield(task)
+                except Exception as error:
+                    code = getattr(error,'code',None)
+                    self._recovery_error = code if type(code) is str and code in _STATUS_ERRORS else 'JOURNAL_UNAVAILABLE'
+                    raise
+            try:
+                self.connection = await asyncio.wait_for(self.connect(
+                    _link_url(profile, self.executor_id), bootstrap.ticket,
+                    server_id=self.server_id, executor_id=self.executor_id,
+                    management_revision=protocol.management_revision,
+                    snapshot_format=protocol.executor_snapshot_format, boot_id=self.boot_id,
+                    report_reconciliation=self._report_reconciliation,
+                    recover_before_report=recover_events), min(30, remaining))
+            finally:
+                # Keep HTTP, vault and journal owners alive through a canceled
+                # negotiation observer and any already-started ACK write.
+                if recovery_tasks:
+                    await asyncio.shield(asyncio.gather(*recovery_tasks,return_exceptions=True))
             if self._reporter is not None and self._reporter.blocked:
                 raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile',
                                      'Local recovery facts do not permit control readiness.')
@@ -250,6 +273,7 @@ class R4DaemonControl:
                 if not self._stopped.is_set():
                     raise ConnectorError('CONTROL_DISCONNECTED', 'r4_startup', 'The R4 control link was lost.')
             finally:
+                self._retained_lanes.update(self.execution.lanes)
                 await self.execution.close()
                 self.execution = None
 

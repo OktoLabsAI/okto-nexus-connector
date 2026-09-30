@@ -33,6 +33,7 @@ async def lifecycle(selection, tmp_path):
     async def attach(**kwargs):
         attached.append(kwargs)
     connection.attach_binding = attach
+    connection.is_attached = lambda **scope: any(all(row.get(k)==v for k,v in scope.items()) for row in attached)
     host = CoreRuntimeHost(tmp_path / "runtime", vault)
     async def discover():
         return [candidate]

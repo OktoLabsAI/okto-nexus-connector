@@ -93,3 +93,16 @@ class R4EventStore:
                 raise ValueError("Invalid event acknowledgment progression.")
             conn.execute("UPDATE streams SET remote_acked=?,core_applied=? WHERE server_id=? AND executor_id=? AND session_id=? AND stream_epoch=?",
                          (remote,applied,*self.key(scope)))
+
+
+    def page(self, server_id, executor_id, *, after=0, high=None, limit=128):
+        if type(after) is not int or after<0 or type(limit) is not int or not 1<=limit<=128 or (
+                high is not None and (type(high) is not int or high<0)):
+            raise ValueError("Invalid event stream page.")
+        with self._transaction() as conn:
+            if high is None:
+                high=conn.execute("SELECT coalesce(max(rowid),0) FROM streams WHERE server_id=? AND executor_id=?",
+                                  (server_id,executor_id)).fetchone()[0]
+            rows=conn.execute("SELECT rowid,* FROM streams WHERE server_id=? AND executor_id=? AND rowid>? AND rowid<=? "
+                              "ORDER BY rowid LIMIT ?",(server_id,executor_id,after,high,limit)).fetchall()
+            return [(row["rowid"],self._decode(row)) for row in rows],high

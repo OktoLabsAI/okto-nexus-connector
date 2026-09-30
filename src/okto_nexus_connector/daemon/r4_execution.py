@@ -123,10 +123,10 @@ class R4DaemonExecution:
                     or self.clock() >= deadline
                     or (await asyncio.to_thread(self._bindings)).get(binding_id) != (binding, identity)):
                 raise ConnectorError("STALE_GENERATION", "r4_lanes", "The returned lane authority is stale.")
-            await self.connection.attach_binding(binding_id=binding_id, agent_id=binding.agent_id,
-                ticket=ticket.ticket, credential_epoch=ticket.credential_epoch,
-                authorization_revision=ticket.authorization_revision,
-                configuration_revision=binding.configuration_revision)
+            lane_scope = dict(binding_id=binding_id,agent_id=binding.agent_id,credential_epoch=ticket.credential_epoch,
+                authorization_revision=ticket.authorization_revision,configuration_revision=binding.configuration_revision)
+            if not self.connection.is_attached(**lane_scope):
+                await self.connection.attach_binding(ticket=ticket.ticket,**lane_scope)
             if (await asyncio.to_thread(self._bindings)).get(binding_id) != (binding, identity):
                 raise ConnectorError("STALE_GENERATION", "r4_lanes", "The binding changed during attachment.")
             self.lanes[binding_id] = _Lane(binding, identity, ticket, deadline)

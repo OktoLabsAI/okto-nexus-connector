@@ -90,7 +90,7 @@ async def negotiate_r4_control(
         websocket, *, server_id: str, executor_id: str,
         management_revision: str, snapshot_format: int, boot_id: str,
         report_reconciliation: ReconcileReporter,
-        max_reconcile_attempts: int = 3) -> R4ControlState:
+        max_reconcile_attempts: int = 3, recover_before_report=None, recovery_lanes=None) -> R4ControlState:
     """Negotiate one socket; a failed journal cannot become an empty report."""
     if not boot_id or max_reconcile_attempts < 1:
         raise ValueError("Invalid R4 control settings.")
@@ -117,6 +117,9 @@ async def negotiate_r4_control(
         raise ValueError("The R4 control welcome does not match this link.")
     connection_id = welcome["connection_id"]
     generation = welcome["connection_generation"]
+    from .r4_recovery import R4RecoveryChannel
+    recovery = R4RecoveryChannel(websocket,
+        R4ControlState(server_id,executor_id,connection_id,generation,False),boot_id)
     pending: R4ReconcileAttempt | None = None
     attempts = 0
     cycle_id, next_cursor, pages = None, None, 0
@@ -142,6 +145,10 @@ async def negotiate_r4_control(
                 frame["reconcile_id"], server_id, executor_id,
                 connection_id, generation, boot_id)
             try:
+                if recover_before_report is not None and frame['cursor'] is None:
+                    await recover_before_report(recovery)
+                    if recovery_lanes is not None:
+                        recovery_lanes.update(recovery.lanes)
                 report = dict(await report_reconciliation(frame))
                 if (report.get("type") != "reconcile.report" or
                         report.get("reconcile_id") != frame["reconcile_id"] or
@@ -192,6 +199,7 @@ async def negotiate_r4_control(
             projection = reduce_r4_reconcile_accepted(pending, frame)
             pending = None
             if projection.ready:
+                recovery.online = False
                 return R4ControlState(
                     server_id, executor_id, connection_id, generation, True)
             await _send(websocket, {
@@ -209,7 +217,7 @@ async def negotiate_r4_control(
 async def connect_r4_control(
         link_url: str, ticket: str, *, server_id: str, executor_id: str,
         management_revision: str, snapshot_format: int, boot_id: str,
-        report_reconciliation: ReconcileReporter):
+        report_reconciliation: ReconcileReporter, recover_before_report=None, recovery_lanes=None):
     """Open an authenticated R4 socket and return it with control state."""
     validate_link_url(link_url)
     if urlsplit(link_url).scheme not in ("wss", "ws"):
@@ -224,7 +232,8 @@ async def connect_r4_control(
             websocket, server_id=server_id, executor_id=executor_id,
             management_revision=management_revision,
             snapshot_format=snapshot_format, boot_id=boot_id,
-            report_reconciliation=report_reconciliation,
+            report_reconciliation=report_reconciliation, recover_before_report=recover_before_report,
+            recovery_lanes=recovery_lanes,
         )
         return websocket, state
     except BaseException:
@@ -234,14 +243,16 @@ async def connect_r4_control(
 
 async def connect_r4_connection(link_url: str, ticket: str, *, server_id: str,
         executor_id: str, management_revision: str, snapshot_format: int,
-        boot_id: str, report_reconciliation: ReconcileReporter):
+        boot_id: str, report_reconciliation: ReconcileReporter, recover_before_report=None):
     """Negotiate a real socket and transfer its reader to one connection owner."""
     from .r4_connection import R4Connection
+    lanes = {}
     websocket, state = await connect_r4_control(link_url, ticket,
         server_id=server_id, executor_id=executor_id, management_revision=management_revision,
-        snapshot_format=snapshot_format, boot_id=boot_id, report_reconciliation=report_reconciliation)
+        snapshot_format=snapshot_format, boot_id=boot_id, report_reconciliation=report_reconciliation,
+        recover_before_report=recover_before_report,recovery_lanes=lanes)
     try:
-        connection = R4Connection(websocket, state, boot_id=boot_id)
+        connection = R4Connection(websocket, state, boot_id=boot_id, initial_lanes=lanes)
         connection.start()
         return connection
     except BaseException:

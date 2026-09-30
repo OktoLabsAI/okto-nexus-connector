@@ -34,7 +34,7 @@ def _binding(store, http, server_id, executor_id, frame):
 
 
 async def recover_publications(store, vault, http, *, server_id, executor_id,
-                               require_current, clock=time.monotonic, journal=None):
+                               require_current, clock=time.monotonic, journal=None, authorities=None):
     """Drain bounded ready pages before control negotiation, without Core effects.
 
     Unprojected reservations remain pending. A live previous ticket can refuse
@@ -59,7 +59,7 @@ async def recover_publications(store, vault, http, *, server_id, executor_id,
                     await asyncio.to_thread(publications.record, frame)
                 # Missing receipts remain unresolved; never infer NOT_SENT.
                 after = source['operation_id']
-    authorities = {}
+    authorities = {} if authorities is None else authorities
     for _ in range(32):
         await require_current()
         page = await asyncio.to_thread(publications.ready, server_id, executor_id)
@@ -69,6 +69,9 @@ async def recover_publications(store, vault, http, *, server_id, executor_id,
             await require_current()
             binding, identity = await asyncio.to_thread(_binding, store, http, server_id, executor_id, frame)
             authority = authorities.get(binding.binding_id)
+            if authority is not None and clock() >= authority.deadline:
+                authorities.pop(binding.binding_id,None)
+                authority = None
             if authority is None:
                 key = await asyncio.to_thread(vault.resolve, identity.secret_handle)
                 await require_current()

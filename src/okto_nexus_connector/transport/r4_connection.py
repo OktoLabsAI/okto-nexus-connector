@@ -13,7 +13,7 @@ import secrets
 import time
 
 from nexus_connector_core import (
-    CoreError, R4AttachAttempt, R4_PREVIEW_REVISION, decode_r4_frame,
+    CoreError, R4AttachAttempt, R4LaneProjection, R4_PREVIEW_REVISION, decode_r4_frame,
     encode_r4_frame, r4_lease_renew_frame, reduce_r4_binding_attached,
 )
 
@@ -43,7 +43,7 @@ class R4Connection:
     def __init__(self, websocket, state: R4ControlState, *, boot_id: str,
                  regular_items=32, control_items=8, regular_bytes=256 * 1024,
                  control_bytes=128 * 1024, max_requests=16, max_lanes=256,
-                 request_timeout=15.0, send_timeout=5.0, heartbeat_seconds=15.0):
+                 request_timeout=15.0, send_timeout=5.0, heartbeat_seconds=15.0, initial_lanes=None):
         limits = (regular_items, control_items, regular_bytes, control_bytes, max_requests, max_lanes)
         if (not state.control_ready or not boot_id or
                 any(type(n) is not int or n <= 0 for n in limits) or
@@ -69,6 +69,15 @@ class R4Connection:
         self._closed = False
         self.failure = None
         self.close_error = None
+        for binding_id,lane in (initial_lanes or {}).items():
+            if (len(self._lanes)>=max_lanes or not isinstance(lane,R4LaneProjection) or
+                    binding_id!=lane.binding_id or lane.boot_id!=boot_id or
+                    any(getattr(lane,k)!=getattr(state,k) for k in
+                        ('server_id','executor_id','connection_id','connection_generation')) or
+                    time.monotonic()>=lane.deadline_monotonic):
+                raise CoreError('BINDING_NOT_AUTHORIZED','r4_recovery_transfer')
+            self._lanes[binding_id]=lane
+            self._lane_attempts[binding_id]=lane.attach_request_id
 
     @property
     def online(self):
@@ -331,6 +340,14 @@ class R4Connection:
                     'authorization_revision', 'configuration_revision')):
             raise CoreError('BINDING_NOT_AUTHORIZED', 'r4_link')
         return lane
+
+    def is_attached(self, *, binding_id, agent_id, credential_epoch, authorization_revision, configuration_revision):
+        try:
+            self._lane(dict(binding_id=binding_id,agent_id=agent_id,credential_epoch=credential_epoch,
+                authorization_revision=authorization_revision,configuration_revision=configuration_revision))
+            return self.online
+        except CoreError:
+            return False
 
     def _admit(self, frame, encoded):
         lane = self._lane(frame)

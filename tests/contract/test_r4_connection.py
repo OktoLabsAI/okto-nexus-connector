@@ -352,3 +352,32 @@ async def test_event_ack_rejects_unwritten_or_cross_scoped_fact(changes):
         assert not owner.online
     finally:
         await owner.close()
+
+
+async def test_recovery_lane_transfers_before_first_dispatch():
+    from dataclasses import replace
+    from okto_nexus_connector.transport.r4_recovery import R4RecoveryChannel
+    socket=Socket()
+    recovery=R4RecoveryChannel(socket,replace(STATE,control_ready=False),"boot")
+    attaching=asyncio.create_task(recovery.attach_binding(binding_id="binding",agent_id="agent",ticket="t"*32,
+        credential_epoch=1,authorization_revision=1,configuration_revision=1))
+    request=await socket.outgoing.get()
+    await socket.emit(attached(request))
+    await attaching
+    pending=asyncio.create_task(recovery.publish_events(binding_id="binding",agent_id="agent",session_id="session",
+                                                       stream_epoch="epoch",events=[event(1)]))
+    await socket.outgoing.get()
+    await socket.emit(event_ack(1))
+    assert (await pending)["sequence"]==1
+    recovery.online=False
+    await socket.emit(operation())
+    owner=R4Connection(socket,STATE,boot_id="boot",initial_lanes=recovery.lanes)
+    owner.start()
+    try:
+        item=await asyncio.wait_for(owner.receive_operation(),1)
+        owner.release_operation(item)
+        assert owner.online and socket.peak_readers==1
+        with pytest.raises(CoreError):
+            await recovery.publish_events(binding_id="binding",agent_id="agent",session_id="session",
+                                          stream_epoch="epoch",events=[event(2)])
+    finally: await owner.close()
