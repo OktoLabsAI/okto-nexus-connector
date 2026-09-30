@@ -2,7 +2,7 @@
 import asyncio
 import secrets
 
-from nexus_connector_core import EventCursor, OperationKey, project_r4_bound_receipt
+from nexus_connector_core import EventCursor, OperationKey, project_r4_bound_receipt, project_r4_resource_release
 
 from ..errors import ConnectorError
 from ..storage.r4_publications import R4PublicationStore
@@ -103,14 +103,24 @@ class R4ReconciliationReporter:
                         observed = await self._fact(row, journal)
                         if observed is not None and observed['stage'] == 'SUCCEEDED':
                             closed = row
-                released = closed is not None and opening is not None and opening['metadata'].get('stream_epoch') is not None
+                release_fact = None
+                if closed is None and opening is not None and opening['binding'] is not None:
+                    slot = await ledger.owned_slot_state(claim.key)
+                    if slot is not None and slot.released:
+                        opening_receipt = await journal.get_receipt(OperationKey(
+                            self.server_id, self.executor_id, claim.opening_operation_id))
+                        if opening_receipt is not None:
+                            release_fact = project_r4_resource_release(
+                                opening['binding'], claim, slot, opening_receipt)
+                released = (closed is not None or release_fact is not None) and opening is not None and opening['metadata'].get('stream_epoch') is not None
                 generation = generation if generation is not None else 0
                 claims.append(dict(session_id=claim.key.session_id, owner_generation=generation,
                                    state='RELEASED' if released else 'UNKNOWN'))
                 facts.append(dict(session_id=claim.key.session_id, owner_generation=generation,
                                   process_state='EXITED' if released else 'UNKNOWN'))
                 if released:
-                    facts[-1]['proof_digest'] = closed['binding']['digest']
+                    facts[-1]['proof_digest'] = (release_fact['proof_digest'] if release_fact is not None
+                                                   else closed['binding']['digest'])
                     epoch = opening['metadata']['stream_epoch']
                     sequence = await journal.contiguous_watermark(EventCursor(
                         self.server_id, self.executor_id, claim.key.session_id, epoch))
