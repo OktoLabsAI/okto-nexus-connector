@@ -11,6 +11,8 @@ from ..storage.r4_publications import R4PublicationStore
 class R4ReconciliationReporter:
     def __init__(self, store, host, server_id, executor_id):
         self.publications = R4PublicationStore.for_state(store)
+        from ..storage.r4_events import R4EventStore
+        self.event_store = R4EventStore.for_state(store)
         self.host, self.server_id, self.executor_id = host, server_id, executor_id
         self.cycle = None
         self.cursor = None
@@ -113,7 +115,19 @@ class R4ReconciliationReporter:
                     sequence = await journal.contiguous_watermark(EventCursor(
                         self.server_id, self.executor_id, claim.key.session_id, epoch))
                     watermarks.append(dict(session_id=claim.key.session_id, stream_epoch=epoch, sequence=sequence))
-                    self.blocked |= sequence > 0
+                    remaining = journal.events(EventCursor(self.server_id,self.executor_id,claim.key.session_id,epoch,sequence))
+                    try:
+                        async for _ in remaining:
+                            self.blocked = True
+                            break
+                    finally:
+                        close = getattr(remaining,'aclose',None)
+                        if close is not None:
+                            await close()
+                    if sequence > 0:
+                        progress = await asyncio.to_thread(self.event_store.read,
+                            {**opening['metadata'],'stream_epoch':epoch})
+                        self.blocked |= progress['remote_acked'] != sequence or progress['core_applied'] != sequence
                 else:
                     self.blocked = True
             if page.next_after_rowid is None:

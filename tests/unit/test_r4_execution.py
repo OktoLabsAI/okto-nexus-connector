@@ -37,6 +37,13 @@ class Connection:
     def release_operation(self, item):
         assert self.reservations.pop(item.token) is item
 
+    async def publish_events(self, **values):
+        return dict(protocol_major=1,contract_revision=R4_PREVIEW_REVISION,type='event.ack',
+            server_id=self.state.server_id,executor_id=self.state.executor_id,
+            connection_id=self.state.connection_id,connection_generation=self.state.connection_generation,
+            **{k:values[k] for k in ('binding_id','agent_id','session_id','stream_epoch')},
+            sequence=values['events'][-1]['sequence'])
+
     async def close(self):
         self.online = False
 
@@ -362,3 +369,12 @@ async def test_close_owner_publishes_after_deadline_and_retains_commit_on_stop(e
         release.set()
         if stopping is not None:
             await asyncio.gather(stopping, return_exceptions=True)
+
+
+async def test_stream_registry_failure_prevents_native_open(execution,monkeypatch):
+    owner,connection,factory,_,opening=execution
+    def fail(scope): raise OSError("The stream registry is unavailable.")
+    monkeypatch.setattr(owner.events.store,"register",fail)
+    await connection.emit(opening)
+    await failed(owner)
+    assert not factory.opened and not connection.online

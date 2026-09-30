@@ -288,3 +288,67 @@ async def test_invalid_or_absent_lease_reply_fences_connection(runtime, failure)
         assert socket.outgoing.empty()
     finally:
         await owner.close()
+
+
+def event(sequence):
+    return dict(server_id="srv",executor_id="exe",session_id="session",stream_epoch="epoch",
+                sequence=sequence,category="text_delta",payload={"text":"Hello"})
+
+
+def event_ack(sequence, **changes):
+    return dict(**BASE,**CHANNEL,type="event.ack",binding_id="binding",agent_id="agent",
+                session_id="session",stream_epoch="epoch",sequence=sequence) | changes
+
+
+async def publish_event(owner, sequence):
+    return await owner.publish_events(binding_id="binding",agent_id="agent",session_id="session",
+                                      stream_epoch="epoch",events=[event(sequence)])
+
+
+async def test_event_ack_targets_and_late_duplicate_do_not_advance_next_batch():
+    socket=Socket()
+    owner=R4Connection(socket,STATE,boot_id="boot",request_timeout=.1)
+    owner.start()
+    try:
+        await attach(owner,socket)
+        first=asyncio.create_task(publish_event(owner,1))
+        await socket.outgoing.get()
+        await socket.emit(event_ack(1))
+        assert (await first)["sequence"]==1
+        second=asyncio.create_task(publish_event(owner,2))
+        await socket.outgoing.get()
+        await socket.emit(event_ack(1))
+        with pytest.raises(TimeoutError): await second
+        assert owner.online
+        # The same stable batch is retried; late ACK1 cannot satisfy it.
+        retry=asyncio.create_task(publish_event(owner,2))
+        await socket.outgoing.get()
+        await socket.emit(event_ack(2))
+        assert (await retry)["sequence"]==2
+        await socket.emit(event_ack(1))
+        await socket.emit(operation())
+        item=await asyncio.wait_for(owner.receive_operation(),1)
+        owner.release_operation(item)
+        assert owner.online and socket.peak_readers==1
+    finally:
+        await owner.close()
+
+
+@pytest.mark.parametrize("changes",[{"sequence":2},{"stream_epoch":"foreign"},{"agent_id":"foreign"},
+                                    {"connection_generation":1},{"connection_id":"foreign"}])
+async def test_event_ack_rejects_unwritten_or_cross_scoped_fact(changes):
+    socket=Socket()
+    owner=R4Connection(socket,STATE,boot_id="boot",request_timeout=.2)
+    owner.start()
+    try:
+        await attach(owner,socket)
+        pending=asyncio.create_task(publish_event(owner,1))
+        await socket.outgoing.get()
+        ack=event_ack(1)
+        ack.update(changes)
+        await socket.emit(ack)
+        with pytest.raises(ConnectorError):
+            await pending
+        assert not owner.online
+    finally:
+        await owner.close()

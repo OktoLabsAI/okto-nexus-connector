@@ -69,6 +69,8 @@ class R4ExecutionOwner:
             if not isinstance(native_tools, R4NativeToolServices) or launch_provider is not None:
                 raise ValueError('Native tools require the default approved launch provider.')
         self.native_tools = native_tools
+        from .r4_events import R4EventPublisher
+        self.events = R4EventPublisher(connection, store, host, max_streams=max_sessions)
         self.max_sessions = max_sessions
         self._sessions = {}
         self._consumers = []
@@ -96,6 +98,7 @@ class R4ExecutionOwner:
         await asyncio.shield(asyncio.gather(*self._consumers, return_exceptions=True))
         if self._producers:
             await asyncio.shield(asyncio.gather(*tuple(self._producers), return_exceptions=True))
+        await self.events.stop()
         for task in tuple(self._producers):
             if task.done():
                 self._observe(task)
@@ -128,6 +131,8 @@ class R4ExecutionOwner:
         binding = prepare_r4_receipt_binding(item.frame, context, **options)
         await asyncio.to_thread(self.publications.bind, binding,
                                **({'stream_epoch': options['stream_epoch']} if 'stream_epoch' in options else {}))
+        if 'stream_epoch' in options:
+            await asyncio.to_thread(self.events.store.register,{**item.frame,'stream_epoch':options['stream_epoch']})
         # Persistence can yield while the lane, link or lease is superseded.
         return self._context(item, runtime)
 
@@ -140,6 +145,11 @@ class R4ExecutionOwner:
             await asyncio.to_thread(self.publications.record, receipt)
             await self.publish_receipt(receipt)
             await asyncio.to_thread(self.publications.acknowledge, receipt)
+            frame = item.frame
+            key = ExecutionRuntimeKey(frame['server_id'],frame['executor_id'],frame['binding_id'],frame['session_id'])
+            session = self._sessions.get(key)
+            if session is not None and not self._stopping:
+                await self.events.ensure({**frame,'stream_epoch':session.stream_epoch})
         except Exception as error:
             if self.failure is None:
                 self.failure = error

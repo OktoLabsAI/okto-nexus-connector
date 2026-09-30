@@ -63,6 +63,7 @@ class R4Connection:
         self._lanes = {}
         self._lane_attempts = {}
         self._pending = {}
+        self._event_written = {}
         self._producers = set()
         self._reader = self._heartbeat = self._closer = None
         self._closed = False
@@ -179,6 +180,15 @@ class R4Connection:
                     if validate is not None:
                         validate(frame)
                     future.set_result(frame)
+                elif kind == 'event.ack':
+                    stream = tuple(frame[k] for k in ('binding_id','agent_id','session_id','stream_epoch'))
+                    if frame['sequence'] > self._event_written.get(stream, 0):
+                        raise CoreError('EVENT_GAP', 'r4_link')
+                    pending = self._pending.get(('event.ack',stream))
+                    if pending is not None and not pending[0].done():
+                        future, validate = pending
+                        if validate(frame):
+                            future.set_result(frame)
                 elif kind == 'error':
                     # This wire error has no request ID. It cannot safely be
                     # assigned to one of several in-flight lease requests.
@@ -190,7 +200,7 @@ class R4Connection:
         except Exception as error:
             self._fence(error)
 
-    async def _request(self, frame, *, reply_type, request_id, validate=None, finish=None):
+    async def _request(self, frame, *, reply_type, request_id, validate=None, finish=None, fence_on_error=True, before_send=None):
         self._require_online()
         key = (reply_type, request_id)
         if key in self._pending or len(self._producers) >= self.max_requests:
@@ -201,11 +211,14 @@ class R4Connection:
 
         async def produce():
             try:
+                if before_send is not None:
+                    before_send()
                 await self.send(encoded)
                 reply = await asyncio.wait_for(asyncio.shield(future), self.request_timeout)
                 return await finish(reply) if finish is not None else reply
             except Exception as error:
-                self._fence(error)
+                if fence_on_error:
+                    self._fence(error)
                 raise
             finally:
                 self._pending.pop(key, None)
@@ -222,6 +235,34 @@ class R4Connection:
                 completed.exception()
         task.add_done_callback(done)
         return await asyncio.shield(task)
+
+    async def publish_events(self, *, binding_id, agent_id, session_id, stream_epoch, events):
+        self._require_online()
+        lane = self._lanes.get(binding_id)
+        if lane is None or lane.agent_id != agent_id or time.monotonic() >= lane.deadline_monotonic:
+            raise CoreError('BINDING_NOT_AUTHORIZED', 'r4_event')
+        stream = (binding_id,agent_id,session_id,stream_epoch)
+        if stream not in self._event_written and len(self._event_written) >= 4096:
+            raise ConnectorError('CAPACITY_EXCEEDED','r4_event','The event stream capacity is exhausted.')
+        frame = dict(**self._base(),type='event.batch',binding_id=binding_id,agent_id=agent_id,
+                     session_id=session_id,stream_epoch=stream_epoch,events=events)
+        parsed = decode_r4_frame(encode_r4_frame(frame))
+        if any(any(event[k] != parsed[k] for k in ('server_id','executor_id','session_id','stream_epoch'))
+               for event in parsed['events']):
+            raise CoreError('EVENT_SESSION_MISMATCH','r4_event')
+        target = max(event['sequence'] for event in parsed['events'])
+        if ('event.ack',stream) in self._pending:
+            raise ConnectorError('CAPACITY_EXCEEDED','r4_event','The event stream already has an in-flight batch.')
+        def prepare_send():
+            if self._lanes.get(binding_id) is not lane or time.monotonic() >= lane.deadline_monotonic:
+                raise CoreError('BINDING_NOT_AUTHORIZED','r4_event')
+            self._event_written[stream] = max(target,self._event_written.get(stream,0))
+        def validate(reply):
+            if self._lanes.get(binding_id) is not lane or time.monotonic() >= lane.deadline_monotonic:
+                raise CoreError('BINDING_NOT_AUTHORIZED','r4_event')
+            return reply['sequence'] >= target
+        return await self._request(parsed,reply_type='event.ack',request_id=stream,
+                                   validate=validate,fence_on_error=False,before_send=prepare_send)
 
     async def attach_binding(self, *, binding_id, agent_id, ticket, credential_epoch,
                              authorization_revision, configuration_revision):
