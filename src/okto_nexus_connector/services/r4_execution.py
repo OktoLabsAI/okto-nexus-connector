@@ -7,15 +7,17 @@ through public Core APIs; it never resolves or admits a second intent.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 import secrets
+import time
 
 from nexus_connector_core import (
     CoreError, LaunchIntent, OpenOperation, TurnOperation, ControlOperation,
     project_r4_open_receipt, project_r4_turn_receipt, project_r4_steer_receipt,
     project_r4_interrupt_receipt, project_r4_close_receipt,
     project_r4_decision_receipt, r4_close_operation, r4_native_decision_operation,
-    prepare_r4_receipt_binding,
+    prepare_r4_receipt_binding, SessionKey,
 )
 
 from ..errors import ConnectorError
@@ -38,11 +40,53 @@ class R4LaunchSetup:
     native_action_factory: object | None = None
 
 
+class _RenewalGate:
+    """Drain productive calls for renewal without serializing those calls."""
+    def __init__(self):
+        self.changed = asyncio.Condition()
+        self.active = 0
+        self.renewing = False
+
+    @asynccontextmanager
+    async def operation(self):
+        async with self.changed:
+            await self.changed.wait_for(lambda: not self.renewing)
+            self.active += 1
+        try:
+            yield
+        finally:
+            async with self.changed:
+                self.active -= 1
+                self.changed.notify_all()
+
+    @asynccontextmanager
+    async def renewal(self):
+        async with self.changed:
+            await self.changed.wait_for(lambda: not self.renewing)
+            self.renewing = True
+            try:
+                await self.changed.wait_for(lambda: self.active == 0)
+            except BaseException:
+                self.renewing = False
+                self.changed.notify_all()
+                raise
+        try:
+            yield
+        finally:
+            async with self.changed:
+                self.renewing = False
+                self.changed.notify_all()
+
+
 @dataclass(slots=True)
 class _Session:
     runtime: object
     opening_hash: str
     stream_epoch: str
+    gate: _RenewalGate = field(default_factory=_RenewalGate)
+    stopped: asyncio.Event = field(default_factory=asyncio.Event)
+    deadline: float = 0
+    renewal: asyncio.Task | None = None
 
 
 class R4ExecutionOwner:
@@ -56,7 +100,8 @@ class R4ExecutionOwner:
 
     def __init__(self, connection, store, host, *, candidate_provider,
                  launch_provider=None, publish_receipt, native_factory=None,
-                 response_resolver=None, max_sessions=64, native_tools=None):
+                 response_resolver=None, max_sessions=64, native_tools=None,
+                 require_current=None, clock=time.monotonic):
         if type(max_sessions) is not int or max_sessions <= 0:
             raise ValueError('Invalid execution session capacity.')
         self.connection, self.store, self.host = connection, store, host
@@ -69,6 +114,8 @@ class R4ExecutionOwner:
             if not isinstance(native_tools, R4NativeToolServices) or launch_provider is not None:
                 raise ValueError('Native tools require the default approved launch provider.')
         self.native_tools = native_tools
+        self.require_authority, self.clock = require_current, clock
+        self._renewal_slots = asyncio.Semaphore(8)
         from .r4_events import R4EventPublisher
         self.events = R4EventPublisher(connection, store, host, max_streams=max_sessions)
         self.max_sessions = max_sessions
@@ -91,6 +138,8 @@ class R4ExecutionOwner:
 
     async def stop(self):
         self._stopping = True
+        for session in self._sessions.values():
+            session.stopped.set()
         # Only consumers are observers. A producer may already be in the
         # native protocol or committing a receipt and must remain owned.
         for task in self._consumers:
@@ -98,6 +147,9 @@ class R4ExecutionOwner:
         await asyncio.shield(asyncio.gather(*self._consumers, return_exceptions=True))
         if self._producers:
             await asyncio.shield(asyncio.gather(*tuple(self._producers), return_exceptions=True))
+        renewals = [s.renewal for s in self._sessions.values() if s.renewal is not None]
+        if renewals:
+            await asyncio.shield(asyncio.gather(*renewals, return_exceptions=True))
         await self.events.stop()
         for task in tuple(self._producers):
             if task.done():
@@ -150,6 +202,10 @@ class R4ExecutionOwner:
             session = self._sessions.get(key)
             if session is not None and not self._stopping:
                 await self.events.ensure({**frame,'stream_epoch':session.stream_epoch})
+                if (frame['action'] == 'runtime.open' and self.require_authority is not None
+                        and session.renewal is None and receipt['stage'] in ('SUBMITTED', 'SUCCEEDED')):
+                    session.renewal = asyncio.create_task(self._renew_session(session, dict(frame)),
+                                                         name='r4-session-lease-renewal')
         except Exception as error:
             if self.failure is None:
                 self.failure = error
@@ -158,7 +214,77 @@ class R4ExecutionOwner:
         finally:
             self.connection.release_operation(item)
 
+    async def _renew_session(self, session, source):
+        async def current():
+            if self._stopping or session.stopped.is_set() or not self.connection.online:
+                raise ConnectorError("CONTROL_DISCONNECTED", "r4_renewal", "The session renewal owner stopped.")
+            await self.require_authority(source)
+        try:
+            while not self._stopping and not session.stopped.is_set():
+                remaining = session.deadline - self.clock()
+                if remaining <= 0:
+                    raise CoreError("LEASE_EXPIRED", "r4_renewal")
+                try:
+                    await asyncio.wait_for(session.stopped.wait(), timeout=remaining * 0.5)
+                    return
+                except TimeoutError:
+                    pass
+                async with self._renewal_slots:
+                    async with session.gate.renewal():
+                        await current()
+                        if self.clock() >= session.deadline:
+                            raise CoreError("LEASE_EXPIRED", "r4_renewal")
+                        snapshot = await session.runtime.inspect(SessionKey(
+                            source["server_id"], source["executor_id"], source["session_id"]))
+                        if snapshot.ownership == "released" or snapshot.lease_state == "CLOSED":
+                            return
+                        await current()
+                        applied = await self.connection.apply_lease(session.runtime,
+                            scope={k:source[k] for k in _SCOPE}, grant_id=source["grant_id"], purpose="renew",
+                            require_current=current, fence_on_error=False)
+                        await current()
+                        if applied.context.lease_deadline_monotonic <= session.deadline:
+                            raise CoreError("STALE_GENERATION", "r4_renewal")
+                        session.deadline = applied.context.lease_deadline_monotonic
+        except Exception as error:
+            if self._stopping or session.stopped.is_set():
+                return
+            try:
+                snapshot = await session.runtime.inspect(SessionKey(
+                    source["server_id"], source["executor_id"], source["session_id"]))
+            except Exception:
+                snapshot = None
+            if snapshot is not None and (snapshot.ownership == "released" or snapshot.lease_state == "CLOSED"):
+                return
+            if self.failure is None:
+                self.failure = error
+            await self.connection.close()
+
     async def _execute(self, item):
+        frame = self.connection.require_current(item)
+        key = ExecutionRuntimeKey(frame["server_id"], frame["executor_id"], frame["binding_id"], frame["session_id"])
+        session = self._sessions.get(key)
+        containment = frame["action"] in ("turn.interrupt", "runtime.close") or (
+            frame["action"] in ("approval.decide", "input.provide") and
+            frame["payload"].get("decision") in ("decline", "cancel") and
+            all(frame["payload"].get(k) is None for k in ("response", "response_ref", "response_digest")))
+        if session is not None and not containment:
+            async with session.gate.operation():
+                return await self._execute_owned(item)
+        if session is not None and frame["action"] == "runtime.close":
+            session.stopped.set()
+        try:
+            return await self._execute_owned(item)
+        except CoreError as error:
+            # A compatible renewal can commit between containment's context
+            # read and its guarded native frontier. Retry only a proven
+            # pre-effect stale context, retaining the original operation ID.
+            if (containment and error.code == "STALE_GENERATION" and
+                    error.retry_safe and not error.possible_effect):
+                return await self._execute_owned(item)
+            raise
+
+    async def _execute_owned(self, item):
         frame = self.connection.require_current(item)
         key = ExecutionRuntimeKey(frame['server_id'], frame['executor_id'],
                                   frame['binding_id'], frame['session_id'])
@@ -201,8 +327,9 @@ class R4ExecutionOwner:
             self.connection.require_current(item)
             session = _Session(runtime, frame['intent_hash'], 'stream_' + secrets.token_hex(16))
             self._sessions[key] = session
-            await self.connection.apply_lease(runtime, scope={k: frame[k] for k in _SCOPE},
+            applied = await self.connection.apply_lease(runtime, scope={k: frame[k] for k in _SCOPE},
                                                grant_id=frame['grant_id'])
+            session.deadline = applied.context.lease_deadline_monotonic
             context = self._context(item, runtime)
             prepared = await runtime.prepare(LaunchIntent(frame['agent_id'], frame['workspace_id'],
                 payload['adapter_id'], mode=payload['mode'], model=payload.get('model'),

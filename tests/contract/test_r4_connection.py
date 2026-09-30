@@ -381,3 +381,28 @@ async def test_recovery_lane_transfers_before_first_dispatch():
             await recovery.publish_events(binding_id="binding",agent_id="agent",session_id="session",
                                           stream_epoch="epoch",events=[event(2)])
     finally: await owner.close()
+
+
+async def test_lease_authority_is_rechecked_after_reply_before_installation(runtime):
+    socket=Socket()
+    owner=R4Connection(socket,STATE,boot_id=runtime.r4_boot_id)
+    owner.start()
+    calls=[]
+    class GuardedRuntime:
+        begin_r4_lease_request=runtime.begin_r4_lease_request
+        async def install_r4_lease(self,attempt,grant):
+            raise AssertionError("A stale authority reached Core installation.")
+    async def current():
+        calls.append(1)
+        if len(calls)==3:
+            raise ConnectorError("STALE_GENERATION","test_authority")
+    waiter=asyncio.create_task(owner.apply_lease(GuardedRuntime(),scope=SCOPE,grant_id="grant",
+        require_current=current,fence_on_error=False))
+    try:
+        request=await asyncio.wait_for(socket.outgoing.get(),2)
+        await socket.emit(granted(request))
+        with pytest.raises(ConnectorError,match="STALE_GENERATION"):
+            await asyncio.wait_for(waiter,2)
+        assert len(calls)==3 and socket.outgoing.empty() and owner.online
+    finally:
+        await owner.close()

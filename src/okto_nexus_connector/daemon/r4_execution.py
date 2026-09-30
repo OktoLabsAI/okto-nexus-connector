@@ -131,7 +131,8 @@ class R4DaemonExecution:
         if self.lanes and self.owner is None:
             self.owner = R4ExecutionOwner(self.connection, self.store, self.host,
                 candidate_provider=self._candidates, launch_provider=self._launch,
-                publish_receipt=self._publish, native_factory=self.native_factory)
+                publish_receipt=self._publish, native_factory=self.native_factory,
+                require_current=self._current, clock=self.clock)
             self.owner.start()
 
     async def close(self, *, preserve_leases=False, stop_event=None):

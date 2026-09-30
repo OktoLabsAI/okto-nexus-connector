@@ -301,15 +301,22 @@ class R4Connection:
             raise CoreError('STALE_GENERATION', 'r4_link')
         return reply
 
-    async def apply_lease(self, runtime, *, scope, grant_id, purpose='initial'):
+    async def apply_lease(self, runtime, *, scope, grant_id, purpose='initial',
+                          require_current=None, fence_on_error=True):
         self._require_online()
         if scope.get('server_id') != self.state.server_id or scope.get('executor_id') != self.state.executor_id:
             raise CoreError('SCOPE_MISMATCH', 'r4_link')
+        if require_current is not None:
+            await require_current()
         attempt = await runtime.begin_r4_lease_request(scope=scope, grant_id=grant_id,
             connection_id=self.state.connection_id, connection_generation=self.state.connection_generation,
             purpose=purpose)
+        if require_current is not None:
+            await require_current()
         async def finish(grant):
             self._require_online()
+            if require_current is not None:
+                await require_current()
             application = await runtime.install_r4_lease(attempt, grant)
             # HTTP receipts may overtake lease.applied on another channel.
             # Replaying this SAME request after the ACK is an ordered Server
@@ -331,7 +338,8 @@ class R4Connection:
                     confirmation.exception()
             return application
         frame = r4_lease_renew_frame(attempt)
-        return await self._request(frame, reply_type='lease.granted', request_id=frame['request_id'], finish=finish)
+        return await self._request(frame, reply_type='lease.granted', request_id=frame['request_id'],
+                                   finish=finish, fence_on_error=fence_on_error)
 
     def _lane(self, frame):
         lane = self._lanes.get(frame['binding_id'])
