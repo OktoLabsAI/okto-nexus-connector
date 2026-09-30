@@ -21,9 +21,9 @@ def test_local_preview_and_publish_use_same_full_revision(tmp_path):
     candidates = [
         InstallationCandidate(
             adapter_id="codex_app_server", executable=str(tmp_path / "codex"),
-            fingerprint="sha256:content", source="path", trust="selected",
+            fingerprint="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", source="path", trust="selected",
             version="0.157.0", architecture="x86_64",
-            build_identity="sha256:build",
+            build_identity="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         )
     ]
     preview = availability_snapshot(candidates)

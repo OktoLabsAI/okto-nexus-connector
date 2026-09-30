@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from nexus_connector_core import R4_PREVIEW_REVISION, decode_r4_frame
+from nexus_connector_core import R4_PREVIEW_REVISION, SNAPSHOT_FORMAT_VERSION, decode_r4_frame
 
 from okto_nexus_connector.transport.wss_r4 import negotiate_r4_control
 
@@ -36,7 +36,7 @@ class Peer:
                 "link_attempt_id": frame["link_attempt_id"],
                 "management_revision": MANAGEMENT,
                 "accepted_nxl": R4_PREVIEW_REVISION,
-                "snapshot_format": 1, "control_capabilities": [],
+                "snapshot_format": SNAPSHOT_FORMAT_VERSION, "control_capabilities": [],
             })
             await self._request()
         elif frame["type"] == "heartbeat":
@@ -79,7 +79,7 @@ async def test_r4_control_retries_journal_failure_without_false_report():
 
     state = await asyncio.wait_for(negotiate_r4_control(
         peer, server_id="srv", executor_id="exe",
-        management_revision=MANAGEMENT, snapshot_format=1,
+        management_revision=MANAGEMENT, snapshot_format=SNAPSHOT_FORMAT_VERSION,
         boot_id="boot", report_reconciliation=report), 2)
     assert state.control_ready is True
     assert state.connection_generation == 2
@@ -105,7 +105,7 @@ async def test_r4_control_rejects_cross_scoped_welcome():
     with pytest.raises(ValueError, match="welcome"):
         await negotiate_r4_control(
             peer, server_id="srv", executor_id="exe",
-            management_revision=MANAGEMENT, snapshot_format=1,
+            management_revision=MANAGEMENT, snapshot_format=SNAPSHOT_FORMAT_VERSION,
             boot_id="boot", report_reconciliation=lambda _: None)
 
 
@@ -136,7 +136,7 @@ async def test_r4_control_refuses_empty_report_for_pending_operation():
     with pytest.raises(ValueError, match="did not complete"):
         await asyncio.wait_for(negotiate_r4_control(
             peer, server_id="srv", executor_id="exe",
-            management_revision=MANAGEMENT, snapshot_format=1,
+            management_revision=MANAGEMENT, snapshot_format=SNAPSHOT_FORMAT_VERSION,
             boot_id="boot", report_reconciliation=empty_report,
             max_reconcile_attempts=1), 2)
     assert [frame["type"] for frame in peer.sent] == [

@@ -22,7 +22,11 @@ from okto_nexus_connector.services.discovery_service import (
 
 def test_catalog_is_the_single_source():
     catalog = get_runtime_catalog()
-    assert catalog.format_version == 1
+    assert catalog.format_version == 2
+    assert all(descriptor.control_targeting for descriptor in catalog_runtimes())
+    pi = next(descriptor for descriptor in catalog_runtimes() if descriptor.adapter_id == "pi_rpc")
+    assert next(control for control in pi.control_targeting
+                if control.action == "turn.steer").steer_timing == "NEXT_TURN_BOUNDARY"
     managed = {d.adapter_id for d in catalog_runtimes()}
     assert managed == {"codex_app_server", "pi_rpc", "claude_stream"}
     assert adapter_ids() == tuple(sorted(managed, key=list(managed).index)) \
