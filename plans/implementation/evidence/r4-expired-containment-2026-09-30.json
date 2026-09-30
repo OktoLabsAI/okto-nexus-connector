@@ -1,0 +1,72 @@
+{
+  "date": "2026-09-30",
+  "status": "DEVELOPMENT_PARTIAL",
+  "branch": "feature/v0.2.0",
+  "source_parent_commits": {
+    "nexus": "3df1bedf7bfbeb10d25c940f786670ff9b6586d1",
+    "core": "2ac508fabaf9614a864e680e3e99599d1b822b5c",
+    "connector": "d761a44b8806d43b48656ed034e9f426f664a472"
+  },
+  "core_version": "0.2.26.dev0",
+  "core_wheel_sha256": "d1fd93375b84f68f14c7a6a84b609bcee0d14876b8c75ec00a71a11d8ec71977",
+  "core_sdist_sha256": "06d5dc8ac890db9060224a867e425d5083c285d58e506e997029ab653464ae6f",
+  "source_files_compared": 89,
+  "gates": {
+    "G0": "OPEN",
+    "G1": "OPEN",
+    "G2": "OPEN",
+    "G3": "OPEN"
+  },
+  "platform": "Windows-11-10.0.26200-SP0",
+  "python": "3.13.1",
+  "runs": [
+    {
+      "name": "connector_full",
+      "counts": {
+        "tests": 241,
+        "errors": 0,
+        "failures": 0,
+        "skipped": 2,
+        "passed": 239
+      },
+      "seconds": 249.932,
+      "timestamp": "2026-09-30T01:17:30.972625-03:00",
+      "junit": "plans/implementation/evidence/okto-connector-026-full.xml",
+      "junit_sha256": "e6bb5dbe49fb4265efc9e97d0e633f4e82bfbd58408942f52fd2ce652b77e32b",
+      "exit_code": 0,
+      "skip_reasons": {
+        "lab peer lacks full contract surface: BINDING_NOT_AUTHORIZED": 1,
+        "covered above": 1
+      },
+      "command_argv": [
+        "rtk",
+        "proxy",
+        "C:/Users/jpamb/AppData/Local/Temp/okto-r4-delivery-audit-py313/Scripts/python.exe",
+        "-m",
+        "pytest",
+        "tests",
+        "-q",
+        "--tb=short",
+        "--junitxml=C:/Users/jpamb/AppData/Local/Temp/okto-connector-026-full.xml"
+      ],
+      "cwd": "D:/Projetos/Techridy/okto-nexus-connector"
+    }
+  ],
+  "checks": [
+    "R3 and R4 generators --check",
+    "Core clean wheel verifier and embedded/remote consumer smokes",
+    "Three identical wheel copies",
+    "Nexus uv lock --check and uv sync --frozen",
+    "Isolated imports of all three packages from site-packages",
+    "Installed changed Core module bytes match source",
+    "Delivery plan coverage validator"
+  ],
+  "limits": [
+    "Pending lease CAS still refuses caller controls with LEASE_UPDATE_PENDING; nonblocking caller containment during CAS remains unqualified.",
+    "Nexus canonical control and decision callers remain incomplete; this increment changes Core capability.",
+    "No real provider or independent-host acceptance; skipped platform/live tests remain required where applicable.",
+    "Initial installed isolated pytest invocation lacked a tests.regression helper import; all 17 cases passed using installed Core from repository cwd without src on sys.path."
+  ],
+  "joint_report_repository": "OktoLabsAI/okto-nexus",
+  "joint_report": "plans/r4_execution/test_runs_20260930_containment.json"
+}

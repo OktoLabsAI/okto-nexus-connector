@@ -74,7 +74,7 @@ never stops the daemon or unrelated sessions (TC-09).
 ## R4 development lease exchange
 
 The R4 control path is under development and is separate from the historical
-daemon flow above. Core `0.2.25.dev0` supplies a runtime-owned request nonce,
+daemon flow above. Core `0.2.26.dev0` supplies a runtime-owned request nonce,
 monotonic t0, immutable full authority scope and an application ACK.
 
 After `negotiate_r4_control`, `apply_r4_lease` exchanges a correlated grant
