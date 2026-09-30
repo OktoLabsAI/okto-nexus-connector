@@ -1,5 +1,17 @@
 # Implementation status — 2026-09-29 (CN5 corrected, 0.5.0.dev0)
 
+## R4 connection ownership — 2026-09-30
+
+The [R4 connection owner](R4_CONNECTION_OWNER.md) now correlates lease/attach
+replies through one reader, bounds operation reservations and preserves lease
+installation producers under cancellation. An ordered replay of the same lease
+request confirms the Server ACK commit before execution can publish receipts
+on another channel. Contracts and the real loopback WSS journey are recorded
+in `evidence/r4-connection-report.json` and the Nexus coordinated report.
+The daemon composition, physical resolver and nonempty reconciliation remain
+pending. No R4 product gate is closed. Sections below are historical baselines.
+
+
 Connector `0.1.0.dev0`. Baseline: this repository, consuming the Core
 development wheel `nexus_connector_core-0.2.8.dev0` (SHA-256
 `6f4823f348732801cbe93318efbb2efd339e066f268dfd617d378adc9de0e23a`,

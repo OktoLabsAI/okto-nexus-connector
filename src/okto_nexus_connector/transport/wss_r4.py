@@ -50,8 +50,10 @@ async def apply_r4_lease(
         purpose: str = "initial") -> R4LeaseApplication:
     """Exchange a lease on an authenticated, exclusively owned control socket.
 
-    This phase requires the caller to own the socket reader. It does not
-    provide the daemon's future multiplexing or durable grant recovery.
+    A raw socket requires exclusive reader ownership. An R4Connection routes
+    grants through its single reader and retains the install/ACK producer
+    independently of a cancelled waiter. Durable grant recovery remains
+    a separate responsibility.
     A lost ACK requires reconciliation of the same request, never a new
     initial grant or a fabricated local deadline.
     """
@@ -59,6 +61,11 @@ async def apply_r4_lease(
     if (not state.control_ready or scope.get("server_id") != state.server_id or
             scope.get("executor_id") != state.executor_id):
         raise CoreError("LEASE_REVALIDATION_REQUIRED", "r4_link")
+    from .r4_connection import R4Connection
+    if isinstance(websocket, R4Connection):
+        if websocket.state != state:
+            raise CoreError("STALE_GENERATION", "r4_link")
+        return await websocket.apply_lease(runtime, scope=scope, grant_id=grant_id, purpose=purpose)
     attempt = await runtime.begin_r4_lease_request(
         scope=scope, grant_id=grant_id, connection_id=state.connection_id,
         connection_generation=state.connection_generation, purpose=purpose)
@@ -211,6 +218,23 @@ async def connect_r4_control(
             report_reconciliation=report_reconciliation,
         )
         return websocket, state
+    except BaseException:
+        await websocket.close()
+        raise
+
+
+async def connect_r4_connection(link_url: str, ticket: str, *, server_id: str,
+        executor_id: str, management_revision: str, snapshot_format: int,
+        boot_id: str, report_reconciliation: ReconcileReporter):
+    """Negotiate a real socket and transfer its reader to one connection owner."""
+    from .r4_connection import R4Connection
+    websocket, state = await connect_r4_control(link_url, ticket,
+        server_id=server_id, executor_id=executor_id, management_revision=management_revision,
+        snapshot_format=snapshot_format, boot_id=boot_id, report_reconciliation=report_reconciliation)
+    try:
+        connection = R4Connection(websocket, state, boot_id=boot_id)
+        connection.start()
+        return connection
     except BaseException:
         await websocket.close()
         raise
