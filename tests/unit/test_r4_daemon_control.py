@@ -233,6 +233,23 @@ def test_schema_five_upgrade_keeps_registration_and_starts_sequence_at_zero():
     assert state.execution_executors[0].inventory_publication_sequence == 0
 
 
+@pytest.mark.parametrize('field,value', [('operation_ids', ['op']), ('session_ids', ['session']),
+                                      ('stream_watermarks', [{'stream_epoch': 'stream'}]), ('cursor', 'page')])
+async def test_requested_recovery_facts_never_become_an_empty_report(control, field, value):
+    owner, _, _, host, _ = control
+    owner.executor_id = 'executor'
+    request = dict(server_id='srv', executor_id='executor', operation_ids=[], session_ids=[],
+                   stream_watermarks=[], cursor=None)
+    request[field] = value
+    try:
+        with pytest.raises(ConnectorError) as refused:
+            await owner._empty_reconciliation(request)
+        assert refused.value.code == 'RECONCILIATION_REQUIRED'
+        assert host.journal_if_open() is None
+    finally:
+        await dispose(owner, host)
+
+
 @pytest.mark.parametrize('change', ['valid', 'not_ready', 'core', 'wire', 'format', 'bool_major', 'bool_ready'])
 async def test_public_protocol_is_checked_without_credentials(change):
     payload = dict(management_revision=MANAGEMENT_REVISION, protocol_major=1, core_version=__version__,

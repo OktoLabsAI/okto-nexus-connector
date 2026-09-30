@@ -39,11 +39,11 @@ from execution readiness, which remains false on this startup path.
 
 ## Verification
 
-- 61 directed tests passed: startup, registration, selection and state.
-- Full Connector regression: 321 passed, two existing skips.
+- 65 directed tests passed: startup, registration, selection and state.
+- Full Connector regression: 325 passed, two existing skips.
 - Nexus R4: 107 passed, including real CLI registration, daemon run loop,
   HTTP/WSS, IPC status/shutdown and a second daemon boot.
-- Isolated installed campaign: 105 passed, with package bytes checked against
+- Isolated installed campaign: 109 passed, with package bytes checked against
   wheels and current production sources. Groups overlap.
 - The positive control test supplies synthetic Server qualification; the
   negative test uses unchanged production readiness. No provider is qualified.

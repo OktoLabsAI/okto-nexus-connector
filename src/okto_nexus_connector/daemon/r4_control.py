@@ -170,7 +170,8 @@ class R4DaemonControl:
         """Only prove an empty namespace, using public durable Core readers."""
         if (request['server_id'] != self.server_id or request['executor_id'] != self.executor_id):
             raise ConnectorError('SCOPE_MISMATCH', 'r4_reconcile', 'The reconciliation scope changed.')
-        if request['operation_ids'] or request['session_ids'] or request['cursor'] is not None:
+        if (request['operation_ids'] or request['session_ids'] or request.get('stream_watermarks') or
+                request['cursor'] is not None):
             raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile',
                                  'The Server requires durable nonempty reconciliation.')
         journal = await self.host.ensure_history_journal()
