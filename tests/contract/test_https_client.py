@@ -507,3 +507,53 @@ async def test_r4_operation_admission_requires_eligible_exact_resolution():
                 await http.submit_r4_operation("key", eligible)
             assert mismatch.value.code == "VERSION_INCOMPATIBLE"
             assert mismatch.value.possible_effect
+
+
+@pytest.mark.parametrize('intent,target,text', [
+    ('turn.steer', {'kind':'native_turn_id','expected_turn_id':'turn-a'}, 'Continue'),
+    ('turn.interrupt', {'kind':'current_run','expected_turn_id':None}, 'Stop requested'),
+])
+async def test_r4_control_resolution_preserves_target_content_and_hash(intent, target, text):
+    from copy import deepcopy
+    from nexus_connector_core import r4_submit_intent_hash
+
+    scope = dict(server_id='srv', executor_id='exe', binding_id='binding', agent_id='agent',
+        workspace_id='ws', workspace_binding_id='wxb', session_id='session', configuration_revision=1)
+    content_key = 'text' if intent == 'turn.steer' else 'reason'
+    semantic = dict(**scope, action=intent, target=target, payload={content_key:text})
+    def digest(value):
+        wire = {name:item for name,item in value.items() if name != 'target'}
+        wire['expected_turn_id'] = value['target']['expected_turn_id']
+        return r4_submit_intent_hash(wire)
+    original = dict(client_intent_id='intent', intent_id='resolved', operation_id='op',
+        session_id='session', intent_hash=digest(semantic), expires_at='2026-10-01T00:00:00Z',
+        reuse=False, scope=scope, semantic_intent=semantic, resolution_revision=1,
+        can_submit=True, blockers=[], dispatch_owner='server')
+    response = deepcopy(original)
+    seen = []
+    def handler(request):
+        seen.append(json.loads(request.read()))
+        return httpx.Response(200, headers={
+            'X-Nexus-Connections-Revision':'nexus-connections-2026-09-29-r4'}, json=response)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw:
+        async with NexusHTTPClient('http://127.0.0.1:8202', client=raw) as http:
+            async def resolve():
+                return await http.resolve_r4_intent(KEY_A, client_intent_id='intent', intent=intent,
+                    binding_id='binding', workspace_binding_id='wxb', session_id='session', text=text, target=target)
+            result = await resolve()
+            assert result.semantic_intent == semantic
+            assert seen[0]['target'] == target and seen[0]['text'] == text
+            for field in ('target','payload','session_id','action','intent_hash'):
+                response = deepcopy(original)
+                if field == 'intent_hash':
+                    response['intent_hash'] = 'sha256:' + '0'*64
+                else:
+                    response['semantic_intent'][field] = {
+                        'target':{'kind':'native_turn_id','expected_turn_id':'different'},
+                        'payload':{content_key:'Changed'}, 'session_id':'different',
+                        'action':'runtime.close',
+                    }[field]
+                    # A self-consistent Server hash still cannot retarget the request.
+                    response['intent_hash'] = digest(response['semantic_intent'])
+                with pytest.raises(ConnectorError, match='does not match'):
+                    await resolve()

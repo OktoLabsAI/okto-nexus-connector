@@ -592,7 +592,8 @@ class NexusHTTPClient:
             self, key: str, *, client_intent_id: str,
             intent: str, binding_id: str, workspace_binding_id: str,
             session_id: str | None = None, new_session: bool | None = None,
-            text: str | None = None) -> R4IntentResolution:
+            text: str | None = None,
+            target: dict[str, object] | None = None) -> R4IntentResolution:
         """Reserve a Server intent without admitting an effect."""
         body: dict[str, object] = {
             "client_intent_id": client_intent_id,
@@ -605,6 +606,8 @@ class NexusHTTPClient:
             body["new_session"] = new_session
         if text is not None:
             body["text"] = text
+        if target is not None:
+            body["target"] = dict(target)
         payload = await self._request(
             "POST", "/v1/runtime/intents:resolve", key=key,
             json_body=body, require_revision=True,
@@ -628,6 +631,32 @@ class NexusHTTPClient:
                 payload.get("dispatch_owner") != "server"):
             raise ConnectorError("VERSION_INCOMPATIBLE", "intent_resolve",
                                  "Server returned an invalid intent resolution")
+        from nexus_connector_core import CoreError, r4_submit_intent_hash
+
+        semantic = payload["semantic_intent"]
+        expected_target = target if target is not None else {
+            "kind": "none", "expected_turn_id": None}
+        try:
+            wire_intent = {name: value for name, value in semantic.items() if name != "target"}
+            if semantic["target"]["expected_turn_id"] is not None:
+                wire_intent["expected_turn_id"] = semantic["target"]["expected_turn_id"]
+            content_key = "reason" if intent in {"turn.interrupt", "runtime.close"} else "text"
+            matches = (
+                semantic["action"] == ("runtime.open" if intent == "runtime.start" else intent)
+                and semantic["target"] == expected_target
+                and semantic["session_id"] == payload["session_id"]
+                and (session_id is None or payload["session_id"] == session_id)
+                and all(semantic[name] == payload["scope"][name] for name in (
+                    "server_id", "executor_id", "binding_id", "agent_id", "workspace_id",
+                    "workspace_binding_id", "session_id", "configuration_revision"))
+                and (text is None or semantic["payload"][content_key] == text)
+                and r4_submit_intent_hash(wire_intent) == payload["intent_hash"]
+            )
+        except (CoreError, ValueError, TypeError, KeyError, RecursionError):
+            matches = False
+        if not matches:
+            raise ConnectorError("VERSION_INCOMPATIBLE", "intent_resolve",
+                                 "The resolved operation does not match the requested intent.")
         return R4IntentResolution(
             **{name: payload[name] for name in names},
             reuse=payload["reuse"], scope=payload["scope"],
