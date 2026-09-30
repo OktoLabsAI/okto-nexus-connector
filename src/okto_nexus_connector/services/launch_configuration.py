@@ -106,7 +106,8 @@ def _resolve(store, frame, candidates):
     return selection, record
 
 
-async def approved_launch_setup(store, vault, *, frame, candidates, capability=None, http=None, tool_root=None):
+async def approved_launch_setup(store, vault, *, frame, candidates, capability=None, http=None, tool_root=None,
+                               capability_metadata=None):
     """Compose the standard R4 launch port without raw wire environment or argv."""
     from .core_host import LaunchOverlay, LaunchSecretResolver, make_environment
     from .r4_execution import R4LaunchSetup
@@ -142,7 +143,7 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
             from ..transport.native_actions import native_action_owner_factory
             native_factory = native_action_owner_factory(http, capability,
                 connection_id=frame['connection_id'],
-                connection_generation=frame['connection_generation'])
+                connection_generation=frame['connection_generation'], metadata_provider=capability_metadata)
         elif record.adapter_id in ('codex_app_server', 'claude_stream') and http is not None and tool_root is not None:
             from .mcp_launch import mcp_template, session_mcp_home
             if record.provider_home is not None and not record.secret_bindings:

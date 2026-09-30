@@ -5,6 +5,8 @@ import math
 from types import MappingProxyType
 
 from nexus_connector_core import CoreError
+from nexus_connector_core.clock import RollbackFencedClock, SystemClock
+from nexus_connector_core.protocol import canonical_json
 from nexus_connector_core.native_action_bridge import (
     NativeActionGrant, ScopedNativeActionBridge, native_action_scope,
 )
@@ -73,13 +75,56 @@ def native_action_bridge(http, capability, runtime, *, connection_id, connection
     return ScopedNativeActionBridge(NexusNativeActions(http, cap), grant, clock=clock, r4_runtime=runtime)
 
 
-def native_action_owner_factory(http, capability, *, connection_id, connection_generation, clock=None):
+class RefreshingNativeActionBridge:
+    """Read applied Server authority before invoking the unchanged Core gate."""
+
+    def __init__(self, http, capability, runtime, metadata_provider, *, connection_id,
+                 connection_generation, clock=None):
+        self.capability = native_capability_snapshot(capability)
+        self.http, self.runtime, self.metadata_provider = http, runtime, metadata_provider
+        self.connection_id, self.generation = connection_id, connection_generation
+        self.clock = RollbackFencedClock(clock or SystemClock())
+
+    async def invoke(self, request, context):
+        cap = self.capability
+        def current():
+            value = self.runtime.r4_native_action_context(cap.scope,
+                connection_id=self.connection_id, connection_generation=self.generation)
+            if value != context:
+                raise CoreError('STALE_GENERATION', 'native_action')
+            return value
+        current()
+        try:
+            metadata = await self.metadata_provider(cap)
+        except ConnectorError as error:
+            raise CoreError(error.code, 'native_action', operation_id=request.operation_id,
+                            message=error.message) from None
+        authority = current().r4_authority
+        if (metadata.capability_id != cap.capability_id or metadata.capability_ref != cap.capability_ref
+                or canonical_json(dict(metadata.scope)) != canonical_json(dict(cap.scope))
+                or metadata.audience != cap.audience
+                or set(metadata.actions) != set(cap.actions) or metadata.mcp_url is not None
+                or authority is None or (metadata.lease_id, metadata.lease_serial) !=
+                    (authority.lease_id, authority.lease_serial)):
+            raise CoreError('STALE_GENERATION', 'native_action')
+        renewed = replace(cap, deadline_monotonic=min(metadata.deadline_monotonic,
+                                                      context.lease_deadline_monotonic))
+        bridge = native_action_bridge(self.http, renewed, self.runtime,
+            connection_id=self.connection_id, connection_generation=self.generation, clock=self.clock)
+        return await bridge.invoke(request, context)
+
+
+def native_action_owner_factory(http, capability, *, connection_id, connection_generation, clock=None,
+                                metadata_provider=None):
     """Freeze one approved capability before the host composes its runtime."""
     from nexus_connector_core.native_action_socket import PiNativeActionOwner
     cap = native_capability_snapshot(capability)
     def build(runtime):
-        bridge = native_action_bridge(http, cap, runtime, connection_id=connection_id,
+        bridge = (native_action_bridge(http, cap, runtime, connection_id=connection_id,
                                       connection_generation=connection_generation, clock=clock)
+                  if metadata_provider is None else RefreshingNativeActionBridge(
+                      http, cap, runtime, metadata_provider, connection_id=connection_id,
+                      connection_generation=connection_generation, clock=clock))
         def context():
             return runtime.r4_native_action_context(cap.scope, connection_id=connection_id,
                                                      connection_generation=connection_generation)

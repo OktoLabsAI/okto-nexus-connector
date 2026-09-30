@@ -283,10 +283,12 @@ class CoreRuntimeHost:
 
     # -- runtime composition ------------------------------------------------
 
-    async def approved_launch(self, store, *, frame, candidates, capability=None, http=None):
+    async def approved_launch(self, store, *, frame, candidates, capability=None, http=None,
+                              capability_metadata=None):
         from .launch_configuration import approved_launch_setup
         return await approved_launch_setup(store, self._vault, frame=frame, candidates=candidates,
-                                           capability=capability, http=http, tool_root=self.root / 'runtime' / 'r4-mcp')
+                                           capability=capability, http=http, capability_metadata=capability_metadata,
+                                           tool_root=self.root / 'runtime' / 'r4-mcp')
 
     async def build_r4(self, store, *, frame, candidates, environment, factory=None, native_action_factory=None):
         """Compose an R4 runtime only from the approved host realization.

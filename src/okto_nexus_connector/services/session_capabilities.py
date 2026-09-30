@@ -95,8 +95,21 @@ class ApprovedToolLaunchProvider:
         if await asyncio.to_thread(_resolve, self.store, frozen, candidates) != expected:
             raise ConnectorError('PROFILE_DRIFT', 'launch_configuration',
                                  'The approved launch configuration changed.')
+        async def metadata(capability):
+            if await asyncio.to_thread(_resolve, self.store, frozen, candidates) != expected:
+                raise ConnectorError('PROFILE_DRIFT', 'native_action',
+                                     'The approved launch configuration changed.')
+            # The opening dispatch slot has been released. Core validates the
+            # current session channel and lease around this metadata read.
+            result = await self.http.describe_r4_session_capability(self.key, frame=frozen,
+                capability_id=capability.capability_id, audience=capability.audience,
+                actions=capability.actions)
+            if await asyncio.to_thread(_resolve, self.store, frozen, candidates) != expected:
+                raise ConnectorError('PROFILE_DRIFT', 'native_action',
+                                     'The approved launch configuration changed.')
+            return result
         result = await self.host.approved_launch(self.store, frame=frozen,
-            candidates=candidates, capability=cap, http=self.http)
+            candidates=candidates, capability=cap, http=self.http, capability_metadata=metadata)
         guard()
         return result
 

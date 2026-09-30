@@ -20,6 +20,7 @@ async def test_approved_native_launch_owns_bridge_and_rejects_changed_authority(
     vault = RestrictedFileVault(tmp_path, approved=True)
     capability_owner = SessionCapabilityOwner(store, vault)
     calls = []
+    metadata_calls = []
     class HTTP:
         async def request_r4_session_capability(self, key, *, frame, **kwargs):
             assert key == "operator-test-key"
@@ -38,6 +39,17 @@ async def test_approved_native_launch_owns_bridge_and_rejects_changed_authority(
                 await connection.close()
             return R4SessionCapability("cap", "native-cap:cap", "nxc4_" + "x" * 40,
                 scope, "nexus-native-session", tuple(kwargs["actions"]), 60, time.monotonic() + 60, None)
+        async def describe_r4_session_capability(self, key, *, frame, **kwargs):
+            from okto_nexus_connector.transport.https_client import R4CapabilityMetadata
+            assert key == 'operator-test-key'
+            metadata_calls.append(kwargs)
+            current = runtime.r4_native_action_context(scope, connection_id='connection', connection_generation=1)
+            return R4CapabilityMetadata('cap','native-cap:cap',scope,'nexus-native-session',
+                kwargs['actions'],time.monotonic()+60,current.r4_authority.lease_id,
+                current.r4_authority.lease_serial,None)
+        async def native_action(self, capability, *, request):
+            assert capability.capability_ref == request.capability_ref
+            return {'status':'OPEN'}
     async def candidates(frame):
         return [candidate]
     def guard(frame):
@@ -63,6 +75,10 @@ async def test_approved_native_launch_owns_bridge_and_rejects_changed_authority(
                                                        connection_generation=1)
             await native_owner.launch(factory.opened[0], opening["session_id"], context)
             assert native_owner.session_key.session_id == opening["session_id"]
+            from nexus_connector_core.native_action_bridge import ContextGet
+            assert await native_owner._service._bridge.invoke(ContextGet('read', opening['session_id'],
+                cap.capability_ref, 'work'), context) == {'status':'OPEN'}
+            assert len(metadata_calls) == 1
             assert await native_owner.close(timeout_seconds=1)
         else:
             await failed(owner)
