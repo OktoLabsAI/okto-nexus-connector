@@ -10,7 +10,7 @@ from ..storage.state_store import RuntimeIntentRecord, state_to_json
 from ..transport.https_client import NexusHTTPClient, R4IntentResolution
 from .binding_onboarding import BindingOnboarding, _hash, _id
 from .execution_selection import _digest, _matches
-from .executor_registration import _one
+from .executor_registration import _one, _identity, _profile
 
 
 class RuntimeAdmission:
@@ -152,10 +152,27 @@ class RuntimeAdmission:
                 raise
             return self._view(self._record(state, identity.server_id, identity.agent_id, client_intent_id))
 
-    async def _save_operation(self, record, operation):
+    def _read_authority(self, state, record):
+        identity = _identity(state, record.server_id, record.agent_id)
+        profile = _profile(state, record.server_id)
+        return identity, profile, _hash(dict(identity=asdict(identity), profile=asdict(profile)))
+
+    def _read_current(self, state, record, authority_digest):
+        current = self._record(state, record.server_id, record.agent_id, record.client_intent_id)
+        if ((current.alias, current.request_digest, current.resolution_digest) !=
+                (record.alias, record.request_digest, record.resolution_digest) or
+                self._read_authority(state, current)[2] != authority_digest):
+            raise ConnectorError("STALE_GENERATION", "runtime_read",
+                                 "The operation query identity or retained intent changed.")
+        return current
+
+    async def _save_operation(self, record, operation, *, read_authority=None):
         def save(state):
             current = self._record(state, record.server_id, record.agent_id, record.client_intent_id)
-            self._current(state, current)
+            if read_authority is None:
+                self._current(state, current)
+            else:
+                self._read_current(state, record, read_authority)
             resolution = self._resolution(current)
             if (operation.get("operation_id") != resolution.operation_id or
                     operation.get("client_intent_id") != resolution.client_intent_id or
@@ -178,26 +195,33 @@ class RuntimeAdmission:
         return await asyncio.to_thread(self.store.update, save)
 
     async def inspect(self, *, alias, client_intent_id):
+        if not _id(alias) or not _id(client_intent_id):
+            raise ConnectorError("VALIDATION_ERROR", "runtime_read",
+                                 "An alias and client intent ID are required.")
         state = await asyncio.to_thread(self.store.load)
-        identity, profile, _, _ = self.context(state, alias)
-        record = self._record(state, identity.server_id, identity.agent_id, client_intent_id)
-        self._current(state, record)
+        record = _one((r for r in state.runtime_intents if
+                       r.alias == alias and r.client_intent_id == client_intent_id),
+                      "The retained runtime intent is missing or ambiguous.")
+        # Historical reads require a current credential for the original
+        # canonical agent. Physical launch evidence is not read authority.
+        identity, profile, authority = self._read_authority(state, record)
         if record.resolution is None:
             return self._view(record)
         resolution = self._resolution(record)
         key = await asyncio.to_thread(self.vault.resolve, identity.secret_handle)
-        self._current(await asyncio.to_thread(self.store.load), record)
+        self._read_current(await asyncio.to_thread(self.store.load), record, authority)
         async with self.http_factory(profile.base_url) as http:
             me = await http.me(key)
             if (me.server_id, me.agent_id) != (identity.server_id, identity.agent_id):
-                raise ConnectorError("AGENT_ID_MISMATCH", "runtime_admission", "The credential identity changed.")
-            self._current(await asyncio.to_thread(self.store.load), record)
+                raise ConnectorError("AGENT_ID_MISMATCH", "runtime_read", "The credential identity changed.")
+            self._read_current(await asyncio.to_thread(self.store.load), record, authority)
             try:
                 operation = await http.get_r4_operation(key, resolution.operation_id)
             except ConnectorError as exc:
                 if exc.code != "NOT_FOUND":
                     raise
+                current = self._read_current(await asyncio.to_thread(self.store.load), record, authority)
                 # Absence is an observation, never permission to replace the ID.
-                return self._view(record) | {"operation_found": False}
-            state = await self._save_operation(record, operation)
+                return self._view(current) | {"operation_found": False}
+            state = await self._save_operation(record, operation, read_authority=authority)
         return self._view(self._record(state, identity.server_id, identity.agent_id, client_intent_id))

@@ -200,3 +200,53 @@ async def test_old_receipt_cannot_replace_new_receipt(runtime):
     current = await service.inspect(alias="assistant", client_intent_id="start-one")
     peer.operations["operation"] = old
     assert await service.inspect(alias="assistant", client_intent_id="start-one") == current
+
+
+@pytest.mark.parametrize("change", ["root", "mapping", "binding"])
+async def test_query_recovers_after_local_launch_evidence_changes(runtime, change):
+    service, peer, store, args = runtime
+    peer.lose_submit = True
+    with pytest.raises(ConnectorError):
+        await service.execute(**args)
+    def changed(state):
+        if change == "root":
+            state.realizations[0].workspace_root += "-moved"
+        elif change == "mapping":
+            state.binding_intents.clear()
+        else:
+            state.execution_bindings[0].state = "REVOKED"
+    store.update(changed)
+    view = await service.inspect(alias="assistant", client_intent_id="start-one")
+    assert view["state"] == "ADMITTED" and len(peer.submissions) == 1
+    with pytest.raises(ConnectorError):
+        await service.execute(**args)
+    assert len(peer.submissions) == 1
+
+
+async def test_query_uses_current_credential_but_refuses_mid_read_rotation(runtime):
+    service, peer, store, args = runtime
+    await service.execute(**args)
+    store.update(lambda state: setattr(state.identities[0], "credential_epoch", 2))
+    assert (await service.inspect(alias="assistant", client_intent_id="start-one"))["state"] == "ADMITTED"
+    original = peer.get_r4_operation
+    async def rotated(*values):
+        result = await original(*values)
+        store.update(lambda state: setattr(state.identities[0], "credential_epoch", 3))
+        return dict(result, receipt_revision=2)
+    peer.get_r4_operation = rotated
+    with pytest.raises(ConnectorError) as refused:
+        await service.inspect(alias="assistant", client_intent_id="start-one")
+    assert refused.value.code == "STALE_GENERATION"
+    assert store.load().runtime_intents[0].operation["receipt_revision"] == 0
+
+
+async def test_revoked_read_identity_never_contacts_server(runtime):
+    service, peer, store, args = runtime
+    await service.execute(**args)
+    store.update(lambda state: setattr(state.identities[0], "revoked", True))
+    async def unexpected(*args):
+        pytest.fail("A revoked identity cannot query operations.")
+    peer.get_r4_operation = unexpected
+    with pytest.raises(ConnectorError) as refused:
+        await service.inspect(alias="assistant", client_intent_id="start-one")
+    assert refused.value.code == "AGENT_AUTH_REQUIRED"

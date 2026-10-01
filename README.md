@@ -207,3 +207,9 @@ without implicit runtime authorization. Retention is currently bounded to
 32 intents and 3 MiB of state at resolution; archival/pruning remains pending.
 The complete R4 status/logs UI, automatic session reuse and real remote provider
 acceptance remain part of the delivery plan.
+
+Operation queries use the retained canonical agent and current approved Server
+profile. They remain available after local workspace or binding mapping changes,
+subject to Server read authorization. Such queries do not reauthorize launch.
+Credential changes during a read discard the response; a later explicit query
+can use the newly imported current credential.
