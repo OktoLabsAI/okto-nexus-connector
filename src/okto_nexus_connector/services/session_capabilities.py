@@ -93,7 +93,10 @@ class ApprovedToolLaunchProvider:
             raise ConnectorError('PROFILE_DRIFT', 'launch_configuration',
                                  'The approved launch configuration changed.')
         async def metadata(capability):
-            if await asyncio.to_thread(_resolve, self.store, frozen, candidates) != expected:
+            # A running tool call is fenced by Core's live session/lease.
+            # Keep mapping/root/configuration checks around the metadata read;
+            # do not repeat new-process dependency qualification per tool call.
+            if await asyncio.to_thread(_resolve, self.store, frozen, candidates, running=expected) != expected:
                 raise ConnectorError('PROFILE_DRIFT', 'native_action',
                                      'The approved launch configuration changed.')
             # The opening dispatch slot has been released. Core validates the
@@ -101,7 +104,7 @@ class ApprovedToolLaunchProvider:
             result = await self.http.describe_r4_session_capability(self.key, frame=frozen,
                 capability_id=capability.capability_id, audience=capability.audience,
                 actions=capability.actions)
-            if await asyncio.to_thread(_resolve, self.store, frozen, candidates) != expected:
+            if await asyncio.to_thread(_resolve, self.store, frozen, candidates, running=expected) != expected:
                 raise ConnectorError('PROFILE_DRIFT', 'native_action',
                                      'The approved launch configuration changed.')
             return result

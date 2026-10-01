@@ -85,6 +85,28 @@ class ExecutionSelection:
 
 
 def resolve_execution_selection(store: StateStore, *, frame: dict, candidates) -> ExecutionSelection:
+    """Fully qualify physical installation bytes before composing a new runtime."""
+    return _resolve_execution_selection(store, frame=frame, candidates=candidates)
+
+
+def revalidate_running_selection(store: StateStore, *, frame: dict, candidates,
+                                 expected: ExecutionSelection) -> ExecutionSelection:
+    """Check the approved mapping of an already-running, Core-fenced session.
+
+    This does not authorize opening or replace launch qualification. The caller
+    must retain the original selection and validate the current Core lease.
+    Binary/entrypoint fingerprints, physical roots and persisted authority still
+    match; dependency-closure qualification belongs to new runtime composition.
+    """
+    if not isinstance(expected, ExecutionSelection):
+        raise ConnectorError('VALIDATION_ERROR', 'execution_selection',
+                             'An established execution selection is required.')
+    return _resolve_execution_selection(store, frame=frame, candidates=candidates,
+                                        running=expected)
+
+
+def _resolve_execution_selection(store: StateStore, *, frame: dict, candidates,
+                                 running=None) -> ExecutionSelection:
     """Resolve only opaque references from a schema-validated opening envelope.
 
     Full candidates come from this host's inventory, never from wire paths.
@@ -115,7 +137,7 @@ def resolve_execution_selection(store: StateStore, *, frame: dict, candidates) -
         physical_root = str(Path(local.workspace_root).resolve(strict=True))
         observed_fingerprint = selected_fingerprint(selected)
         observed_build = None
-        if selected.build_identity is not None:
+        if selected.build_identity is not None and running is None:
             observed_build = (pi_build_identity(Path(physical_executable), Path(selected.launch_script).parents[2])
                 if selected.adapter_id == 'pi_rpc' and selected.launch_script else
                 executable_build_identity(Path(physical_executable)))
@@ -126,12 +148,17 @@ def resolve_execution_selection(store: StateStore, *, frame: dict, candidates) -
             observed_fingerprint != local.candidate_fingerprint or any(
                 getattr(selected, field) != getattr(local, 'candidate_' + field) for field in
                 ('fingerprint', 'source', 'trust', 'launch_script', 'build_identity', 'version', 'architecture')) or
-            (selected.build_identity is not None and observed_build != selected.build_identity) or
+            (running is None and selected.build_identity is not None and observed_build != selected.build_identity) or
             (observed_architecture is not None and selected.architecture is not None and
              observed_architecture != selected.architecture) or
             _root_digest(local, local.root_proof_nonce) != local.local_root_proof_digest):
         raise ConnectorError('PROFILE_DRIFT', 'execution_selection', 'The approved root or installation has changed.')
-    return ExecutionSelection(binding.server_id, binding.executor_id, binding.binding_id, parsed['session_id'],
+    resolved = ExecutionSelection(binding.server_id, binding.executor_id, binding.binding_id, parsed['session_id'],
         binding.agent_id, binding.workspace_id, physical_root, selected, _digest(binding),
         binding.realization_snapshot_digest, parsed['intent_hash'],
         local.configuration_digest, local.local_consent_id)
+
+    if running is not None and resolved != running:
+        raise ConnectorError('PROFILE_DRIFT', 'execution_selection',
+                             'The running session differs from its approved selection.')
+    return resolved

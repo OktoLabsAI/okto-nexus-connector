@@ -15,7 +15,7 @@ from nexus_connector_core.protocol import canonical_json
 
 from ..errors import ConnectorError
 from ..storage.state_store import LaunchConfigurationRecord
-from .execution_selection import resolve_execution_selection
+from .execution_selection import resolve_execution_selection, revalidate_running_selection
 
 
 def _digest(record):
@@ -86,8 +86,10 @@ def stage_launch_configuration(store, *, server_id, executor_id, agent_id,
     return replace(record, secret_bindings=dict(bindings))
 
 
-def _resolve(store, frame, candidates):
-    selection = resolve_execution_selection(store, frame=frame, candidates=candidates)
+def _resolve(store, frame, candidates, *, running=None):
+    selection = (resolve_execution_selection(store, frame=frame, candidates=candidates)
+                 if running is None else revalidate_running_selection(
+                     store, frame=frame, candidates=candidates, expected=running[0]))
     state = store.load()
     matches = [r for r in state.launch_configurations
                if r.configuration_digest == selection.configuration_digest]

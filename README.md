@@ -232,3 +232,9 @@ The daemon reads subsequent durable Core facts and publishes increasing receipt
 revisions without re-executing the operation. Restart recovery also checks
 acknowledged nonterminal receipts. A lost publication remains durable, and
 shutdown retains any receipt publication already in progress.
+
+Running native tool calls revalidate the approved binding, launch configuration,
+physical workspace and provider-home identities, executable/entrypoint fingerprint,
+and current Core session lease before and after capability metadata retrieval.
+Full installation dependency qualification is performed for every new runtime
+composition; a running tool call does not authorize another launch.

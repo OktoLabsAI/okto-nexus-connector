@@ -13,14 +13,15 @@ from tests.unit.test_r4_execution import execution, observed, failed
 
 
 @pytest.mark.parametrize("selection", ["pi"], indirect=True)
-@pytest.mark.parametrize("fault", [None, "scope", "drift", "lane"])
-async def test_approved_native_launch_owns_bridge_and_rejects_changed_authority(execution, selection, tmp_path, fault):
+@pytest.mark.parametrize("fault", [None, "scope", "drift", "lane", "native_before", "native_after"])
+async def test_approved_native_launch_owns_bridge_and_rejects_changed_authority(execution, selection, tmp_path, fault, monkeypatch):
     owner, connection, factory, receipts, opening = execution
     store, candidate, *_ = selection
     vault = RestrictedFileVault(tmp_path, approved=True)
     capability_owner = SessionCapabilityOwner(store, vault)
     calls = []
     metadata_calls = []
+    native_calls = []
     class HTTP:
         async def request_r4_session_capability(self, key, *, frame, **kwargs):
             assert key == "operator-test-key"
@@ -43,11 +44,14 @@ async def test_approved_native_launch_owns_bridge_and_rejects_changed_authority(
             from okto_nexus_connector.transport.https_client import R4CapabilityMetadata
             assert key == 'operator-test-key'
             metadata_calls.append(kwargs)
+            if fault == 'native_after':
+                store.update(lambda s: setattr(s.launch_configurations[0], 'profile_revision', 2))
             current = runtime.r4_native_action_context(scope, connection_id='connection', connection_generation=1)
             return R4CapabilityMetadata('cap','native-cap:cap',scope,'nexus-native-session',
                 kwargs['actions'],time.monotonic()+60,current.r4_authority.lease_id,
                 current.r4_authority.lease_serial,None)
         async def native_action(self, capability, *, request):
+            native_calls.append(request)
             assert capability.capability_ref == request.capability_ref
             return {'status':'OPEN'}
     async def candidates(frame):
@@ -59,7 +63,7 @@ async def test_approved_native_launch_owns_bridge_and_rejects_changed_authority(
     owner.native_tools = R4NativeToolServices(capability_owner, HTTP(), "operator-test-key")
     try:
         await connection.emit(opening)
-        if fault is None:
+        if fault in (None, "native_before", "native_after"):
             await observed(receipts, owner)
             assert len(factory.opened) == 1 and connection.lease_count == 1
             assert len(owner.host._native_action_owners) == 1
@@ -76,9 +80,23 @@ async def test_approved_native_launch_owns_bridge_and_rejects_changed_authority(
             await native_owner.launch(factory.opened[0], opening["session_id"], context)
             assert native_owner.session_key.session_id == opening["session_id"]
             from nexus_connector_core.native_action_bridge import ContextGet
-            assert await native_owner._service._bridge.invoke(ContextGet('read', opening['session_id'],
-                cap.capability_ref, 'work'), context) == {'status':'OPEN'}
-            assert len(metadata_calls) == 1
+            from okto_nexus_connector.services import launch_configuration
+            def no_new_launch(*args, **kwargs):
+                raise AssertionError("A running native action must not qualify a new launch.")
+            monkeypatch.setattr(launch_configuration, 'resolve_execution_selection', no_new_launch)
+            if fault == 'native_before':
+                store.update(lambda s: setattr(s.launch_configurations[0], 'profile_revision', 2))
+            request = ContextGet('read', opening['session_id'], cap.capability_ref, 'work')
+            if fault is None:
+                assert await native_owner._service._bridge.invoke(request, context) == {'status':'OPEN'}
+                assert len(metadata_calls) == len(native_calls) == 1
+            else:
+                from nexus_connector_core import CoreError
+                with pytest.raises(CoreError) as refused:
+                    await native_owner._service._bridge.invoke(request, context)
+                assert refused.value.code == 'PROFILE_DRIFT'
+                assert not native_calls
+                assert len(metadata_calls) == (0 if fault == 'native_before' else 1)
             assert await native_owner.close(timeout_seconds=1)
         else:
             await failed(owner)
