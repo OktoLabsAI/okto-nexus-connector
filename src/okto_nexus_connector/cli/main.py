@@ -94,9 +94,18 @@ def build_parser() -> argparse.ArgumentParser:
     executor_sub.add_parser("list", help="list local registration intents and executor IDs")
     executor_show = executor_sub.add_parser("show", help="show one Server's executor registration")
     executor_show.add_argument("server_id")
+    discovery = executor_sub.add_parser("configure-discovery",
+        help="replace the Server executor local passive discovery configuration")
+    discovery.add_argument("--server-id", required=True)
+    discovery.add_argument("--harness-root", action="append", default=[],
+                           help="approved absolute directory for PATH discovery; repeat as needed")
+    discovery.add_argument("--pi-install-root", default=None, help="approved Pi releases directory")
+    discovery.add_argument("--pi-node", default=None, help="Node executable for the Pi releases")
 
     discover = sub.add_parser("discover",
                               help="local harness inventory (redacted)")
+    discover.add_argument("--server-id", default=None,
+                          help="preview persisted executor discovery configuration")
     discover.add_argument("--harness", default=None)
     discover.add_argument("--pi-releases-root", default=None,
                           help="passively enumerate Pi release layouts "

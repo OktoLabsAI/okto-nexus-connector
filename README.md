@@ -62,3 +62,42 @@ evidence log live under [plans/implementation/](plans/implementation/).
 Elastic License 2.0 with the *SaaS and Competing Service Definition*
 addendum — Copyright 2026 Okto Labs (same licensor decision as
 `okto-pulse-core` / `nexus-connector-core`). See [LICENSE](LICENSE).
+
+## Persisted R4 executor discovery
+
+After importing an identity and registering the executor, configure discovery
+for that Server. This replaces the previous discovery configuration for that
+executor; it does not approve a workspace binding or authorize a runtime.
+
+~~~powershell
+okto-nexus-connector executor configure-discovery --server-id SERVER_ID --harness-root "C:/Harnesses"
+okto-nexus-connector discover --server-id SERVER_ID
+okto-nexus-connector executor show SERVER_ID
+~~~
+
+The --harness-root option is repeatable (up to 32 directories). It approves
+passive discovery of binaries found on PATH inside those directories; it does
+not add directories to PATH. Paths must be existing absolute paths. Directory
+identity is checked again before discovery and daemon control operations.
+
+For Pi release layouts, also supply --pi-install-root and --pi-node together.
+The named Node file may be outside the release directory; only that exact file
+is approved in addition to the release root. Discovery never executes it.
+Full Node/CLI candidate identity is preserved through the public Core facade.
+
+The daemon reads this configuration from its registered Server executor. A
+configuration change invalidates its current control snapshot and requires
+reconnection/reconciliation. Runtime approval and lease checks still apply.
+Physical path replacement is refused until the local operator configures it
+again. To clear discovery roots and the Pi pair:
+
+~~~powershell
+okto-nexus-connector executor configure-discovery --server-id SERVER_ID
+~~~
+
+The --json and --non-interactive flags are available as global options.
+Configuration contains local paths and file identity only; remote inventory
+remains path-free. State schema 9 adds discovery configuration. Schema 8
+records migrate with no implicit discovery choices; older clients refuse
+schema 9 state. Full R4 realization/configuration onboarding is still being
+integrated.

@@ -14,7 +14,8 @@ import time
 from urllib.parse import urlsplit
 
 from ..errors import ConnectorError
-from ..services.discovery_service import inventory_candidates, executor_inventory_snapshot
+from ..services.discovery_service import executor_inventory_snapshot
+from ..services.discovery_configuration import configured_candidates, configuration_arguments
 from ..services.executor_registration import ExecutorRegistrationService, _one, _identity, _profile
 from ..transport.https_client import NexusHTTPClient, origin_of
 from ..transport.wss_client import validate_link_url
@@ -52,7 +53,7 @@ class R4DaemonControl:
     """
 
     def __init__(self, store, vault, host, server_id, *, http_factory=NexusHTTPClient,
-                 connect=connect_r4_connection, discover=inventory_candidates,
+                 connect=connect_r4_connection, discover=None,
                  clock=time.monotonic, retry_delays=(0.5, 1, 2, 5, 10, 30),
                  poll_seconds=0.5):
         if not retry_delays or min(retry_delays) <= 0 or poll_seconds <= 0:
@@ -114,6 +115,7 @@ class R4DaemonControl:
                 record.state not in ('REGISTERED', 'REGISTRATION_PENDING')):
             raise ConnectorError('OPERATION_CONFLICT', 'r4_startup',
                                  'The executor registration is no longer valid.')
+        configuration_arguments(record.discovery_configuration)
         profile = _profile(state, self.server_id)
         _link_url(profile, record.executor_id)  # Before any credential access.
         return (replace(record, inventory_publication_sequence=0),
@@ -150,7 +152,8 @@ class R4DaemonControl:
 
     async def _publish(self, http, bootstrap, snapshot):
         observed_at = self.clock()
-        candidates = tuple(await self.discover())
+        candidates = tuple(await self.discover() if self.discover is not None else
+                           await configured_candidates(snapshot[0].discovery_configuration))
         await self._require(snapshot)
         sequence = await asyncio.to_thread(self._reserve_sequence, snapshot)
         self.publication_sequence = sequence

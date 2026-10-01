@@ -12,6 +12,13 @@ from .identity import _vault
 
 async def run_executor(args, output, root):
     store = StateStore(paths.state_file(root))
+    if args.subcommand == 'configure-discovery':
+        from ...services.discovery_configuration import configure_discovery
+        configuration = await asyncio.to_thread(configure_discovery, store,
+            server_id=args.server_id, roots=args.harness_root,
+            pi_install_root=args.pi_install_root, pi_node=args.pi_node)
+        output.line('Discovery configuration saved. Runtime execution still requires an approved binding and lease.')
+        return {'server_id': args.server_id, 'discovery_configuration': configuration}
     if args.subcommand == 'register':
         service = ExecutorRegistrationService(store, _vault(root, store))
         record = await service.register(identity_alias=args.identity, label=args.label,

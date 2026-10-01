@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -161,6 +161,8 @@ class ExecutionExecutorRecord:
     state: str = "REGISTRATION_PENDING"
     # Reserved before publishing; gaps after failure are valid, reuse is not.
     inventory_publication_sequence: int = 0
+    # Local discovery scope only; never runtime or binding authority.
+    discovery_configuration: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)

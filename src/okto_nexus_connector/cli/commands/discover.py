@@ -13,6 +13,36 @@ from ..output import Output
 
 async def run_discover(args, output: Output, root: Path):
     harness = getattr(args, "harness", None)
+    server_id = getattr(args, "server_id", None)
+    if server_id:
+        import asyncio
+        from ...platform import paths
+        from ...storage.state_store import StateStore
+        from ...services.discovery_configuration import configured_candidates
+        from ...services.discovery_service import availability_snapshot, _entry_of
+        if getattr(args, "pi_releases_root", None) or getattr(args, "pi_node", None):
+            raise ConnectorError("VALIDATION_ERROR", "discover",
+                "Use executor configure-discovery to change persisted Pi discovery paths.")
+        store = StateStore(paths.state_file(root))
+        state = await asyncio.to_thread(store.load)
+        records = [r for r in state.execution_executors if r.server_id == server_id
+                   and r.state == "REGISTERED" and r.executor_id]
+        if len(records) != 1:
+            raise ConnectorError("VALIDATION_ERROR", "discover",
+                "The Server executor registration is missing or ambiguous.")
+        record = records[0]
+        candidates = await configured_candidates(record.discovery_configuration,
+            adapter_ids=(harness,) if harness else None)
+        current = await asyncio.to_thread(store.load)
+        matches = [r for r in current.execution_executors if r.server_id == server_id]
+        if len(matches) != 1 or matches[0] != record:
+            raise ConnectorError("STALE_GENERATION", "discover",
+                "The executor configuration changed during discovery.")
+        output.line(f"{len(candidates)} candidate(s); discovery executes nothing and authorizes nothing")
+        return {"candidates": [_entry_of(found).to_json() for found in candidates],
+                "availability": availability_snapshot(candidates),
+                "note": "Persisted executor discovery configuration; runtime authorization is separate."}
+
     entries = await discover_inventory([harness] if harness else None)
     payload: list[dict[str, object]] = [entry.to_json() for entry in entries]
     notes = ["selection is an explicit connect-time decision; PATH "
