@@ -39,35 +39,32 @@ def _matches(local, binding):
             'candidate_ref', 'inventory_revision', 'realization_revision')))
 
 
-def acknowledge_execution_binding(store: StateStore, *, binding: R4BindingView) -> ExecutionBindingRecord:
-    """Persist an authenticated apply result against the exact local evidence.
-
-    This records administrative consent, never an execution grant or lease.
-    A changed response cannot overwrite an already accepted binding silently.
-    """
+def acknowledge_execution_binding_state(state, *, binding: R4BindingView) -> ExecutionBindingRecord:
+    """Apply an authenticated result within the caller's atomic state update."""
     if not isinstance(binding, R4BindingView) or binding.state != 'APPROVED':
         raise ConnectorError('BINDING_NOT_AUTHORIZED', 'execution_selection', 'An approved binding response is required.')
-    result = None
-    def record(state):
-        nonlocal result
-        local = _local_for(state, binding)
-        if local.status not in ('PENDING_APPROVAL', 'BOUND') or not _matches(local, binding):
-            raise ConnectorError('SCOPE_MISMATCH', 'execution_selection', 'The binding differs from the published realization.')
-        if _root_digest(local, local.root_proof_nonce) != local.local_root_proof_digest:
-            raise ConnectorError('PROFILE_DRIFT', 'execution_selection', 'The approved workspace root has changed.')
-        local.status = 'BOUND'
-        wanted = ExecutionBindingRecord(**asdict(binding), realization_snapshot_digest=_digest(local))
-        existing = [r for r in state.execution_bindings if r.server_id == binding.server_id and
-                    r.executor_id == binding.executor_id and r.binding_id == binding.binding_id]
-        if existing:
-            if len(existing) != 1 or existing[0] != wanted:
-                raise ConnectorError('OPERATION_CONFLICT', 'execution_selection', 'The approved binding mapping changed.')
-            result = existing[0]
-        else:
-            state.execution_bindings.append(wanted)
-            result = wanted
-    store.update(record)
-    return result
+    local = _local_for(state, binding)
+    if local.status not in ('PENDING_APPROVAL', 'BOUND') or not _matches(local, binding):
+        raise ConnectorError('SCOPE_MISMATCH', 'execution_selection', 'The binding differs from the published realization.')
+    if _root_digest(local, local.root_proof_nonce) != local.local_root_proof_digest:
+        raise ConnectorError('PROFILE_DRIFT', 'execution_selection', 'The approved workspace root has changed.')
+    local.status = 'BOUND'
+    wanted = ExecutionBindingRecord(**asdict(binding), realization_snapshot_digest=_digest(local))
+    existing = [r for r in state.execution_bindings if r.server_id == binding.server_id and
+                r.executor_id == binding.executor_id and r.binding_id == binding.binding_id]
+    if existing:
+        if len(existing) != 1 or existing[0] != wanted:
+            raise ConnectorError('OPERATION_CONFLICT', 'execution_selection', 'The approved binding mapping changed.')
+        return existing[0]
+    state.execution_bindings.append(wanted)
+    return wanted
+
+
+def acknowledge_execution_binding(store: StateStore, *, binding: R4BindingView) -> ExecutionBindingRecord:
+    """Persist authenticated administrative consent, never a runtime grant."""
+    result = []
+    store.update(lambda state: result.append(acknowledge_execution_binding_state(state, binding=binding)))
+    return result[0]
 
 
 @dataclass(frozen=True, slots=True)

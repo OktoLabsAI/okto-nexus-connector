@@ -18,6 +18,20 @@ from ..output import Output
 async def run_bind(args, output: Output, root: Path):
     store = StateStore(paths.state_file(root))
     sub = args.subcommand
+    if sub in ("prepare", "apply"):
+        from .identity import _vault
+        from ...services.binding_onboarding import BindingOnboarding
+        service = BindingOnboarding(store, _vault(root, store))
+        if sub == "prepare":
+            result = await service.prepare(identity_alias=args.identity,
+                realization_ref=args.realization_ref, alias=args.alias, client_intent_id=args.client_intent_id)
+            output.line("Binding proposal prepared. Review the diff and obtain any required operator approval.")
+            return result
+        result = await service.apply(identity_alias=args.identity, prepare_intent_id=args.prepare_intent_id,
+            client_intent_id=args.client_intent_id, approved_diff_hash=args.approved_diff_hash,
+            operator_proof_ref=args.operator_proof_ref)
+        output.line("Binding acknowledged. Runtime execution still requires Server authorization and an applied lease.")
+        return result
     if sub == "create":
         state = store.load()
         identity = state.identity_by_alias(args.identity)
@@ -63,9 +77,18 @@ async def run_bind(args, output: Output, root: Path):
         return summary.to_json()
     if sub == "list":
         state = store.load()
-        return {"bindings": [asdict(item) for item in state.bindings]}
+        from ...services.binding_onboarding import BindingOnboarding
+        service = BindingOnboarding(store, None)
+        return {"bindings": [asdict(item) for item in state.bindings],
+                "execution_bindings": [service._view(state, item) for item in state.binding_intents]}
     if sub == "show":
         state = store.load()
+        from ...services.binding_onboarding import BindingOnboarding
+        records = [r for r in state.binding_intents if r.alias == args.alias]
+        if records:
+            if len(records) != 1 or state.binding_by_alias(args.alias) is not None:
+                raise ConnectorError("OPERATION_CONFLICT", "bind", "The binding alias is ambiguous.")
+            return BindingOnboarding(store, None)._view(state, records[0])
         binding = state.binding_by_alias(args.alias)
         if binding is None:
             raise ConnectorError("VALIDATION_ERROR", "bind",

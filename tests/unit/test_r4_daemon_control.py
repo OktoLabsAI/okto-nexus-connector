@@ -230,7 +230,7 @@ def test_schema_five_upgrade_keeps_registration_and_starts_sequence_at_zero():
     state = state_from_json({'schema_version': 5, 'execution_executors': [dict(
         server_id='srv', connector_id='connector', registration_agent_id='agent', client_intent_id='intent',
         label='Host', executor_id='executor', state='REGISTERED')]})
-    assert state.schema_version == 9
+    assert state.schema_version == 10
     assert state.execution_executors[0].executor_id == 'executor'
     assert state.execution_executors[0].inventory_publication_sequence == 0
 

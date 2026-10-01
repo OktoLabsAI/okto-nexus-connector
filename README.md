@@ -99,8 +99,7 @@ The --json and --non-interactive flags are available as global options.
 Configuration contains local paths and file identity only; remote inventory
 remains path-free. State schema 9 adds discovery configuration. Schema 8
 records migrate with no implicit discovery choices; older clients refuse
-schema 9 state. Full R4 realization/configuration onboarding is still being
-integrated.
+schema 9 state. Runtime CLI admission and final release qualification remain under integration.
 
 ### Launch consent and realization
 
@@ -136,6 +135,37 @@ client intent and identical arguments after a lost response. Local mappings are
 persisted before HTTP and acknowledged after scope checks. No path or credential
 material is included in the realization response.
 
-The acknowledged realization remains pending binding approval. Public binding
-prepare/apply onboarding and real remote provider journeys remain under
+The acknowledged realization remains pending binding approval. Use the binding commands below to obtain and apply a reviewable proposal.
+Runtime CLI admission and real remote provider qualification remain under
 integration; these commands do not imply runtime readiness.
+
+### Review and apply an R4 binding
+
+Prepare a binding from the acknowledged realization. The local alias and client
+intent are persisted before contacting the Server. Identical retries recover
+the same proposal.
+
+~~~powershell
+okto-nexus-connector bind prepare --identity SUBJECT --realization-ref REALIZATION_REF --alias assistant --client-intent-id PREPARE_INTENT
+okto-nexus-connector bind show assistant
+~~~
+
+Review the returned proposal, including its approved_diff_hash and required
+approvals. If operator approval is required, obtain that approval through the
+Nexus operator surface and supply its explicit proof reference:
+
+~~~powershell
+okto-nexus-connector bind apply --identity SUBJECT --prepare-intent-id PREPARE_INTENT --client-intent-id APPLY_INTENT --approved-diff-hash REVIEWED_HASH --operator-proof-ref APPROVAL_REF
+okto-nexus-connector bind list
+~~~
+
+The proof reference does not grant permission by itself; the Server verifies
+the operator decision. Apply persists its exact intent before HTTP. After a
+lost response, reuse the same IDs, hash and proof reference. A different intent
+cannot silently replace a pending application.
+
+The acknowledged R4 binding and its local realization mapping commit atomically.
+This does not create a legacy binding, start a provider, grant runtime execution
+or infer an applied lease. Schema 10 stores these durable binding intents;
+older schemas migrate with no implicit proposals or approvals. R4 runtime CLI
+admission is the next integration step.

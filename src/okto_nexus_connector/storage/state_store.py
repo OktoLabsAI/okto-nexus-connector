@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -201,6 +201,25 @@ class LaunchConfigurationRecord:
 
 
 @dataclass(slots=True)
+class BindingIntentRecord:
+    server_id: str
+    executor_id: str
+    agent_id: str
+    identity_alias: str
+    client_intent_id: str
+    alias: str
+    realization_ref: str
+    scope_digest: str
+    status: str = "PREPARE_PENDING"
+    proposal: dict[str, Any] | None = None
+    proposal_digest: str = ""
+    apply_client_intent_id: str = ""
+    approved_diff_hash: str = ""
+    operator_proof_ref: str | None = None
+    binding_id: str = ""
+
+
+@dataclass(slots=True)
 class ConnectorState:
     schema_version: int = SCHEMA_VERSION
     connector_id: str = ""
@@ -212,6 +231,7 @@ class ConnectorState:
     execution_executors: list[ExecutionExecutorRecord] = field(default_factory=list)
     session_capabilities: list[SessionCapabilityRecord] = field(default_factory=list)
     launch_configurations: list[LaunchConfigurationRecord] = field(default_factory=list)
+    binding_intents: list[BindingIntentRecord] = field(default_factory=list)
     preferences: dict[str, Any] = field(default_factory=dict)
 
     # -- lookups ---------------------------------------------------------
@@ -345,6 +365,8 @@ def state_from_json(payload: dict[str, Any]) -> ConnectorState:
         state.session_capabilities.append(SessionCapabilityRecord(**item))
     for item in payload.get("launch_configurations", []):
         state.launch_configurations.append(LaunchConfigurationRecord(**item))
+    for item in payload.get("binding_intents", []):
+        state.binding_intents.append(BindingIntentRecord(**item))
     preferences = payload.get("preferences", {})
     if isinstance(preferences, dict):
         state.preferences = preferences
@@ -364,6 +386,7 @@ def state_to_json(state: ConnectorState) -> dict[str, Any]:
         "execution_executors": [asdict(value) for value in state.execution_executors],
         "session_capabilities": [asdict(value) for value in state.session_capabilities],
         "launch_configurations": [asdict(value) for value in state.launch_configurations],
+        "binding_intents": [asdict(value) for value in state.binding_intents],
         "preferences": state.preferences,
     }
 
