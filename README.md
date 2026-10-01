@@ -205,7 +205,7 @@ when unambiguous. Steering and interruption accept --expected-turn-id or
 Schema 11 retains runtime intents across restarts. Existing state migrates
 without implicit runtime authorization. Retention is currently bounded to
 32 intents and 3 MiB of state at resolution; archival/pruning remains pending.
-The complete R4 status/logs UI, initial child turns and final provider/platform
+The complete R4 status/logs UI and final provider/platform
 acceptance remain part of the delivery plan.
 
 Operation queries use the retained canonical agent and current approved Server
@@ -264,5 +264,8 @@ Reuse preserves the original opening operation and its receipt provenance.
 The new client intent is confirmed durably without another dispatch or process.
 Replaying a confirmed reuse recovers that acknowledgment even after the session
 closes. A new unconfirmed reuse still requires current authority.
-Initial text must currently be submitted as a separate turn; automatic child
-turn admission from start text remains under integration.
+Use --text with start to admit an initial turn as a separate durable child
+operation. The Server releases it only after the opening is ready and rechecks
+current authority before dispatch. The opening response lists child IDs in
+follow_up_operation_ids. Retrying the same client intent preserves those IDs
+and does not send the prompt twice.

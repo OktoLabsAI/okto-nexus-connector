@@ -183,7 +183,7 @@ async def test_cross_scope_operation_read_cannot_overwrite_intent(runtime):
 
 
 @pytest.mark.parametrize("change", [
-    {"client_intent_id": None}, {"new_session": "false"}, {"text": "Implicit initial turn."},
+    {"client_intent_id": None}, {"new_session": "false"}, {"text": ""},
 ])
 async def test_invalid_start_does_not_reserve_or_call_network(runtime, change):
     service, peer, store, args = runtime
@@ -282,3 +282,12 @@ async def test_explicit_selection_preserves_session_and_rejects_new_flag(runtime
     result = await service.execute(**(args | dict(session_id="session", new_session=False)))
     assert result["state"] == "ADMITTED"
     assert peer.resolves[0]["session_id"] == "session"
+
+
+@pytest.mark.asyncio
+async def test_start_preserves_initial_prompt_for_server_admission(runtime):
+    service, peer, store, args = runtime
+    view = await service.execute(**(args | {"text": "Initial request"}))
+    assert view["state"] == "ADMITTED"
+    assert peer.resolves[0]["text"] == "Initial request"
+    assert len(peer.resolves) == 1

@@ -66,11 +66,11 @@ class RuntimeAdmission:
         if intent not in {"runtime.start", "turn.submit", "turn.steer", "turn.interrupt", "runtime.close"}:
             raise ConnectorError("VALIDATION_ERROR", "runtime_admission", "Unsupported runtime intent.")
         if intent == "runtime.start":
-            if ((new_session is not None and type(new_session) is not bool) or text is not None
+            if ((new_session is not None and type(new_session) is not bool) or (text is not None and (type(text) is not str or not 1 <= len(text) <= 65536))
                     or (new_session is True and session_id is not None)
                     or (session_id is not None and not _id(session_id))):
                 raise ConnectorError("VALIDATION_ERROR", "runtime_admission",
-                                     "Select a new or existing session, then submit a separate turn intent.")
+                                     "Select a new or existing session with valid optional turn text.")
         elif not _id(session_id) or new_session is True:
             raise ConnectorError("VALIDATION_ERROR", "runtime_admission", "An existing session ID is required.")
         if intent in {"turn.submit", "turn.steer"} and (type(text) is not str or not 1 <= len(text) <= 65536):

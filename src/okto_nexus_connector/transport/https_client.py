@@ -745,7 +745,7 @@ class NexusHTTPClient:
                 and all(semantic[name] == payload["scope"][name] for name in (
                     "server_id", "executor_id", "binding_id", "agent_id", "workspace_id",
                     "workspace_binding_id", "session_id", "configuration_revision"))
-                and (text is None or semantic["payload"][content_key] == text)
+                and (text is None or intent == "runtime.start" or semantic["payload"][content_key] == text)
                 and r4_submit_intent_hash(wire_intent) == payload["intent_hash"]
             )
         except (CoreError, ValueError, TypeError, KeyError, RecursionError):
