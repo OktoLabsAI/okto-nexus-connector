@@ -225,3 +225,46 @@ class RuntimeAdmission:
                 return self._view(current) | {"operation_found": False}
             state = await self._save_operation(record, operation, read_authority=authority)
         return self._view(self._record(state, identity.server_id, identity.agent_id, client_intent_id))
+
+    async def inspect_session(self, *, alias, session_id):
+        if not _id(alias) or not _id(session_id):
+            raise ConnectorError("VALIDATION_ERROR", "session_read", "An alias and session ID are required.")
+        state = await asyncio.to_thread(self.store.load)
+        records = [r for r in state.runtime_intents if r.alias == alias and r.resolution is not None
+                   and r.resolution.get("session_id") == session_id]
+        if not records:
+            raise ConnectorError("NOT_FOUND", "session_read", "No retained session exists for this alias.")
+        names = ("server_id", "executor_id", "binding_id", "agent_id", "workspace_id",
+                 "workspace_binding_id", "session_id")
+        scopes = {tuple(self._resolution(r).scope.get(name) for name in names) for r in records}
+        if len(scopes) != 1:
+            raise ConnectorError("OPERATION_CONFLICT", "session_read", "The retained session scope is ambiguous.")
+        record = records[0]
+        resolution = self._resolution(record)
+        identity, profile, authority = self._read_authority(state, record)
+        key = await asyncio.to_thread(self.vault.resolve, identity.secret_handle)
+        self._read_current(await asyncio.to_thread(self.store.load), record, authority)
+        async with self.http_factory(profile.base_url) as http:
+            me = await http.me(key)
+            if (me.server_id, me.agent_id) != (identity.server_id, identity.agent_id):
+                raise ConnectorError("AGENT_ID_MISMATCH", "session_read", "The credential identity changed.")
+            self._read_current(await asyncio.to_thread(self.store.load), record, authority)
+            view = await http.get_r4_session(key, session_id=session_id,
+                                            executor_id=resolution.scope["executor_id"])
+            self._read_current(await asyncio.to_thread(self.store.load), record, authority)
+            if any(view.get("scope", {}).get(name) != resolution.scope.get(name) for name in names):
+                raise ConnectorError("SCOPE_MISMATCH", "session_read", "The session differs from its retained scope.")
+            return view
+
+    async def session_status(self, *, alias):
+        if not _id(alias):
+            raise ConnectorError("VALIDATION_ERROR", "session_read", "Select a binding alias.")
+        state = await asyncio.to_thread(self.store.load)
+        records = [r for r in state.runtime_intents if r.alias == alias and r.resolution is not None]
+        guards = [(record, self._read_authority(state, record)[2]) for record in records]
+        sessions = sorted({self._resolution(r).session_id for r in records})
+        views = [await self.inspect_session(alias=alias, session_id=session) for session in sessions]
+        current = await asyncio.to_thread(self.store.load)
+        for record, authority in guards:
+            self._read_current(current, record, authority)
+        return {"sessions": views}

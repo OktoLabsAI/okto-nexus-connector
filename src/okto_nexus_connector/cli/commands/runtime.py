@@ -48,18 +48,26 @@ async def run_runtime(args, output: Output, root: Path):
     state = await asyncio.to_thread(store.load)
     alias = getattr(args, "alias", None)
     canonical = any(r.alias == alias for r in state.binding_intents) if alias else False
-    if not alias and sub in {"submit", "interrupt", "stop"}:
+    if not alias and sub in {"submit", "interrupt", "stop", "inspect"}:
         aliases = {r.alias for r in state.runtime_intents if r.resolution is not None and
                    r.resolution.get("session_id") == args.session_id}
         if len(aliases) > 1:
             raise ConnectorError("OPERATION_CONFLICT", "runtime", "Select an explicit binding alias.")
         if aliases:
             alias, canonical = next(iter(aliases)), True
+    if sub in {"inspect", "status"} and alias is not None:
+        canonical = True
+    if sub == "status" and alias is None and state.runtime_intents:
+        raise ConnectorError("VALIDATION_ERROR", "session_read", "Use --alias to select R4 session history.")
     if canonical or sub in {"steer", "operation"} or (
             sub in {"submit", "interrupt", "stop"} and alias is not None):
         from .identity import _vault
         from ...services.runtime_admission import RuntimeAdmission
         service = RuntimeAdmission(store, _vault(root, store))
+        if sub == "inspect":
+            return await service.inspect_session(alias=alias, session_id=args.session_id)
+        if sub == "status":
+            return await service.session_status(alias=alias)
         if sub == "operation":
             return await service.inspect(alias=alias, client_intent_id=args.client_intent_id)
         if sub == "start" and (args.project is not None or args.harness is not None):

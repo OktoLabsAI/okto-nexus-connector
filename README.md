@@ -238,3 +238,16 @@ physical workspace and provider-home identities, executable/entrypoint fingerpri
 and current Core session lease before and after capability metadata retrieval.
 Full installation dependency qualification is performed for every new runtime
 composition; a running tool call does not authorize another launch.
+
+### Read retained R4 sessions
+
+Use runtime inspect SESSION_ID --alias ALIAS or runtime status --alias ALIAS
+to query the Server's durable session observations. Inspect can infer the alias
+when retained history identifies it uniquely. These commands do not start a
+local daemon or authorize another runtime. Historical reads remain available
+after the local binding mapping changes, using the original canonical subject's
+current credential. A credential change during the query discards the response.
+
+Status lists sessions referenced by locally retained R4 intents; it is not a
+complete inventory of every session on the Server. Process/ownership UNKNOWN
+means the Server has no verified observation; it does not mean STOPPED.

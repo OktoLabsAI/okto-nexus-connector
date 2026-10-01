@@ -172,9 +172,11 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--new-session", action="store_true")
     start.add_argument("--text", default=None,
                        help="initial turn text")
-    runtime_sub.add_parser("status")
+    status = runtime_sub.add_parser("status")
+    status.add_argument("--alias", default=None, help="read retained R4 sessions from the Server")
     inspect = runtime_sub.add_parser("inspect")
     inspect.add_argument("session_id")
+    inspect.add_argument("--alias", default=None, help="select the retained R4 binding alias")
     logs = runtime_sub.add_parser("logs")
     logs.add_argument("session_id")
     logs.add_argument("--follow", action="store_true")

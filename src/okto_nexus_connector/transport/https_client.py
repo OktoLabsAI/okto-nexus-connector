@@ -1025,6 +1025,41 @@ class NexusHTTPClient:
         return await self._request(
             "GET", f"/v1/runtime/operations/{operation_id}", key=key, require_revision=True)
 
+    async def get_r4_session(self, key: str, *, session_id: str, executor_id: str) -> dict:
+        """Read a bounded canonical session view; never resolve or launch."""
+        from urllib.parse import quote, urlencode
+        from datetime import datetime
+        if any(type(value) is not str or not 1 <= len(value) <= 160 for value in (session_id, executor_id)):
+            raise ConnectorError("VALIDATION_ERROR", "session_read", "Invalid session selection.")
+        payload = await self._request("GET", "/v1/runtime/sessions/" + quote(session_id, safe="") +
+            "?" + urlencode({"executor_id": executor_id}), key=key, require_revision=True)
+        ids = ("server_id", "executor_id", "binding_id", "agent_id", "workspace_id",
+               "workspace_binding_id", "session_id")
+        revisions = ("session_owner_generation", "authorization_revision", "configuration_revision",
+                     "binding_revision", "credential_epoch")
+        fields = {"scope", "connection_generation", "lifecycle_state", "process_state", "ownership",
+                  "lease_state", "durable_release_pending", "control_available", "last_observed_at"}
+        scope = payload.get("scope")
+        valid = (set(payload) == fields and type(scope) is dict and set(scope) == set(ids + revisions)
+            and all(type(scope.get(name)) is str and 1 <= len(scope[name]) <= 160 for name in ids)
+            and all(type(scope.get(name)) is int and scope[name] >= 1 for name in revisions)
+            and scope["session_id"] == session_id and scope["executor_id"] == executor_id
+            and all(type(payload.get(name)) is str and 1 <= len(payload[name]) <= 160
+                    for name in ("lifecycle_state", "process_state", "ownership", "lease_state"))
+            and all(type(payload.get(name)) is bool for name in ("durable_release_pending", "control_available"))
+            and (payload["connection_generation"] is None or
+                 type(payload["connection_generation"]) is int and payload["connection_generation"] >= 1))
+        stamp = payload.get("last_observed_at")
+        if stamp is not None:
+            try:
+                valid = valid and type(stamp) is str and len(stamp) <= 64 and datetime.fromisoformat(
+                    stamp.replace("Z", "+00:00")).tzinfo is not None
+            except ValueError:
+                valid = False
+        if not valid:
+            raise ConnectorError("VERSION_INCOMPATIBLE", "session_read", "The Server returned an invalid session view.")
+        return payload
+
     async def get_operation(self, key: str, operation_id: str
                             ) -> dict[str, object]:
         return await self._request(
