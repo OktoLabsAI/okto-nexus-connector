@@ -230,7 +230,7 @@ def test_schema_five_upgrade_keeps_registration_and_starts_sequence_at_zero():
     state = state_from_json({'schema_version': 5, 'execution_executors': [dict(
         server_id='srv', connector_id='connector', registration_agent_id='agent', client_intent_id='intent',
         label='Host', executor_id='executor', state='REGISTERED')]})
-    assert state.schema_version == 11
+    assert state.schema_version == 12
     assert state.execution_executors[0].executor_id == 'executor'
     assert state.execution_executors[0].inventory_publication_sequence == 0
 
@@ -335,4 +335,33 @@ async def test_realization_outlives_cancelled_ipc_waiter_and_fences_bootstrap_ro
         assert not owner._onboarding_tasks
     finally:
         release.set()
+        await dispose(owner, host)
+
+
+async def test_realization_refreshes_only_its_stale_administrative_ticket(control, monkeypatch):
+    from okto_nexus_connector.services.executor_onboarding import ExecutorOnboarding
+    owner, peer, store, host, _ = control
+    refreshed = []
+    async def realize(self, *, bootstrap, require_current, **params):
+        await require_current()
+        assert bootstrap.authorization_revision == 3
+        assert bootstrap.ticket == "fresh-administrative-ticket"
+        return {"realization_ref": "opaque"}
+    monkeypatch.setattr(ExecutorOnboarding, "realize", realize)
+    owner.start()
+    try:
+        await eventually(lambda: owner.status()["control_ready"])
+        original = owner._bootstrap
+        connection = owner.connection
+        async def me(key):
+            return MeInfo("srv", "agent", "Agent", (), 3, 3, 1)
+        async def fresh(*, server_id):
+            refreshed.append(server_id)
+            return replace(original, authorization_revision=3, ticket="fresh-administrative-ticket")
+        monkeypatch.setattr(peer, "me", me)
+        monkeypatch.setattr(owner.registration, "bootstrap", fresh)
+        assert await owner.realize() == {"realization_ref": "opaque"}
+        assert refreshed == ["srv"]
+        assert owner._bootstrap is original and owner.connection is connection
+    finally:
         await dispose(owner, host)

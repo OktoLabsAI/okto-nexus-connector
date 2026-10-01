@@ -24,7 +24,8 @@ async def run_bind(args, output: Output, root: Path):
         service = BindingOnboarding(store, _vault(root, store))
         if sub == "prepare":
             result = await service.prepare(identity_alias=args.identity,
-                realization_ref=args.realization_ref, alias=args.alias, client_intent_id=args.client_intent_id)
+                realization_ref=args.realization_ref, alias=args.alias, client_intent_id=args.client_intent_id,
+                replace_binding_id=getattr(args, "replace_binding_id", None))
             output.line("Binding proposal prepared. Review the diff and obtain any required operator approval.")
             return result
         result = await service.apply(identity_alias=args.identity, prepare_intent_id=args.prepare_intent_id,
@@ -80,11 +81,11 @@ async def run_bind(args, output: Output, root: Path):
         from ...services.binding_onboarding import BindingOnboarding
         service = BindingOnboarding(store, None)
         return {"bindings": [asdict(item) for item in state.bindings],
-                "execution_bindings": [service._view(state, item) for item in state.binding_intents]}
+                "execution_bindings": [service._view(state, item) for item in state.binding_intents if item.status != "SUPERSEDED"]}
     if sub == "show":
         state = store.load()
         from ...services.binding_onboarding import BindingOnboarding
-        records = [r for r in state.binding_intents if r.alias == args.alias]
+        records = [r for r in state.binding_intents if r.alias == args.alias and r.status != "SUPERSEDED"]
         if records:
             if len(records) != 1 or state.binding_by_alias(args.alias) is not None:
                 raise ConnectorError("OPERATION_CONFLICT", "bind", "The binding alias is ambiguous.")

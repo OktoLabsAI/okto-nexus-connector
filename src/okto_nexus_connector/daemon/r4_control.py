@@ -119,6 +119,20 @@ class R4DaemonControl:
             if bootstrap is None or self.clock() >= bootstrap.deadline_monotonic:
                 raise ConnectorError("EXECUTOR_OFFLINE", "executor_onboarding",
                                      "Wait for the daemon executor bootstrap before publishing a realization.")
+            record, identity, profile = snapshot
+            key = await asyncio.to_thread(self.vault.resolve, identity.secret_handle)
+            async with self.http_factory(profile.base_url) as http:
+                me = await http.me(key)
+            await self._require(snapshot)
+            if (me.server_id, me.agent_id) != (self.server_id, identity.agent_id):
+                raise ConnectorError("AGENT_ID_MISMATCH", "executor_onboarding",
+                                     "The current credential differs from the executor registration identity.")
+            if (me.authorization_revision != bootstrap.authorization_revision
+                    or me.credential_epoch != bootstrap.credential_epoch):
+                # Refresh this administrative publication's derivative only.
+                # No control-channel ownership or native execution is retried.
+                bootstrap = await self.registration.bootstrap(server_id=self.server_id)
+                await self._require(snapshot)
             service = ExecutorOnboarding(self.store, self.vault, http_factory=self.http_factory, clock=self.clock)
             return await service.realize(**params, bootstrap=bootstrap,
                                          require_current=lambda: self._require(snapshot))

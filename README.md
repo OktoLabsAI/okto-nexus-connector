@@ -202,7 +202,7 @@ an explicit --alias; a session previously resolved here can identify that alias
 when unambiguous. Steering and interruption accept --expected-turn-id or
 --current-run according to the adapter's control contract.
 
-Schema 11 retains runtime intents across restarts. Existing state migrates
+Schema 12 retains runtime intents across restarts. Existing state migrates
 without implicit runtime authorization. Retention is currently bounded to
 32 intents and 3 MiB of state at resolution; archival/pruning remains pending.
 The complete R4 status/logs UI and final provider/platform
@@ -269,3 +269,28 @@ operation. The Server releases it only after the opening is ready and rechecks
 current authority before dispatch. The opening response lists child IDs in
 follow_up_operation_ids. Retrying the same client intent preserves those IDs
 and does not send the prompt twice.
+
+
+### Replace an idle canonical binding
+
+Publish the newly approved realization, then use bind prepare with
+--replace-binding-id BINDING_ID and the current local alias. Review the new
+diff and obtain its operator proof before bind apply. The target must retain
+the same agent, executor, workspace and adapter, with all target sessions
+closed or reconciled to CLOSED.
+
+Replacement advances the binding revision and preserves endpoint/profile
+identity. It does not open a runtime. The previous application remains in the
+local history as SUPERSEDED; bind show and runtime commands select the current
+revision. Lost acknowledgments recover the same application rather than
+performing a second replacement.
+
+Schema 12 adds optional replacement selection and historical binding results.
+Reading schema 11 preserves existing records and grants no replacement
+authority. Older versions refuse schema 12 rather than interpreting it as
+ordinary creation.
+
+Before publishing another realization, the daemon compares current canonical
+identity authority with its administrative ticket. If the ticket is stale, it
+obtains a fresh derivative through the same persisted executor registration.
+This does not restart a native operation or replace control-channel ownership.

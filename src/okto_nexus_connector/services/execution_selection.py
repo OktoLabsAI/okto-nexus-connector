@@ -39,7 +39,7 @@ def _matches(local, binding):
             'candidate_ref', 'inventory_revision', 'realization_revision')))
 
 
-def acknowledge_execution_binding_state(state, *, binding: R4BindingView) -> ExecutionBindingRecord:
+def acknowledge_execution_binding_state(state, *, binding: R4BindingView, replace_expected=None) -> ExecutionBindingRecord:
     """Apply an authenticated result within the caller's atomic state update."""
     if not isinstance(binding, R4BindingView) or binding.state != 'APPROVED':
         raise ConnectorError('BINDING_NOT_AUTHORIZED', 'execution_selection', 'An approved binding response is required.')
@@ -53,6 +53,13 @@ def acknowledge_execution_binding_state(state, *, binding: R4BindingView) -> Exe
     existing = [r for r in state.execution_bindings if r.server_id == binding.server_id and
                 r.executor_id == binding.executor_id and r.binding_id == binding.binding_id]
     if existing:
+        if (len(existing) == 1 and existing[0] != wanted and replace_expected is not None
+                and asdict(existing[0]) == replace_expected
+                and wanted.binding_revision == existing[0].binding_revision + 1
+                and all(getattr(wanted, name) == getattr(existing[0], name) for name in
+                        ("server_id", "executor_id", "binding_id", "agent_id", "endpoint_id", "workspace_id", "adapter_id"))):
+            state.execution_bindings[state.execution_bindings.index(existing[0])] = wanted
+            return wanted
         if len(existing) != 1 or existing[0] != wanted:
             raise ConnectorError('OPERATION_CONFLICT', 'execution_selection', 'The approved binding mapping changed.')
         return existing[0]

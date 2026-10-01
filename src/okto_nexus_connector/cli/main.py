@@ -138,6 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
     bind_prepare = bind_sub.add_parser("prepare", help="prepare a reviewable R4 binding from a published realization")
     bind_prepare.add_argument("--identity", required=True)
     bind_prepare.add_argument("--realization-ref", required=True)
+    bind_prepare.add_argument("--replace-binding-id", help="Explicitly replace the reviewed binding realization.")
     bind_prepare.add_argument("--alias", required=True)
     bind_prepare.add_argument("--client-intent-id", required=True)
     bind_apply = bind_sub.add_parser("apply", help="apply the exact reviewed R4 binding proposal")

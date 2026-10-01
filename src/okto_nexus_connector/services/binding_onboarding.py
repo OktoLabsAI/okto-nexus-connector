@@ -69,6 +69,12 @@ class BindingOnboarding:
         if context[3] != record.scope_digest:
             raise ConnectorError("STALE_GENERATION", "binding_onboarding",
                                  "The binding intent authority or local realization changed.")
+        if record.replace_binding_id and record.status not in ("APPLIED", "SUPERSEDED"):
+            current = _one((b for b in state.execution_bindings if b.server_id == record.server_id
+                and b.executor_id == record.executor_id and b.binding_id == record.replace_binding_id),
+                "The replacement binding is missing or ambiguous.")
+            if asdict(current) != record.replacement_snapshot:
+                raise ConnectorError("STALE_GENERATION", "binding_onboarding", "The replacement binding changed after selection.")
         return context
 
     def _proposal(self, record):
@@ -86,7 +92,9 @@ class BindingOnboarding:
 
     def _view(self, state, record):
         binding = None
-        if record.binding_id:
+        if record.applied_binding is not None:
+            binding = dict(record.applied_binding)
+        elif record.binding_id:
             saved = _one((b for b in state.execution_bindings if b.server_id == record.server_id and
                           b.executor_id == record.executor_id and b.binding_id == record.binding_id),
                          "The acknowledged binding is missing or ambiguous.")
@@ -94,26 +102,42 @@ class BindingOnboarding:
         return dict(alias=record.alias, client_intent_id=record.client_intent_id, state=record.status,
                     proposal=asdict(self._proposal(record)) if record.proposal else None, binding=binding)
 
-    async def prepare(self, *, identity_alias, realization_ref, alias, client_intent_id):
+    async def prepare(self, *, identity_alias, realization_ref, alias, client_intent_id, replace_binding_id=None):
         if not all(_id(v) for v in (identity_alias, realization_ref, alias, client_intent_id)):
             raise ConnectorError("VALIDATION_ERROR", "binding_onboarding", "Binding identity and intent fields are required.")
+        if replace_binding_id is not None and not _id(replace_binding_id):
+            raise ConnectorError("VALIDATION_ERROR", "binding_onboarding", "Invalid replacement binding ID.")
         def stage(state):
             identity, profile, local, digest = self._context(state, identity_alias, realization_ref)
             existing = [r for r in state.binding_intents if r.identity_alias == identity_alias and
                         r.client_intent_id == client_intent_id]
             if existing:
                 record = _one(existing, "The binding intent is ambiguous.")
-                if record.alias != alias or record.realization_ref != realization_ref or record.scope_digest != digest:
+                if record.alias != alias or record.realization_ref != realization_ref or record.scope_digest != digest or record.replace_binding_id != replace_binding_id:
                     raise ConnectorError("OPERATION_CONFLICT", "binding_onboarding",
                                          "The binding client intent has different content.")
             else:
-                if any(r.alias == alias for r in (*state.bindings, *state.binding_intents)):
+                conflicts = [r for r in state.binding_intents if r.alias == alias and r.status != "SUPERSEDED"]
+                replacement = None
+                if replace_binding_id is not None:
+                    previous = _one(conflicts, "Select the current local alias to replace.")
+                    replacement = _one((b for b in state.execution_bindings if
+                        b.server_id == local.server_id and b.executor_id == local.executor_id and
+                        b.agent_id == local.agent_id and b.binding_id == replace_binding_id),
+                        "The replacement binding is missing or ambiguous.")
+                    if (previous.status != "APPLIED" or previous.binding_id != replace_binding_id
+                            or previous.identity_alias != identity_alias
+                            or replacement.workspace_id != local.canonical_workspace_id
+                            or replacement.adapter_id != local.adapter_id):
+                        raise ConnectorError("SCOPE_MISMATCH", "binding_onboarding", "The replacement must preserve the approved binding scope.")
+                if any(r.alias == alias for r in state.bindings) or (conflicts and replacement is None):
                     raise ConnectorError("OPERATION_CONFLICT", "binding_onboarding",
                                          "The local binding alias is already reserved.")
                 if len(state.binding_intents) >= 256:
                     raise ConnectorError("CAPACITY_EXCEEDED", "binding_onboarding", "The binding intent capacity is exhausted.")
                 state.binding_intents.append(BindingIntentRecord(local.server_id, local.executor_id, local.agent_id,
-                    identity_alias, client_intent_id, alias, realization_ref, digest))
+                    identity_alias, client_intent_id, alias, realization_ref, digest,
+                    replace_binding_id=replace_binding_id, replacement_snapshot=asdict(replacement) if replacement else None))
         state = await asyncio.to_thread(self.store.update, stage)
         record = self._record(state, identity_alias, client_intent_id)
         if record.proposal is not None:
@@ -130,7 +154,8 @@ class BindingOnboarding:
             proposal = await http.prepare_r4_binding(key, client_intent_id=client_intent_id,
                 executor_id=local.executor_id, adapter_id=local.adapter_id, candidate_ref=local.candidate_ref,
                 inventory_revision=local.inventory_revision, realization_ref=local.realization_ref,
-                workspace_id=local.canonical_workspace_id, alias=alias, agent_id_hint=identity.agent_id)
+                workspace_id=local.canonical_workspace_id, alias=alias, agent_id_hint=identity.agent_id,
+                **({"replace_binding_id": replace_binding_id} if replace_binding_id else {}))
         def commit(state):
             current = self._record(state, identity_alias, client_intent_id)
             _, _, local, _ = self._current(state, current)
@@ -151,6 +176,13 @@ class BindingOnboarding:
         if (not all(_id(v) for v in (identity_alias, prepare_intent_id, client_intent_id)) or
                 (operator_proof_ref is not None and not _id(operator_proof_ref))):
             raise ConnectorError("VALIDATION_ERROR", "binding_onboarding", "Invalid binding application fields.")
+        saved_state = await asyncio.to_thread(self.store.load)
+        saved = self._record(saved_state, identity_alias, prepare_intent_id)
+        if saved.status == "SUPERSEDED":
+            if (saved.apply_client_intent_id != client_intent_id or saved.approved_diff_hash != approved_diff_hash
+                    or saved.operator_proof_ref != operator_proof_ref):
+                raise ConnectorError("OPERATION_CONFLICT", "binding_onboarding", "The historical application intent has different content.")
+            return self._view(saved_state, saved)
         def stage(state):
             record = self._record(state, identity_alias, prepare_intent_id)
             self._current(state, record)
@@ -194,7 +226,17 @@ class BindingOnboarding:
             if (current.apply_client_intent_id != client_intent_id or current.proposal_digest != record.proposal_digest or
                     current.approved_diff_hash != approved_diff_hash or current.operator_proof_ref != operator_proof_ref):
                 raise ConnectorError("OPERATION_CONFLICT", "binding_onboarding", "The binding application changed before acknowledgment.")
-            acknowledged = acknowledge_execution_binding_state(state, binding=binding)
+            acknowledged = acknowledge_execution_binding_state(state, binding=binding,
+                replace_expected=current.replacement_snapshot)
+            if current.replace_binding_id:
+                for previous in state.binding_intents:
+                    if previous is not current and previous.alias == current.alias and previous.status == "APPLIED":
+                        if previous.binding_id != current.replace_binding_id:
+                            raise ConnectorError("OPERATION_CONFLICT", "binding_onboarding", "The replaced alias changed.")
+                        if previous.applied_binding is None:
+                            previous.applied_binding = {f.name: current.replacement_snapshot[f.name] for f in fields(R4BindingView)}
+                        previous.status = "SUPERSEDED"
+            current.applied_binding = {f.name: getattr(acknowledged, f.name) for f in fields(R4BindingView)}
             current.binding_id, current.status = acknowledged.binding_id, "APPLIED"
         state = await asyncio.to_thread(self.store.update, commit)
         return self._view(state, self._record(state, identity_alias, prepare_intent_id))

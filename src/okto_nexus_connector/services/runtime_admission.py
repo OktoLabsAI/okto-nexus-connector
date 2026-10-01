@@ -18,7 +18,7 @@ class RuntimeAdmission:
         self.store, self.vault, self.http_factory = store, vault, http_factory
 
     def context(self, state, alias):
-        intent = _one((r for r in state.binding_intents if r.alias == alias),
+        intent = _one((r for r in state.binding_intents if r.alias == alias and r.status != "SUPERSEDED"),
                       "Select one acknowledged R4 binding alias.")
         if intent.status != "APPLIED" or any(b.alias == alias for b in state.bindings):
             raise ConnectorError("BINDING_NOT_AUTHORIZED", "runtime_admission",

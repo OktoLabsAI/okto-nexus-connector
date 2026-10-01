@@ -262,6 +262,6 @@ async def test_execution_owner_prepares_only_after_capability_vault_commit(execu
 def test_schema_six_migrates_without_changing_identity_or_previous_records():
     legacy = dict(schema_version=6, connector_id='legacy', preferences={'keep': True})
     migrated = state_from_json(legacy)
-    assert migrated.schema_version == 11 and migrated.session_capabilities == []
+    assert migrated.schema_version == 12 and migrated.session_capabilities == []
     assert state_to_json(migrated)['connector_id'] == 'legacy'
     assert state_to_json(migrated)['preferences'] == {'keep': True}

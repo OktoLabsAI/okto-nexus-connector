@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -217,6 +217,9 @@ class BindingIntentRecord:
     approved_diff_hash: str = ""
     operator_proof_ref: str | None = None
     binding_id: str = ""
+    replace_binding_id: str | None = None
+    replacement_snapshot: dict[str, Any] | None = None
+    applied_binding: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)

@@ -154,7 +154,7 @@ async def test_proposal_mutation_is_not_application_authority(binding):
 
 def test_schema_nine_has_no_implicit_binding_intents():
     state = state_from_json({"schema_version": 9})
-    assert state.schema_version == 11 and not state.binding_intents and not state.execution_bindings
+    assert state.schema_version == 12 and not state.binding_intents and not state.execution_bindings
 
 
 async def test_local_acknowledgment_failure_keeps_one_recoverable_apply(binding, monkeypatch):
@@ -163,8 +163,8 @@ async def test_local_acknowledgment_failure_keeps_one_recoverable_apply(binding,
     await service.prepare(**prepare)
     peer.approved = True
     original = module.acknowledge_execution_binding_state
-    def fail_after_binding(state, *, binding):
-        original(state, binding=binding)
+    def fail_after_binding(state, *, binding, **kwargs):
+        original(state, binding=binding, **kwargs)
         raise OSError("Technical local commit interruption")
     monkeypatch.setattr(module, "acknowledge_execution_binding_state", fail_after_binding)
     with pytest.raises(OSError):
@@ -176,3 +176,82 @@ async def test_local_acknowledgment_failure_keeps_one_recoverable_apply(binding,
     result = await service.apply(**apply)
     assert result["state"] == "APPLIED" and len(set(peer.applies)) == 1
     assert len(store.load().execution_bindings) == 1
+
+
+async def test_explicit_replacement_preserves_history_and_recovers_lost_ack(binding):
+    from okto_nexus_connector.services.runtime_admission import RuntimeAdmission
+    service, peer, store, prepare, apply = binding
+    await service.prepare(**prepare)
+    peer.approved = True
+    original = await service.apply(**apply)
+    previous_proposal = service._proposal(store.load().binding_intents[0])
+    store.update(lambda state: state.realizations.append(replace(state.realizations[0],
+        client_intent_id="replacement-root", realization_ref="replacement-realization",
+        workspace_binding_id="replacement-workspace", status="PENDING_APPROVAL")))
+    async def prepare_replacement(key, **body):
+        peer.prepares.append(body)
+        assert body["replace_binding_id"] == "binding"
+        return replace(previous_proposal, proposal_id="replacement-proposal", realization_ref="replacement-realization",
+            workspace_binding_id="replacement-workspace", can_apply=True)
+    calls = []
+    async def apply_replacement(key, **body):
+        calls.append(body["client_intent_id"])
+        if len(calls) == 1:
+            raise ConnectorError("OUTCOME_UNKNOWN", "http", "The response was lost.", possible_effect=True)
+        return R4BindingView(**(original["binding"] | dict(binding_revision=2,
+            realization_ref="replacement-realization", workspace_binding_id="replacement-workspace")))
+    peer.prepare_r4_binding, peer.apply_r4_binding = prepare_replacement, apply_replacement
+    wanted = prepare | dict(client_intent_id="replace-prepare", realization_ref="replacement-realization",
+                            replace_binding_id="binding")
+    await service.prepare(**wanted)
+    confirmation = apply | dict(prepare_intent_id="replace-prepare", client_intent_id="replace-apply")
+    with pytest.raises(ConnectorError):
+        await service.apply(**confirmation)
+    assert store.load().execution_bindings[0].binding_revision == 1
+    updated = await service.apply(**confirmation)
+    assert updated["binding"]["binding_revision"] == 2
+    state = store.load()
+    assert len(state.execution_bindings) == 1
+    assert state.binding_intents[0].status == "SUPERSEDED"
+    historical = await service.apply(**apply)
+    assert historical["binding"] == original["binding"]
+    assert len(calls) == 2
+    assert RuntimeAdmission(store, service.vault).context(state, "assistant")[2].binding_revision == 2
+    assert (await service.apply(**confirmation))["binding"] == updated["binding"]
+
+
+async def test_replacement_target_drift_refuses_network(binding):
+    service, peer, store, prepare, apply = binding
+    await service.prepare(**prepare)
+    peer.approved = True
+    await service.apply(**apply)
+    original_prepare = peer.prepare_r4_binding
+    async def selected(key, **body):
+        return service._proposal(store.load().binding_intents[0])
+    peer.prepare_r4_binding = selected
+    await service.prepare(**(prepare | dict(client_intent_id="replace", replace_binding_id="binding")))
+    count = len(peer.applies)
+    store.update(lambda state: setattr(state.execution_bindings[0], "binding_revision", 2))
+    with pytest.raises(ConnectorError) as error:
+        await service.apply(**(apply | dict(prepare_intent_id="replace", client_intent_id="replace-apply")))
+    assert error.value.code == "STALE_GENERATION"
+    assert len(peer.applies) == count
+
+
+async def test_schema_eleven_binding_history_migrates_without_replacement_authority(binding):
+    from okto_nexus_connector.storage.state_store import state_to_json
+    service, peer, store, prepare, apply = binding
+    await service.prepare(**prepare)
+    peer.approved = True
+    await service.apply(**apply)
+    old = state_to_json(store.load())
+    old["schema_version"] = 11
+    for record in old["binding_intents"]:
+        for field in ("replace_binding_id", "replacement_snapshot", "applied_binding"):
+            record.pop(field)
+    migrated = state_from_json(old)
+    assert migrated.schema_version == 12
+    record = migrated.binding_intents[0]
+    assert record.status == "APPLIED"
+    assert record.replace_binding_id is record.replacement_snapshot is record.applied_binding is None
+    assert migrated.execution_bindings == store.load().execution_bindings
