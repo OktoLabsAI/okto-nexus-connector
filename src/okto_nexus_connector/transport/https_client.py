@@ -736,6 +736,9 @@ class NexusHTTPClient:
             content_key = "reason" if intent in {"turn.interrupt", "runtime.close"} else "text"
             matches = (
                 semantic["action"] == ("runtime.open" if intent == "runtime.start" else intent)
+                and (not payload["reuse"] or intent == "runtime.start")
+                and (new_session is not True or not payload["reuse"])
+                and (intent != "runtime.start" or session_id is None or payload["reuse"])
                 and semantic["target"] == expected_target
                 and semantic["session_id"] == payload["session_id"]
                 and (session_id is None or payload["session_id"] == session_id)
@@ -781,8 +784,8 @@ class NexusHTTPClient:
         )
         scope = payload.get("scope")
         if (payload.get("operation_id") != resolution.operation_id or
-                payload.get("client_intent_id") !=
-                resolution.client_intent_id or
+                (not resolution.reuse and payload.get("client_intent_id") !=
+                 resolution.client_intent_id) or
                 payload.get("intent_hash") != resolution.intent_hash or
                 not isinstance(scope, dict) or
                 any(scope.get(name) != resolution.scope.get(name)

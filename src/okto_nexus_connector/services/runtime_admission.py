@@ -56,7 +56,7 @@ class RuntimeAdmission:
                     operation_id=resolution.operation_id if resolution else None,
                     session_id=resolution.session_id if resolution else None,
                     blockers=list(resolution.blockers) if resolution else [],
-                    operation=record.operation)
+                    operation=record.operation, reused=resolution.reuse if resolution else False)
 
     async def execute(self, *, alias, client_intent_id, intent, session_id=None,
                       new_session=None, text=None, target=None):
@@ -66,9 +66,11 @@ class RuntimeAdmission:
         if intent not in {"runtime.start", "turn.submit", "turn.steer", "turn.interrupt", "runtime.close"}:
             raise ConnectorError("VALIDATION_ERROR", "runtime_admission", "Unsupported runtime intent.")
         if intent == "runtime.start":
-            if new_session is not True or session_id is not None or text is not None:
+            if ((new_session is not None and type(new_session) is not bool) or text is not None
+                    or (new_session is True and session_id is not None)
+                    or (session_id is not None and not _id(session_id))):
                 raise ConnectorError("VALIDATION_ERROR", "runtime_admission",
-                                     "Use --new-session to open, then submit a separate turn intent.")
+                                     "Select a new or existing session, then submit a separate turn intent.")
         elif not _id(session_id) or new_session is True:
             raise ConnectorError("VALIDATION_ERROR", "runtime_admission", "An existing session ID is required.")
         if intent in {"turn.submit", "turn.steer"} and (type(text) is not str or not 1 <= len(text) <= 65536):
@@ -175,7 +177,7 @@ class RuntimeAdmission:
                 self._read_current(state, record, read_authority)
             resolution = self._resolution(current)
             if (operation.get("operation_id") != resolution.operation_id or
-                    operation.get("client_intent_id") != resolution.client_intent_id or
+                    (not resolution.reuse and operation.get("client_intent_id") != resolution.client_intent_id) or
                     operation.get("intent_hash") != resolution.intent_hash or
                     operation.get("action") != resolution.semantic_intent["action"] or
                     any(operation.get("scope", {}).get(k) != resolution.scope.get(k) for k in

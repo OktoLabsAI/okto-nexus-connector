@@ -99,7 +99,7 @@ The --json and --non-interactive flags are available as global options.
 Configuration contains local paths and file identity only; remote inventory
 remains path-free. State schema 9 adds discovery configuration. Schema 8
 records migrate with no implicit discovery choices; older clients refuse
-schema 9 state. Runtime session reuse and final release qualification remain under integration.
+schema 9 state. Final release qualification remains under integration.
 
 ### Launch consent and realization
 
@@ -136,7 +136,7 @@ persisted before HTTP and acknowledged after scope checks. No path or credential
 material is included in the realization response.
 
 The acknowledged realization remains pending binding approval. Use the binding commands below to obtain and apply a reviewable proposal.
-Runtime session reuse and real remote provider qualification remain under
+Initial child turns and final remote provider qualification remain under
 integration; these commands do not imply runtime readiness.
 
 ### Review and apply an R4 binding
@@ -195,8 +195,8 @@ Admission is not completion. The operation response includes the Server's
 admission state and receipt revision. Query it to observe progress. The CLI
 does not launch Core directly or infer an applied lease.
 
-R4 start currently requires --new-session and a separate submit command;
-automatic session reuse and combined initial text are not implemented yet.
+R4 start automatically reuses one compatible session; --new-session requests a distinct session.
+Initial turn text is currently submitted through a separate runtime submit command.
 The project and harness come from the approved binding. Session controls accept
 an explicit --alias; a session previously resolved here can identify that alias
 when unambiguous. Steering and interruption accept --expected-turn-id or
@@ -205,7 +205,7 @@ when unambiguous. Steering and interruption accept --expected-turn-id or
 Schema 11 retains runtime intents across restarts. Existing state migrates
 without implicit runtime authorization. Retention is currently bounded to
 32 intents and 3 MiB of state at resolution; archival/pruning remains pending.
-The complete R4 status/logs UI, automatic session reuse and real remote provider
+The complete R4 status/logs UI, initial child turns and final provider/platform
 acceptance remain part of the delivery plan.
 
 Operation queries use the retained canonical agent and current approved Server
@@ -251,3 +251,18 @@ current credential. A credential change during the query discards the response.
 Status lists sessions referenced by locally retained R4 intents; it is not a
 complete inventory of every session on the Server. Process/ownership UNKNOWN
 means the Server has no verified observation; it does not mean STOPPED.
+
+### Reuse a canonical session
+
+runtime start ALIAS --client-intent-id ID automatically reuses one compatible
+session with the same realization and current applied grant/lease. With no live
+claim it reserves a new opening. An unresolved or ambiguous claim is refused;
+use --session-id SESSION_ID to select a known compatible session, or explicitly
+request a distinct opening with --new-session.
+
+Reuse preserves the original opening operation and its receipt provenance.
+The new client intent is confirmed durably without another dispatch or process.
+Replaying a confirmed reuse recovers that acknowledgment even after the session
+closes. A new unconfirmed reuse still requires current authority.
+Initial text must currently be submitted as a separate turn; automatic child
+turn admission from start text remains under integration.

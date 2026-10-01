@@ -86,9 +86,12 @@ async def run_runtime(args, output: Output, root: Path):
             new_session=args.new_session if sub == "start" else None,
             text=getattr(args, "reason", None) if sub in {"interrupt", "stop"} else getattr(args, "text", None),
             target=target)
-        output.line(f"Runtime intent {result['client_intent_id']}: {result['state']}.")
+        suffix = " Reused the existing session." if result.get("reused") else ""
+        output.line(f"Runtime intent {result['client_intent_id']}: {result['state']}." + suffix)
         return result
     if sub == "start":
+        if getattr(args, "session_id", None) is not None:
+            raise ConnectorError("VALIDATION_ERROR", "runtime", "Explicit session selection requires an R4 binding.")
         result = await start_runtime(
             output, root, alias=args.alias, project=args.project,
             harness=args.harness, new_session=args.new_session,

@@ -170,6 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--project", type=Path, default=None)
     start.add_argument("--harness", default=None)
     start.add_argument("--new-session", action="store_true")
+    start.add_argument("--session-id", default=None, help="select an existing compatible R4 session")
     start.add_argument("--text", default=None,
                        help="initial turn text")
     status = runtime_sub.add_parser("status")

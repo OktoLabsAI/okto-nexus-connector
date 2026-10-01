@@ -183,7 +183,7 @@ async def test_cross_scope_operation_read_cannot_overwrite_intent(runtime):
 
 
 @pytest.mark.parametrize("change", [
-    {"client_intent_id": None}, {"new_session": False}, {"text": "Implicit initial turn."},
+    {"client_intent_id": None}, {"new_session": "false"}, {"text": "Implicit initial turn."},
 ])
 async def test_invalid_start_does_not_reserve_or_call_network(runtime, change):
     service, peer, store, args = runtime
@@ -250,3 +250,35 @@ async def test_revoked_read_identity_never_contacts_server(runtime):
     with pytest.raises(ConnectorError) as refused:
         await service.inspect(alias="assistant", client_intent_id="start-one")
     assert refused.value.code == "AGENT_AUTH_REQUIRED"
+
+
+async def test_reuse_retains_original_operation_provenance(runtime):
+    from dataclasses import replace
+    service, peer, store, args = runtime
+    first = await service.execute(**args)
+    original = service._resolution(store.load().runtime_intents[0])
+    confirmations = []
+    async def resolve(key, **body):
+        assert body["new_session"] is False
+        return replace(original, client_intent_id=body["client_intent_id"], intent_id="reuse-intent", reuse=True)
+    async def confirm(key, selected):
+        confirmations.append(selected)
+        return peer.operations[original.operation_id]
+    peer.resolve_r4_intent = resolve
+    peer.submit_r4_operation = confirm
+    reused = await service.execute(**(args | dict(client_intent_id="reuse", new_session=False)))
+    assert reused["reused"] and reused["operation_id"] == first["operation_id"]
+    assert reused["operation"]["client_intent_id"] == "start-one"
+    assert len(peer.operations) == 1 and len(confirmations) == 1
+    assert await service.inspect(alias="assistant", client_intent_id="reuse") == reused
+    assert len(confirmations) == 1
+
+
+async def test_explicit_selection_preserves_session_and_rejects_new_flag(runtime):
+    service, peer, store, args = runtime
+    with pytest.raises(ConnectorError):
+        await service.execute(**(args | dict(session_id="session", new_session=True)))
+    assert not store.load().runtime_intents
+    result = await service.execute(**(args | dict(session_id="session", new_session=False)))
+    assert result["state"] == "ADMITTED"
+    assert peer.resolves[0]["session_id"] == "session"
