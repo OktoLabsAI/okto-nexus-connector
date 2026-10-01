@@ -1,9 +1,10 @@
 """Connection-scoped lane attachment and approved execution composition."""
 import asyncio
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields, replace
 import time
 
 from ..errors import ConnectorError
+from ..transport.https_client import R4BindingView
 from ..services.discovery_configuration import configured_candidates
 from ..services.executor_registration import _identity, _profile
 from ..services.r4_execution import R4ExecutionOwner
@@ -94,6 +95,43 @@ class R4DaemonExecution:
         lane = await self._current(frame)
         await self.http.publish_operation_receipt(lane.ticket.ticket, frame=frame)
 
+    def _reviewed_replacement(self, lane, selected):
+        if selected is None:
+            return False
+        binding, identity = selected
+        old = lane.binding
+        mutable = ("workspace_binding_id", "candidate_ref", "inventory_revision",
+                   "realization_ref", "realization_revision", "realization_snapshot_digest")
+        if (identity != lane.identity or binding.binding_revision != old.binding_revision + 1
+                or replace(binding, binding_revision=old.binding_revision,
+                    **{name: getattr(old, name) for name in mutable}) != old):
+            return False
+        current = {field.name: getattr(binding, field.name) for field in fields(R4BindingView)}
+        matches = [record for record in self.store.load().binding_intents
+            if (record.server_id, record.executor_id, record.agent_id,
+                record.binding_id, record.replace_binding_id, record.status) ==
+               (old.server_id, old.executor_id, old.agent_id, old.binding_id,
+                old.binding_id, "APPLIED")
+            and record.replacement_snapshot == asdict(old)
+            and record.applied_binding == current]
+        return len(matches) == 1
+
+    async def _adopt_replacement(self, key, lane, selected):
+        if not await asyncio.to_thread(self._reviewed_replacement, lane, selected):
+            return False
+        if not await self.host.binding_sessions_closed(
+                server_id=lane.binding.server_id, executor_id=lane.binding.executor_id,
+                binding_id=key):
+            return False
+        if (self.closing or not self.connection.online or self.clock() >= lane.deadline
+                or (await asyncio.to_thread(self._bindings)).get(key) != selected
+                or not await asyncio.to_thread(self._reviewed_replacement, lane, selected)):
+            return False
+        # Replacement changes local realization, not lane authority. Preserve
+        # the exact ticket deadline, connection and unrelated native owners.
+        self.lanes[key] = _Lane(selected[0], selected[1], lane.ticket, lane.deadline)
+        return True
+
     async def sync(self):
         if self.closing:
             raise ConnectorError("RUNTIME_DRAINING", "r4_lanes", "The execution owner is draining.")
@@ -101,7 +139,9 @@ class R4DaemonExecution:
             raise self.owner.failure
         records = await asyncio.to_thread(self._bindings)
         for key, lane in self.lanes.items():
-            if records.get(key) != (lane.binding, lane.identity) or self.clock() >= lane.deadline:
+            if (self.clock() >= lane.deadline or
+                    (records.get(key) != (lane.binding, lane.identity) and
+                     not await self._adopt_replacement(key, lane, records.get(key)))):
                 raise ConnectorError("RECONCILIATION_REQUIRED", "r4_lanes",
                                      "The execution lane requires authority reconciliation.")
         for binding_id, (binding, identity) in records.items():

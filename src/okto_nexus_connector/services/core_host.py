@@ -414,6 +414,20 @@ class CoreRuntimeHost:
         owner = self._native_action_owners.get(key)
         return owner is None or await owner.close(timeout_seconds=timeout_seconds)
 
+    async def binding_sessions_closed(self, *, server_id, executor_id, binding_id):
+        """Observe only the replacement target; unknown ownership refuses adoption."""
+        from nexus_connector_core import SessionKey
+        selected = [(key, runtime) for key, runtime in self._runtimes.items()
+                    if isinstance(key, ExecutionRuntimeKey) and
+                    (key.server_id, key.executor_id, key.binding_id) ==
+                    (server_id, executor_id, binding_id)]
+        snapshots = await asyncio.gather(*[
+            runtime.inspect(SessionKey(key.server_id, key.executor_id, key.session_id))
+            for key, runtime in selected], return_exceptions=True)
+        return all(not isinstance(snapshot, BaseException)
+                   and snapshot.lease_state == "CLOSED" and snapshot.ownership == "released"
+                   for snapshot in snapshots)
+
     async def wait_executor_leases(self, *, server_id, executor_id, stop_event):
         """Retain disconnected runtimes until Core observes lease expiry.
 
