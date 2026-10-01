@@ -342,6 +342,7 @@ class CoreRuntimeHost:
             candidates={selection.candidate.adapter_id: selection.candidate},
             workspace_roots={selection.workspace_id: selection.workspace_root},
             native_factory=factory, owned_slot_ledger=ledger,
+            native_approvals_from_lease=True,
             pi_native_action=native_launch if native_action_factory is not None else None)
         if native_action_factory is not None:
             native_owner = native_action_factory(runtime)

@@ -374,7 +374,7 @@ class R4ExecutionOwner:
                 context = self._context(item, runtime)
             operation = r4_native_decision_operation(frame, resolved_response=response)
             context = await self._bind(item, runtime, context, applied_operation=operation)
-            receipt = await runtime.decide_native_approval(operation, context)
+            receipt = await runtime.decide_native_approval(operation=operation, context=context)
             return project_r4_decision_receipt(frame, receipt, context, operation, receipt_revision=1)
         else:
             raise CoreError('CAPABILITY_UNSUPPORTED', 'r4_execution')

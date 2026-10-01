@@ -190,3 +190,26 @@ async def test_host_revalidates_after_shared_store_wait_and_before_cache_reuse(s
     finally:
         release.set()
         await host.shutdown_all()
+
+
+async def test_r4_host_defers_native_capture_to_installed_lease(selection, tmp_path, monkeypatch):
+    from okto_nexus_connector.services import core_host
+    store, candidate, binding, frame, *_ = selection
+    acknowledge_execution_binding(store, binding=binding)
+    host = CoreRuntimeHost(state_dir(tmp_path / 'capture-runtime'), None)
+    composed = []
+    original = core_host.create_runtime
+    def compose(**options):
+        composed.append(options)
+        return original(**options)
+    monkeypatch.setattr(core_host, 'create_runtime', compose)
+    async def environment(_):
+        raise AssertionError('Composition must not resolve secrets or launch a provider.')
+    try:
+        runtime = await host.build_r4(store, frame=frame, candidates=[candidate], environment=environment)
+        assert await host.build_r4(store, frame=frame, candidates=[candidate], environment=environment) is runtime
+        assert len(composed) == 1
+        assert composed[0]['native_approvals_from_lease'] is True
+        assert not composed[0].get('native_approvals_enabled', False)
+    finally:
+        await host.shutdown_all()
