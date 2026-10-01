@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from nexus_connector_core import discover_installations
+from nexus_connector_core import DiscoveryCancelled, discover_installations
 
 from ..errors import ConnectorError
 
@@ -68,11 +68,15 @@ def configure_discovery(store, *, server_id, roots=(), pi_install_root=None, pi_
     return value
 
 
-async def configured_candidates(configuration, *, adapter_ids=None):
+async def configured_candidates(configuration, *, adapter_ids=None, cancel_requested=None):
     """Use the public Core facade and preserve complete InstallationCandidate values."""
     def discover():
         arguments = configuration_arguments(configuration)
-        inventory = discover_installations(adapter_ids=adapter_ids, **arguments)
+        inventory = discover_installations(adapter_ids=adapter_ids,
+            **({"cancel_requested": cancel_requested} if cancel_requested is not None else {}), **arguments)
         configuration_arguments(configuration)
         return list(inventory.candidates)
-    return await asyncio.to_thread(discover)
+    try:
+        return await asyncio.to_thread(discover)
+    except DiscoveryCancelled:
+        raise _error("Passive discovery was stopped.", "RUNTIME_DRAINING") from None

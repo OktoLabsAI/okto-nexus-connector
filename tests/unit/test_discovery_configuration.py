@@ -205,3 +205,55 @@ async def test_pi_release_with_explicit_node_outside_release_root(registered, tm
     assert selected.executable == str(node.resolve())
     assert selected.launch_script == str(script.resolve())
     assert selected.version == "0.87.1" and selected.build_identity and selected.installation_ref
+
+
+async def test_stop_joins_cancelled_passive_reader_without_publishing(control, tmp_path, monkeypatch):
+    import asyncio
+    import io
+    import os
+    from pathlib import Path
+    import threading
+
+    owner, peer, store, host, _ = control
+    store.update(lambda state: (setattr(state.execution_executors[0], "state", "REGISTERED"),
+                                setattr(state.execution_executors[0], "executor_id", "executor")))
+    directory = tmp_path / "providers"
+    directory.mkdir()
+    binary = directory / ("codex.exe" if os.name == "nt" else "codex")
+    binary.write_bytes(b"native bytes")
+    if os.name != "nt":
+        binary.chmod(0o755)
+    service.configure_discovery(store, server_id="srv", roots=[directory])
+    monkeypatch.setenv("PATH", str(directory))
+    owner.discover = None
+    entered, release, exited = threading.Event(), threading.Event(), threading.Event()
+    original_open = Path.open
+    class Reader(io.BytesIO):
+        def read(self, size=-1):
+            entered.set()
+            assert release.wait(3), "The test did not release the current OS read."
+            return super().read(size)
+        def close(self):
+            super().close()
+            exited.set()
+    def opened(path, *args, **kwargs):
+        if path == binary and args == ("rb",):
+            return Reader(b"native bytes")
+        return original_open(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", opened)
+    owner.start()
+    stopper = None
+    try:
+        await eventually(entered.is_set)
+        stopper = asyncio.create_task(owner.stop())
+        await eventually(owner._stopped.is_set)
+        assert not stopper.done()  # A current OS read remains owned.
+        release.set()
+        await asyncio.wait_for(asyncio.shield(stopper), 3)
+        assert exited.is_set()
+        assert owner._task.done() and owner.phase == "STOPPED"
+        assert not peer.publications and all(not socket.online for socket in peer.sockets)
+        assert store.load().execution_executors[0].inventory_publication_sequence == 0
+    finally:
+        release.set()
+        await dispose(owner, host)

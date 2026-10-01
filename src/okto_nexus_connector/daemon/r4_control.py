@@ -11,6 +11,7 @@ import asyncio
 from dataclasses import replace
 import secrets
 import time
+import threading
 from urllib.parse import urlsplit
 
 from ..errors import ConnectorError
@@ -76,6 +77,7 @@ class R4DaemonControl:
         self._retained_lanes = {}
         self.cleanup_pending = False
         self._stopped = asyncio.Event()
+        self._discovery_stopped = threading.Event()
         self._bootstrap_gate = asyncio.Lock()
         self._bootstrap = None
         self._onboarding_tasks = set()
@@ -87,6 +89,7 @@ class R4DaemonControl:
         self._task = asyncio.create_task(self._run(), name='r4-startup-' + self.server_id)
 
     async def stop(self):
+        self._discovery_stopped.set()
         self._stopped.set()
         if self.connection is not None:
             await self.connection.close()
@@ -200,7 +203,8 @@ class R4DaemonControl:
     async def _publish(self, http, bootstrap, snapshot):
         observed_at = self.clock()
         candidates = tuple(await self.discover() if self.discover is not None else
-                           await configured_candidates(snapshot[0].discovery_configuration))
+                           await configured_candidates(snapshot[0].discovery_configuration,
+                               cancel_requested=self._discovery_stopped.is_set))
         await self._require(snapshot)
         sequence = await asyncio.to_thread(self._reserve_sequence, snapshot)
         self.publication_sequence = sequence
