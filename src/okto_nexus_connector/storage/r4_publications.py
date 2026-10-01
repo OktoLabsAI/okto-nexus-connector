@@ -170,6 +170,22 @@ class R4PublicationStore:
                 (server_id, executor_id, after, limit)).fetchall()
             return [self._decode(row)['binding'] for row in rows]
 
+    def watching(self, server_id, executor_id, *, after="", limit=128, connection=None):
+        """Page acknowledged nonterminal facts; acknowledgment is not completion."""
+        if type(limit) is not int or not 1 <= limit <= 256 or type(after) is not str:
+            raise ValueError("Invalid receipt observation cursor.")
+        clause, values = "", [server_id, executor_id, after]
+        if connection is not None:
+            connection_id, generation = connection
+            clause = " AND json_extract(metadata,'$.connection_id')=? AND json_extract(metadata,'$.connection_generation')=?"
+            values += [connection_id, generation]
+        with self._transaction() as conn:
+            rows = conn.execute("SELECT * FROM publications WHERE server_id=? AND executor_id=? "
+                "AND operation_id>? AND acknowledged=1 AND projection_binding IS NOT NULL AND receipt IS NOT NULL "
+                "AND json_extract(receipt,'$.stage') NOT IN ('SUCCEEDED','FAILED','CANCELLED')" + clause +
+                " ORDER BY operation_id LIMIT ?", (*values, limit)).fetchall()
+            return [self._decode(row) for row in rows]
+
     def acknowledge(self, frame):
         frame = self._frame(frame, 'operation.receipt')
         raw = canonical_json(frame).decode()

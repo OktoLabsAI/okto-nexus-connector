@@ -299,3 +299,38 @@ async def test_failed_inspection_keeps_other_started_inspections_owned(tmp_path)
         release.set()
         with pytest.raises(OSError):
             await waiter
+
+
+@pytest.mark.parametrize("selection", [True], indirect=True)
+@pytest.mark.parametrize("drift", [False, True])
+async def test_default_execution_discovery_uses_persisted_scope_and_revalidates(lifecycle, monkeypatch, drift):
+    from okto_nexus_connector.daemon import r4_execution
+    owner, _, _, frame, native, _, published, _ = lifecycle
+    candidates = await owner.control.discover()
+    owner.control.discover = None
+    configuration = {"approved_scope": "fixture"}
+    snapshot = (SimpleNamespace(discovery_configuration=configuration), None, None)
+    owner.control._snapshot = lambda: snapshot
+    calls = []
+    async def discover(value):
+        assert value == configuration
+        calls.append("discover")
+        return candidates
+    async def require(value):
+        assert value is snapshot
+        calls.append("revalidate")
+        if drift:
+            raise ConnectorError("PROFILE_DRIFT", "discovery", "The approved discovery scope changed.")
+    owner.control._require = require
+    monkeypatch.setattr(r4_execution, "configured_candidates", discover)
+    await owner.sync()
+    if drift:
+        with pytest.raises(ConnectorError, match="PROFILE_DRIFT"):
+            await owner._candidates(frame)
+        assert not native.opened and published.empty()
+    else:
+        await owner.connection.emit(frame)
+        receipt = await observed(published, owner.owner)
+        assert receipt["operation_id"] == frame["operation_id"]
+        assert len(native.opened) == 1
+    assert calls and calls[0:2] == ["discover", "revalidate"]

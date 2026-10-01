@@ -123,6 +123,8 @@ class R4ExecutionOwner:
         self._consumers = []
         self._producers = set()
         self._stopping = False
+        self._receipt_stop = asyncio.Event()
+        self._receipt_monitor = None
         self.failure = None
 
     @property
@@ -138,6 +140,7 @@ class R4ExecutionOwner:
 
     async def stop(self):
         self._stopping = True
+        self._receipt_stop.set()
         for session in self._sessions.values():
             session.stopped.set()
         # Only consumers are observers. A producer may already be in the
@@ -150,10 +153,35 @@ class R4ExecutionOwner:
         renewals = [s.renewal for s in self._sessions.values() if s.renewal is not None]
         if renewals:
             await asyncio.shield(asyncio.gather(*renewals, return_exceptions=True))
+        if self._receipt_monitor is not None:
+            # Retain a publication already in progress through shutdown.
+            await asyncio.shield(self._receipt_monitor)
         await self.events.stop()
         for task in tuple(self._producers):
             if task.done():
                 self._observe(task)
+
+    async def _observe_receipts(self):
+        from .r4_publications import refresh_receipt_facts
+        after = ""
+        try:
+            journal = await self.host.ensure_journal()
+            while not self._receipt_stop.is_set():
+                state = self.connection.state
+                after, frames = await refresh_receipt_facts(self.publications, journal,
+                    server_id=state.server_id, executor_id=state.executor_id, after=after,
+                    connection=(state.connection_id, state.connection_generation))
+                for frame in frames:
+                    await self.publish_receipt(frame)
+                    await asyncio.to_thread(self.publications.acknowledge, frame)
+                try:
+                    await asyncio.wait_for(self._receipt_stop.wait(), .25)
+                except TimeoutError:
+                    pass
+        except Exception as error:
+            if self.failure is None:
+                self.failure = error
+            await self.connection.close()
 
     def _observe(self, task):
         self._producers.discard(task)
@@ -197,6 +225,8 @@ class R4ExecutionOwner:
             await asyncio.to_thread(self.publications.record, receipt)
             await self.publish_receipt(receipt)
             await asyncio.to_thread(self.publications.acknowledge, receipt)
+            if self._receipt_monitor is None and not self._stopping:
+                self._receipt_monitor = asyncio.create_task(self._observe_receipts(), name="r4-receipt-observer")
             frame = item.frame
             key = ExecutionRuntimeKey(frame['server_id'],frame['executor_id'],frame['binding_id'],frame['session_id'])
             session = self._sessions.get(key)

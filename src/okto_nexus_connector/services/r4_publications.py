@@ -33,6 +33,30 @@ def _binding(store, http, server_id, executor_id, frame):
     return bindings[0], _identity(state, server_id, frame['agent_id'])
 
 
+async def refresh_receipt_facts(publications, journal, *, server_id, executor_id,
+                                after="", connection=None, require_current=None):
+    """Project newer durable Core facts, without invoking a runtime operation."""
+    page = await asyncio.to_thread(publications.watching, server_id, executor_id,
+                                   after=after, connection=connection)
+    advanced = []
+    for entry in page:
+        if require_current is not None:
+            await require_current()
+        binding, previous = entry["binding"], entry["receipt"]
+        source = binding["source"]
+        key = OperationKey(server_id, executor_id, source["operation_id"])
+        fact = await journal.get_receipt(key)
+        if fact is None:
+            continue
+        frame = project_r4_bound_receipt(binding, fact, key=key,
+                                         receipt_revision=previous["receipt_revision"] + 1)
+        if {**frame, "receipt_revision": previous["receipt_revision"]} == previous:
+            continue
+        await asyncio.to_thread(publications.record, frame)
+        advanced.append(frame)
+    return (page[-1]["metadata"]["operation_id"] if page else ""), advanced
+
+
 async def recover_publications(store, vault, http, *, server_id, executor_id,
                                require_current, clock=time.monotonic, journal=None, authorities=None):
     """Drain bounded ready pages before control negotiation, without Core effects.
@@ -59,6 +83,14 @@ async def recover_publications(store, vault, http, *, server_id, executor_id,
                     await asyncio.to_thread(publications.record, frame)
                 # Missing receipts remain unresolved; never infer NOT_SENT.
                 after = source['operation_id']
+    if journal is not None:
+        after = ""
+        for _ in range(32):
+            await require_current()
+            after, _ = await refresh_receipt_facts(publications, journal,
+                server_id=server_id, executor_id=executor_id, after=after, require_current=require_current)
+            if not after:
+                break
     authorities = {} if authorities is None else authorities
     for _ in range(32):
         await require_current()

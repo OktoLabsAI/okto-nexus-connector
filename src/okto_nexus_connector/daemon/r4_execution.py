@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import time
 
 from ..errors import ConnectorError
+from ..services.discovery_configuration import configured_candidates
 from ..services.executor_registration import _identity, _profile
 from ..services.r4_execution import R4ExecutionOwner
 from ..services.r4_tickets import acquire_ticket
@@ -71,7 +72,12 @@ class R4DaemonExecution:
 
     async def _candidates(self, frame):
         await self._current(frame)
-        candidates = tuple(await self.control.discover())
+        if self.control.discover is None:
+            snapshot = await asyncio.to_thread(self.control._snapshot)
+            candidates = tuple(await configured_candidates(snapshot[0].discovery_configuration))
+            await self.control._require(snapshot)
+        else:
+            candidates = tuple(await self.control.discover())
         await self._current(frame)
         return candidates
 

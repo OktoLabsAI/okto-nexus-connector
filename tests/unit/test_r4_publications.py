@@ -344,3 +344,108 @@ async def test_recovery_pages_more_than_256_receipts_without_reissuing_ticket(li
         server_id='srv', executor_id='exe', require_current=current)
     assert published.qsize() == 257 and keys == ['agent-key']
     assert not native.opened and not attached and not journal.pending('srv', 'exe')
+
+
+async def test_live_owner_publishes_late_core_terminal_fact_once(execution):
+    from dataclasses import replace
+    from nexus_connector_core import OperationKey
+    owner, connection, native, published, opening = execution
+    await connection.emit(opening)
+    await observed(published, owner)
+    await connection.emit(operation(opening, "turn.submit", {"text": "Complete this turn."}))
+    initial = await observed(published, owner)
+    assert initial["stage"] == "SUBMITTED" and initial["receipt_revision"] == 1
+    async with asyncio.timeout(3):
+        while owner.pending_count:
+            await asyncio.sleep(.01)
+    journal = await owner.host.ensure_journal()
+    key = OperationKey(opening["server_id"], opening["executor_id"], "turn.submit")
+    fact = await journal.get_receipt(key)
+    await journal.record_receipt(key, replace(fact, stage="SUCCEEDED"))
+    terminal = await observed(published, owner)
+    assert terminal["stage"] == "SUCCEEDED" and terminal["receipt_revision"] == 2
+    assert terminal["intent_hash"] == initial["intent_hash"]
+    assert len(native.native.sent) == 1
+    async with asyncio.timeout(3):
+        while owner.publications.pending(key.server_id, key.executor_id):
+            await asyncio.sleep(.01)
+    assert not owner.publications.watching(key.server_id, key.executor_id, after="open")
+    await asyncio.sleep(.55)
+    assert published.empty()
+
+
+@pytest.mark.parametrize("selection", [True], indirect=True)
+@pytest.mark.parametrize("loss", ["before_projection", "after_projection"])
+async def test_recovery_advances_acknowledged_fact_without_native_replay(lifecycle, loss):
+    from dataclasses import replace
+    from nexus_connector_core import OperationKey
+    owner, http, store, opening, native, _, published, _ = lifecycle
+    await owner.sync()
+    await owner.connection.emit(opening)
+    await observed(published, owner.owner)
+    await owner.connection.emit(operation(opening, "turn.submit", {"text": "Complete this turn."}))
+    first = await observed(published, owner.owner)
+    async with asyncio.timeout(3):
+        while owner.owner.pending_count:
+            await asyncio.sleep(.01)
+    journal = await owner.host.ensure_journal()
+    key = OperationKey(opening["server_id"], opening["executor_id"], "turn.submit")
+    if loss == "before_projection":
+        await owner.owner.stop()
+    else:
+        original = owner.owner.publish_receipt
+        async def unavailable(frame):
+            if frame["receipt_revision"] == 2:
+                raise OSError("The terminal receipt reply was lost.")
+            return await original(frame)
+        owner.owner.publish_receipt = unavailable
+    fact = await journal.get_receipt(key)
+    await journal.record_receipt(key, replace(fact, stage="SUCCEEDED"))
+    if loss == "after_projection":
+        await failed(owner.owner)
+        assert not owner.connection.online
+    async def current():
+        pass
+    await recover_publications(store, owner.vault, http, server_id=key.server_id,
+        executor_id=key.executor_id, require_current=current, journal=journal)
+    terminal = published.get_nowait()
+    assert terminal["stage"] == "SUCCEEDED" and terminal["receipt_revision"] == 2
+    assert terminal["intent_hash"] == first["intent_hash"]
+    assert len(native.native.sent) == 1
+    assert not R4PublicationStore.for_state(store).pending(key.server_id, key.executor_id)
+
+
+async def test_cancelled_shutdown_retains_late_receipt_publication(execution):
+    from dataclasses import replace
+    from nexus_connector_core import OperationKey
+    owner, connection, native, published, opening = execution
+    await connection.emit(opening)
+    await observed(published, owner)
+    await connection.emit(operation(opening, "turn.submit", {"text": "Complete this turn."}))
+    await observed(published, owner)
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = owner.publish_receipt
+    async def held(frame):
+        if frame["receipt_revision"] == 2:
+            entered.set()
+            await release.wait()
+        return await original(frame)
+    owner.publish_receipt = held
+    try:
+        journal = await owner.host.ensure_journal()
+        key = OperationKey(opening["server_id"], opening["executor_id"], "turn.submit")
+        fact = await journal.get_receipt(key)
+        await journal.record_receipt(key, replace(fact, stage="SUCCEEDED"))
+        await asyncio.wait_for(entered.wait(), 3)
+        stopping = asyncio.create_task(owner.stop())
+        await asyncio.sleep(.02)
+        stopping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+        assert not owner._receipt_monitor.done()
+        release.set()
+        await owner.stop()
+        assert (await observed(published, owner))["receipt_revision"] == 2
+        assert len(native.native.sent) == 1
+    finally:
+        release.set()

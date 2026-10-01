@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+keyring = ["keyring>=25,<26"]
 test = ["pytest>=8", "pytest-asyncio>=0.24", "build>=1"]
 
 [project.scripts]

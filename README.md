@@ -213,3 +213,22 @@ profile. They remain available after local workspace or binding mapping changes,
 subject to Server read authorization. Such queries do not reauthorize launch.
 Credential changes during a read discard the response; a later explicit query
 can use the newly imported current credential.
+
+### Protected OS credential storage
+
+Install the keyring extra to use the operating system credential store:
+
+~~~powershell
+python -m pip install "okto-nexus-connector[keyring]"
+~~~
+
+The keyring backend must be available and unlocked for the current OS account.
+Without it, restricted-file storage still requires explicit local approval.
+The real-provider acceptance campaign requires the OS keyring and does not
+approve plaintext fallback.
+
+Acknowledging a submitted receipt does not stop observation of the operation.
+The daemon reads subsequent durable Core facts and publishes increasing receipt
+revisions without re-executing the operation. Restart recovery also checks
+acknowledged nonterminal receipts. A lost publication remains durable, and
+shutdown retains any receipt publication already in progress.
