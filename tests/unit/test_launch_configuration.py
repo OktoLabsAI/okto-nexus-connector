@@ -48,10 +48,10 @@ def test_schema_seven_upgrade_preserves_existing_state():
     old = {"schema_version": 7, "connector_id": "existing",
            "preferences": {"keep": True}, "session_capabilities": []}
     state = state_from_json(old)
-    assert state.schema_version == 10
+    assert state.schema_version == 11
     assert state.connector_id == "existing" and state.preferences == {"keep": True}
     assert not state.launch_configurations and not state.session_capabilities
-    assert state_to_json(state)["schema_version"] == 10
+    assert state_to_json(state)["schema_version"] == 11
 
 
 def test_configuration_capacity_retains_existing_records(tmp_path):

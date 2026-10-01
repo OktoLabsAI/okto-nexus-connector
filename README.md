@@ -99,7 +99,7 @@ The --json and --non-interactive flags are available as global options.
 Configuration contains local paths and file identity only; remote inventory
 remains path-free. State schema 9 adds discovery configuration. Schema 8
 records migrate with no implicit discovery choices; older clients refuse
-schema 9 state. Runtime CLI admission and final release qualification remain under integration.
+schema 9 state. Runtime session reuse and final release qualification remain under integration.
 
 ### Launch consent and realization
 
@@ -136,7 +136,7 @@ persisted before HTTP and acknowledged after scope checks. No path or credential
 material is included in the realization response.
 
 The acknowledged realization remains pending binding approval. Use the binding commands below to obtain and apply a reviewable proposal.
-Runtime CLI admission and real remote provider qualification remain under
+Runtime session reuse and real remote provider qualification remain under
 integration; these commands do not imply runtime readiness.
 
 ### Review and apply an R4 binding
@@ -167,5 +167,43 @@ cannot silently replace a pending application.
 The acknowledged R4 binding and its local realization mapping commit atomically.
 This does not create a legacy binding, start a provider, grant runtime execution
 or infer an applied lease. Schema 10 stores these durable binding intents;
-older schemas migrate with no implicit proposals or approvals. R4 runtime CLI
-admission is the next integration step.
+older schemas migrate with no implicit proposals or approvals. Canonical runtime CLI admission is described below.
+
+
+### Canonical runtime intents
+
+An applied R4 alias selects its acknowledged binding and approved launch
+configuration. Start the daemon first; the CLI reserves and admits operations
+through Nexus. The Server dispatcher and daemon remain the execution owners.
+
+~~~powershell
+okto-nexus-connector runtime start assistant --new-session --client-intent-id OPEN_INTENT
+okto-nexus-connector runtime operation --alias assistant --client-intent-id OPEN_INTENT
+okto-nexus-connector runtime submit SESSION_ID "Your prompt" --alias assistant --client-intent-id TURN_INTENT
+okto-nexus-connector runtime stop SESSION_ID --alias assistant --client-intent-id CLOSE_INTENT --reason "Work completed."
+~~~
+
+Use a distinct client intent ID for each intended operation. After timeout,
+query the original intent or repeat exactly the same command and ID. The
+Connector persists the request digest before resolution and the exact
+resolution before admission. A changed request cannot overwrite that intent.
+A blocked resolution is returned with its blockers and produces no admission;
+its stable replay remains blocked. After resolving the reported cause, a new
+intent may be created explicitly. Never replace an uncertain admitted intent.
+
+Admission is not completion. The operation response includes the Server's
+admission state and receipt revision. Query it to observe progress. The CLI
+does not launch Core directly or infer an applied lease.
+
+R4 start currently requires --new-session and a separate submit command;
+automatic session reuse and combined initial text are not implemented yet.
+The project and harness come from the approved binding. Session controls accept
+an explicit --alias; a session previously resolved here can identify that alias
+when unambiguous. Steering and interruption accept --expected-turn-id or
+--current-run according to the adapter's control contract.
+
+Schema 11 retains runtime intents across restarts. Existing state migrates
+without implicit runtime authorization. Retention is currently bounded to
+32 intents and 3 MiB of state at resolution; archival/pruning remains pending.
+The complete R4 status/logs UI, automatic session reuse and real remote provider
+acceptance remain part of the delivery plan.

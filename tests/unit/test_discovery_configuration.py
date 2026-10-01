@@ -56,7 +56,7 @@ def test_schema_eight_migrates_without_implicit_discovery_authority(registered):
     record = asdict(registered.load().execution_executors[0])
     record.pop("discovery_configuration")
     state = state_from_json(dict(schema_version=8, execution_executors=[record]))
-    assert state.schema_version == 10
+    assert state.schema_version == 11
     assert state.execution_executors[0].discovery_configuration == {}
 
 

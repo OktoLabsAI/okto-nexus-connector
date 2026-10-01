@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -220,6 +220,20 @@ class BindingIntentRecord:
 
 
 @dataclass(slots=True)
+class RuntimeIntentRecord:
+    server_id: str
+    agent_id: str
+    alias: str
+    client_intent_id: str
+    request_digest: str
+    scope_digest: str
+    status: str = "RESOLVE_PENDING"
+    resolution: dict[str, Any] | None = None
+    resolution_digest: str = ""
+    operation: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
 class ConnectorState:
     schema_version: int = SCHEMA_VERSION
     connector_id: str = ""
@@ -232,6 +246,7 @@ class ConnectorState:
     session_capabilities: list[SessionCapabilityRecord] = field(default_factory=list)
     launch_configurations: list[LaunchConfigurationRecord] = field(default_factory=list)
     binding_intents: list[BindingIntentRecord] = field(default_factory=list)
+    runtime_intents: list[RuntimeIntentRecord] = field(default_factory=list)
     preferences: dict[str, Any] = field(default_factory=dict)
 
     # -- lookups ---------------------------------------------------------
@@ -367,6 +382,8 @@ def state_from_json(payload: dict[str, Any]) -> ConnectorState:
         state.launch_configurations.append(LaunchConfigurationRecord(**item))
     for item in payload.get("binding_intents", []):
         state.binding_intents.append(BindingIntentRecord(**item))
+    for item in payload.get("runtime_intents", []):
+        state.runtime_intents.append(RuntimeIntentRecord(**item))
     preferences = payload.get("preferences", {})
     if isinstance(preferences, dict):
         state.preferences = preferences
@@ -387,6 +404,7 @@ def state_to_json(state: ConnectorState) -> dict[str, Any]:
         "session_capabilities": [asdict(value) for value in state.session_capabilities],
         "launch_configurations": [asdict(value) for value in state.launch_configurations],
         "binding_intents": [asdict(value) for value in state.binding_intents],
+        "runtime_intents": [asdict(value) for value in state.runtime_intents],
         "preferences": state.preferences,
     }
 

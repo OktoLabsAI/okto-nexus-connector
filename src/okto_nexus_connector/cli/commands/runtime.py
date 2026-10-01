@@ -42,6 +42,44 @@ async def start_runtime(output: Output, root: Path, *, alias: str,
 
 async def run_runtime(args, output: Output, root: Path):
     sub = args.subcommand
+    from ...platform import paths
+    from ...storage.state_store import StateStore
+    store = StateStore(paths.state_file(root))
+    state = await asyncio.to_thread(store.load)
+    alias = getattr(args, "alias", None)
+    canonical = any(r.alias == alias for r in state.binding_intents) if alias else False
+    if not alias and sub in {"submit", "interrupt", "stop"}:
+        aliases = {r.alias for r in state.runtime_intents if r.resolution is not None and
+                   r.resolution.get("session_id") == args.session_id}
+        if len(aliases) > 1:
+            raise ConnectorError("OPERATION_CONFLICT", "runtime", "Select an explicit binding alias.")
+        if aliases:
+            alias, canonical = next(iter(aliases)), True
+    if canonical or sub in {"steer", "operation"} or (
+            sub in {"submit", "interrupt", "stop"} and alias is not None):
+        from .identity import _vault
+        from ...services.runtime_admission import RuntimeAdmission
+        service = RuntimeAdmission(store, _vault(root, store))
+        if sub == "operation":
+            return await service.inspect(alias=alias, client_intent_id=args.client_intent_id)
+        if sub == "start" and (args.project is not None or args.harness is not None):
+            raise ConnectorError("VALIDATION_ERROR", "runtime",
+                                 "Use the approved R4 binding configuration to start this runtime.")
+        expected = getattr(args, "expected_turn_id", None)
+        current = getattr(args, "current_run", False)
+        if expected and current:
+            raise ConnectorError("VALIDATION_ERROR", "runtime", "Select only one control target.")
+        target = dict(kind="native_turn_id" if expected else "current_run" if current else "none",
+                      expected_turn_id=expected)
+        result = await service.execute(alias=alias, client_intent_id=getattr(args, "client_intent_id", None),
+            intent={"start": "runtime.start", "submit": "turn.submit", "steer": "turn.steer",
+                    "interrupt": "turn.interrupt", "stop": "runtime.close"}[sub],
+            session_id=getattr(args, "session_id", None),
+            new_session=args.new_session if sub == "start" else None,
+            text=getattr(args, "reason", None) if sub in {"interrupt", "stop"} else getattr(args, "text", None),
+            target=target)
+        output.line(f"Runtime intent {result['client_intent_id']}: {result['state']}.")
+        return result
     if sub == "start":
         result = await start_runtime(
             output, root, alias=args.alias, project=args.project,

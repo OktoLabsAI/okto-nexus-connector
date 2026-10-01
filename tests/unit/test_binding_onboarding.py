@@ -154,7 +154,7 @@ async def test_proposal_mutation_is_not_application_authority(binding):
 
 def test_schema_nine_has_no_implicit_binding_intents():
     state = state_from_json({"schema_version": 9})
-    assert state.schema_version == 10 and not state.binding_intents and not state.execution_bindings
+    assert state.schema_version == 11 and not state.binding_intents and not state.execution_bindings
 
 
 async def test_local_acknowledgment_failure_keeps_one_recoverable_apply(binding, monkeypatch):

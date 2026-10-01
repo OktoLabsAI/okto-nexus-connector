@@ -1020,6 +1020,11 @@ class NexusHTTPClient:
                 "payload": payload,
             }, expect=(200, 202))
 
+    async def get_r4_operation(self, key: str, operation_id: str) -> dict[str, object]:
+        """Read canonical operation state with the negotiated R4 revision."""
+        return await self._request(
+            "GET", f"/v1/runtime/operations/{operation_id}", key=key, require_revision=True)
+
     async def get_operation(self, key: str, operation_id: str
                             ) -> dict[str, object]:
         return await self._request(

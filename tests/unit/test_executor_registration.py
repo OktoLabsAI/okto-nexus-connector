@@ -80,7 +80,7 @@ async def test_lost_response_replays_persisted_intent_and_bootstrap_stays_secret
     assert bootstrap.ticket not in repr(bootstrap)
     raw = store.path.read_text()
     assert 'nxt4_' not in raw and 'synthetic-canonical-key' not in raw
-    assert json.loads(raw)['schema_version'] == 10
+    assert json.loads(raw)['schema_version'] == 11
 
 
 @pytest.mark.parametrize('change', ['server_id', 'connector_id', 'registration_agent_id',
@@ -145,7 +145,7 @@ async def test_delayed_ticket_does_not_gain_a_new_local_lifetime(registration):
 
 def test_schema_four_upgrade_preserves_records_without_inventing_executor():
     state = state_from_json({'schema_version': 4, 'connector_id': 'existing', 'preferences': {'keep': True}})
-    assert state.schema_version == 10 and not state.execution_executors
+    assert state.schema_version == 11 and not state.execution_executors
     assert state_to_json(state)['preferences'] == {'keep': True}
 
 
