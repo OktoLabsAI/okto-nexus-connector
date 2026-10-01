@@ -303,3 +303,36 @@ async def test_claim_history_is_paged_without_inventing_release_proofs(control):
         assert refused.value.code == "STALE_GENERATION"
     finally:
         await dispose(owner,host)
+
+
+async def test_realization_outlives_cancelled_ipc_waiter_and_fences_bootstrap_rotation(control, monkeypatch):
+    from okto_nexus_connector.services.executor_onboarding import ExecutorOnboarding
+    owner, peer, store, host, _ = control
+    entered, release = asyncio.Event(), asyncio.Event()
+    applications = []
+    async def realize(self, *, bootstrap, require_current, **params):
+        entered.set()
+        await release.wait()
+        await require_current()
+        applications.append(bootstrap.ticket)
+        return {"realization_ref": "opaque"}
+    monkeypatch.setattr(ExecutorOnboarding, "realize", realize)
+    owner.start()
+    try:
+        await eventually(lambda: owner.status()["control_ready"])
+        observer = asyncio.create_task(owner.realize())
+        await asyncio.wait_for(entered.wait(), 3)
+        observer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await observer
+        assert len(owner._onboarding_tasks) == 1
+        peer.sockets[0].online = False
+        await eventually(lambda: owner.phase == "REGISTERING")
+        assert peer.calls == 1 and not applications
+        release.set()
+        await eventually(lambda: peer.calls == 2 and owner.status()["control_ready"])
+        assert applications == ["nxt4_synthetic_1"]
+        assert not owner._onboarding_tasks
+    finally:
+        release.set()
+        await dispose(owner, host)

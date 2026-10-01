@@ -94,6 +94,26 @@ def build_parser() -> argparse.ArgumentParser:
     executor_sub.add_parser("list", help="list local registration intents and executor IDs")
     executor_show = executor_sub.add_parser("show", help="show one Server's executor registration")
     executor_show.add_argument("server_id")
+
+    launch = executor_sub.add_parser("configure-launch", help="stage local launch consent without starting a runtime")
+    launch.add_argument("--identity", required=True)
+    launch.add_argument("--harness", required=True)
+    launch.add_argument("--local-consent-id", required=True)
+    launch.add_argument("--profile-revision", type=int, required=True)
+    launch.add_argument("--provider-home", type=Path, default=None,
+                        help="explicitly approved existing provider login directory")
+    launch.add_argument("--secret-ref", action="append", default=[], metavar="NAME=REFERENCE",
+                        help="protected vault/provider reference; never credential material")
+    realize = executor_sub.add_parser("realize", help="publish this executor workspace and selected installation")
+    realize.add_argument("--identity", required=True)
+    realize.add_argument("--client-intent-id", required=True, help="reuse this ID after a lost response")
+    realize.add_argument("--harness", required=True)
+    realize.add_argument("--candidate-ref", required=True)
+    realize.add_argument("--inventory-revision", required=True)
+    realize.add_argument("--configuration-digest", required=True)
+    realize.add_argument("--project", type=Path, required=True)
+    realize.add_argument("--workspace-id", default=None)
+    realize.add_argument("--label", required=True)
     discovery = executor_sub.add_parser("configure-discovery",
         help="replace the Server executor local passive discovery configuration")
     discovery.add_argument("--server-id", required=True)

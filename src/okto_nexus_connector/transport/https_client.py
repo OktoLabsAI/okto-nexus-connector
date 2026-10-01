@@ -520,6 +520,25 @@ class NexusHTTPClient:
             fresh_for_ms=payload["fresh_for_ms"],
         )
 
+    async def read_r4_inventory(self, key: str, *, server_id: str, executor_id: str) -> dict:
+        """Read the daemon publication; this never grants runtime readiness."""
+        from nexus_connector_core import CoreError, verify_executor_inventory_snapshot
+        payload = await self._request("GET", f"/v1/runtime/executors/{executor_id}/inventory",
+                                      key=key, require_revision=True)
+        snapshot = payload.get("snapshot")
+        if (not isinstance(snapshot, dict) or snapshot.get("server_id") != server_id or
+                snapshot.get("executor_id") != executor_id or
+                payload.get("freshness") not in ("FRESH", "STALE", "OFFLINE") or
+                type(payload.get("eligible_for_new_start")) is not bool):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "inventory",
+                                 "Server returned an invalid executor inventory view.")
+        try:
+            verify_executor_inventory_snapshot(snapshot)
+        except (CoreError, TypeError, ValueError):
+            raise ConnectorError("VERSION_INCOMPATIBLE", "inventory",
+                                 "Server returned invalid inventory evidence.") from None
+        return payload
+
     async def publish_r4_realization(
             self, ticket: str, *, executor_id: str,
             request: dict[str, object]) -> R4Realization:

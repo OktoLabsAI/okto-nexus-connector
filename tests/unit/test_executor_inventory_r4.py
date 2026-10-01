@@ -66,3 +66,28 @@ def test_remote_executor_resolves_exact_displayed_installation(tmp_path):
             [replace(candidates[0], fingerprint="sha256:" + "c" * 64),
              candidates[1]], adapter_id="codex_app_server",
             candidate_ref=ref_b, expected_inventory_revision=revision)
+
+
+@pytest.mark.parametrize("change", [None, "server", "executor", "revision", "freshness"])
+async def test_authenticated_inventory_view_checks_scope_and_core_evidence(change):
+    import httpx
+    from okto_nexus_connector.transport.https_client import NexusHTTPClient, MANAGEMENT_REVISION
+    snapshot = executor_inventory_snapshot([], server_id="server", executor_id="executor",
+        producer_instance_id="daemon", publication_sequence=1)
+    payload = dict(snapshot=snapshot, freshness="OFFLINE", eligible_for_new_start=False)
+    if change == "server": snapshot["server_id"] = "other"
+    elif change == "executor": snapshot["executor_id"] = "other"
+    elif change == "revision": snapshot["inventory_revision"] = "sha256:" + "a" * 64
+    elif change == "freshness": payload["freshness"] = "READY"
+    def respond(request):
+        assert request.method == "GET" and request.headers["Authorization"] == "Bearer technical-key"
+        return httpx.Response(200, json=payload, headers={"X-Nexus-Connections-Revision": MANAGEMENT_REVISION})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        async with NexusHTTPClient("https://nexus.test", client=client) as http:
+            if change is None:
+                view = await http.read_r4_inventory("technical-key", server_id="server", executor_id="executor")
+                assert view["freshness"] == "OFFLINE" and view["eligible_for_new_start"] is False
+            else:
+                with pytest.raises(ConnectorError) as error:
+                    await http.read_r4_inventory("technical-key", server_id="server", executor_id="executor")
+                assert error.value.code == "VERSION_INCOMPATIBLE"

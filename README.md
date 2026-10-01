@@ -101,3 +101,41 @@ remains path-free. State schema 9 adds discovery configuration. Schema 8
 records migrate with no implicit discovery choices; older clients refuse
 schema 9 state. Full R4 realization/configuration onboarding is still being
 integrated.
+
+### Launch consent and realization
+
+Stage explicit local launch consent using an imported identity on the registered
+Server. The configuration digest binds the identity, executor, adapter, consent
+ID, profile revision, protected secret references and optional provider login
+directory. This command does not read credentials or start a provider.
+
+~~~powershell
+okto-nexus-connector executor configure-launch --identity SUBJECT --harness codex_app_server --local-consent-id CONSENT_ID --profile-revision 1 --provider-home "C:/Users/USER"
+~~~
+
+Use --secret-ref NAME=vault:HANDLE (repeatable) when a protected provider secret
+reference is needed. Plaintext credentials are refused. The provider home is
+optional and must be explicitly chosen if an existing login is to be used.
+
+Start the daemon so it publishes the configured inventory. Select the opaque
+candidate_ref and executor_revision returned by the discovery preview:
+
+~~~powershell
+okto-nexus-connector daemon start
+okto-nexus-connector discover --server-id SERVER_ID
+okto-nexus-connector executor realize --identity SUBJECT --client-intent-id REALIZATION_INTENT --harness codex_app_server --candidate-ref CANDIDATE_REF --inventory-revision INVENTORY_REVISION --configuration-digest CONFIGURATION_DIGEST --project "D:/Projects/Workspace" --label "Workspace"
+~~~
+
+The realization command sends an authenticated local IPC request to the daemon.
+The daemon owns the scoped bootstrap ticket and serializes realization publication
+with ticket rotation. It remains the inventory publisher, checks its authenticated
+inventory and publishes only opaque realization evidence. Disconnecting the CLI
+does not cancel the retained publication; reuse the same intent to recover its result.
+Use --workspace-id to select an existing logical workspace. Reuse the same
+client intent and identical arguments after a lost response. Local mappings are
+persisted before HTTP and acknowledged after scope checks. No path or credential
+material is included in the realization response.
+
+The acknowledged realization remains pending binding approval. Public binding
+prepare/apply onboarding and real remote provider journeys remain under
+integration; these commands do not imply runtime readiness.

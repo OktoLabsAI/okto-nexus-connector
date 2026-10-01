@@ -12,6 +12,36 @@ from .identity import _vault
 
 async def run_executor(args, output, root):
     store = StateStore(paths.state_file(root))
+    if args.subcommand in ("configure-launch", "realize"):
+        from ...services.executor_onboarding import ExecutorOnboarding
+        service = ExecutorOnboarding(store)
+        if args.subcommand == "configure-launch":
+            bindings = {}
+            for entry in args.secret_ref:
+                name, separator, reference = entry.partition("=")
+                if not separator or name in bindings:
+                    raise ConnectorError("VALIDATION_ERROR", "executor_onboarding",
+                                         "Each secret reference must have a unique NAME=REFERENCE value.")
+                bindings[name] = reference
+            result = await service.configure_launch(identity_alias=args.identity, adapter_id=args.harness,
+                local_consent_id=args.local_consent_id, profile_revision=args.profile_revision,
+                secret_bindings=bindings, provider_home=args.provider_home)
+            output.line("Launch consent staged. Publish the realization and obtain binding approval before execution.")
+            return asdict(result)
+        from ...daemon import manager
+        def publish():
+            with manager.connect(root) as client:
+                response = client.call("executor.realize", dict(identity_alias=args.identity,
+                    client_intent_id=args.client_intent_id, adapter_id=args.harness,
+                    candidate_ref=args.candidate_ref, inventory_revision=args.inventory_revision,
+                    configuration_digest=args.configuration_digest, workspace_root=str(args.project),
+                    workspace_id=args.workspace_id, workspace_label=args.label))
+            if not response.get("ok"):
+                raise ConnectorError.from_json(response.get("error", {}))
+            return dict(response.get("result", {}))
+        result = await asyncio.to_thread(publish)
+        output.line("Realization published. Binding approval and runtime authority are still required.")
+        return result
     if args.subcommand == 'configure-discovery':
         from ...services.discovery_configuration import configure_discovery
         configuration = await asyncio.to_thread(configure_discovery, store,

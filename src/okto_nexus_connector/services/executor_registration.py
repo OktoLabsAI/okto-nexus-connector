@@ -117,7 +117,8 @@ class ExecutorRegistrationService:
         if (state.connector_id != record.connector_id or
                 _identity(state, record.server_id, record.registration_agent_id) != identity or
                 _profile(state, record.server_id) != profile or
-                replace(current, state=record.state, executor_id=record.executor_id) != record or
+                replace(current, state=record.state, executor_id=record.executor_id,
+                        inventory_publication_sequence=record.inventory_publication_sequence) != record or
                 current.state not in ('REGISTRATION_PENDING', 'REGISTERED') or
                 (record.executor_id and current.executor_id != record.executor_id)):
             raise ConnectorError('OPERATION_CONFLICT', 'executor_registration',

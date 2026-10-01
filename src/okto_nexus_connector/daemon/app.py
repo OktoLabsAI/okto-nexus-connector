@@ -808,6 +808,20 @@ class DaemonApp:
                 "bindings": len(state.bindings),
                 "identities": len(state.identities),
             })
+        elif op == "executor.realize":
+            required = {"identity_alias", "client_intent_id", "adapter_id", "candidate_ref",
+                        "inventory_revision", "configuration_digest", "workspace_root",
+                        "workspace_id", "workspace_label"}
+            if self._draining or set(params) != required:
+                raise ConnectorError("VALIDATION_ERROR", "executor_onboarding",
+                                     "The realization request is invalid or the daemon is draining.")
+            state = await asyncio.to_thread(self.store.load)
+            identities = [r for r in state.identities if r.alias == params["identity_alias"] and not r.revoked]
+            control = self.r4_controls.get(identities[0].server_id) if len(identities) == 1 else None
+            if control is None:
+                raise ConnectorError("EXECUTOR_OFFLINE", "executor_onboarding",
+                                     "Start the registered executor daemon before publishing a realization.")
+            yield response_ok(request.seq, await control.realize(**params))
         elif op == "runtime.start":
             yield response_ok(request.seq, await self.runtimes.start(
                 alias=str(params.get("alias", "")),

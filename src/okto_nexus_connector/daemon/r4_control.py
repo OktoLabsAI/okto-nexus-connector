@@ -76,6 +76,9 @@ class R4DaemonControl:
         self._retained_lanes = {}
         self.cleanup_pending = False
         self._stopped = asyncio.Event()
+        self._bootstrap_gate = asyncio.Lock()
+        self._bootstrap = None
+        self._onboarding_tasks = set()
 
     def start(self):
         if self._task is not None or self._stopped.is_set():
@@ -89,6 +92,36 @@ class R4DaemonControl:
             await self.connection.close()
         if self._task is not None:
             await asyncio.shield(self._task)
+        await asyncio.gather(*tuple(self._onboarding_tasks), return_exceptions=True)
+
+    async def realize(self, **params):
+        if self._stopped.is_set():
+            raise ConnectorError("RUNTIME_DRAINING", "executor_onboarding",
+                                 "The executor cannot accept another onboarding request.")
+        if len(self._onboarding_tasks) >= 16:
+            raise ConnectorError("CAPACITY_EXCEEDED", "executor_onboarding",
+                                 "The executor onboarding capacity is exhausted.")
+        task = asyncio.create_task(self._realize_owned(params), name="r4-realization-" + self.server_id)
+        self._onboarding_tasks.add(task)
+        def done(value):
+            self._onboarding_tasks.discard(value)
+            if not value.cancelled():
+                value.exception()
+        task.add_done_callback(done)
+        return await asyncio.shield(task)
+
+    async def _realize_owned(self, params):
+        from ..services.executor_onboarding import ExecutorOnboarding
+        async with self._bootstrap_gate:
+            snapshot = await asyncio.to_thread(self._snapshot)
+            await self._require(snapshot)
+            bootstrap = self._bootstrap
+            if bootstrap is None or self.clock() >= bootstrap.deadline_monotonic:
+                raise ConnectorError("EXECUTOR_OFFLINE", "executor_onboarding",
+                                     "Wait for the daemon executor bootstrap before publishing a realization.")
+            service = ExecutorOnboarding(self.store, self.vault, http_factory=self.http_factory, clock=self.clock)
+            return await service.realize(**params, bootstrap=bootstrap,
+                                         require_current=lambda: self._require(snapshot))
 
     def status(self):
         connection = self.connection
@@ -199,7 +232,10 @@ class R4DaemonControl:
             protocol = await http.r4_protocol()
             await self._require(snapshot)
             self.phase = 'REGISTERING'
-            bootstrap = await self.registration.bootstrap(server_id=self.server_id)
+            async with self._bootstrap_gate:
+                await self._require(snapshot)
+                bootstrap = await self.registration.bootstrap(server_id=self.server_id)
+                self._bootstrap = bootstrap
             # Pending registration can now have a canonical result. All other
             # registration content, identity and origin must remain pinned.
             expected = (replace(record, state='REGISTERED', executor_id=bootstrap.executor.executor_id),

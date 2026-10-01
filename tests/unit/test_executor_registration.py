@@ -147,3 +147,27 @@ def test_schema_four_upgrade_preserves_records_without_inventing_executor():
     state = state_from_json({'schema_version': 4, 'connector_id': 'existing', 'preferences': {'keep': True}})
     assert state.schema_version == 9 and not state.execution_executors
     assert state_to_json(state)['preferences'] == {'keep': True}
+
+
+async def test_concurrent_inventory_sequence_does_not_change_registration_authority(registration):
+    store, peer, service = registration
+    await service.register(identity_alias="selected", label="Host")
+    async def publish():
+        store.update(lambda state: setattr(state.execution_executors[0], "inventory_publication_sequence", 17))
+    peer.during_request = publish
+    result = await service.bootstrap(server_id="srv")
+    assert result.executor.executor_id == "executor"
+    assert result.executor.inventory_publication_sequence == 17
+    assert store.load().execution_executors[0].inventory_publication_sequence == 17
+
+
+async def test_discovery_configuration_change_still_refuses_registration_result(registration):
+    store, peer, service = registration
+    await service.register(identity_alias="selected", label="Host")
+    async def change():
+        store.update(lambda state: setattr(state.execution_executors[0], "discovery_configuration",
+            {"format_version": 1, "roots": [], "pi_install_root": None, "pi_node": None}))
+    peer.during_request = change
+    with pytest.raises(ConnectorError) as error:
+        await service.bootstrap(server_id="srv")
+    assert error.value.code == "OPERATION_CONFLICT"
