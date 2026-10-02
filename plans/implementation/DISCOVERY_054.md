@@ -25,6 +25,14 @@ CLI on this development machine separately resolves an editable Connector with
 old Core 0.2.10 and raises ImportError. The repaired CLI was tested in an isolated
 installed environment; that global installation was not silently replaced.
 
+A subsequent fresh Windows Python 3.13.1 venv installed the two wheels and their
+declared dependencies, with no editable package or checkout import. The real CLI
+ran from a temporary independent directory and again found exactly the three
+providers in 13.50 seconds. Every installed Python file matched the wheels and
+`uv pip check` passed. The path-free measured result is retained in
+`evidence/discovery-054-clean-windows.json`. This is a single local discovery
+measurement, not the final M13 installation/provider matrix.
+
 Installed discovery/configuration/catalog regression: Windows Python 3.13.1:
 36 passed, one platform skip; Linux Python 3.12.13: 34 passed, three platform skips.
 Evidence: `evidence/discovery-054-windows.xml`, `evidence/discovery-054-linux.xml`.
