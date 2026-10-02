@@ -140,24 +140,9 @@ async def inventory_candidates(adapter_ids=None, *, extra=()) -> list:
         adapter_ids = tuple(
             descriptor.adapter_id for descriptor in
             catalog_runtimes(discoverable_only=True))
-    found: list = []
-    for adapter_id in adapter_ids:
-        try:
-            candidates = await asyncio.to_thread(
-                discover_path, adapter_id)
-        except CoreError:
-            continue
-        found.extend(candidates)
-    # Passive npm-shim resolution on Windows (Core 0.2.0): .cmd wrappers
-    # are parsed, never executed; only the two documented shim shapes
-    # yield candidates, everything else is refused honestly.
-    if os.name == "nt":
-        for adapter_id in adapter_ids:
-            for candidate in await asyncio.to_thread(
-                    shim_candidates, adapter_id):
-                if all(entry.executable != candidate.executable
-                       for entry in found):
-                    found.append(candidate)
+    from nexus_connector_core import discover_installations
+    inventory = await asyncio.to_thread(discover_installations, adapter_ids=tuple(adapter_ids))
+    found = list(inventory.candidates)
     for candidate in extra:
         if all(entry.executable != candidate.executable
                or entry.launch_script != candidate.launch_script

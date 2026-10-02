@@ -103,6 +103,12 @@ okto-nexus-connector --json discover
 The standalone preview does not load a registered executor's approved roots.
 Use `discover --server-id SERVER_ID` for that executor's persisted configuration.
 A running desktop application alone does not establish a discoverable CLI.
+Core 0.2.54 also observes unapproved PATH installations: they remain `untrusted`
+with `selection_required`, rather than being reported as absent. On Windows,
+discovery reads known Codex npm native payloads and Pi npm/managed release layouts
+without executing their shell or JavaScript launchers. Unrecognized custom
+wrappers are not interpreted. Pi identity includes Node and the package dependency
+closure, so its first scan can take longer than a simple command lookup.
 
 When the Server advertises `inventory_refresh_supported`, a reconciled daemon
 checks for passive inventory refresh requests every five seconds. It claims a
@@ -121,12 +127,12 @@ okto-nexus-connector discover --server-id SERVER_ID
 okto-nexus-connector executor show SERVER_ID
 ~~~
 
-The --harness-root option is repeatable (up to 32 directories). It approves
-passive discovery of binaries found on PATH inside those directories; it does
+The --harness-root option is repeatable (up to 32 directories). It marks
+installations inside those directories as locally selected; it does
 not add directories to PATH. Paths must be existing absolute paths. Directory
 identity is checked again before discovery and daemon control operations.
 
-For Pi release layouts, also supply --pi-install-root and --pi-node together.
+For explicit Pi release selection, supply --pi-install-root and --pi-node together.
 The named Node file may be outside the release directory; only that exact file
 is approved in addition to the release root. Discovery never executes it.
 Full Node/CLI candidate identity is preserved through the public Core facade.

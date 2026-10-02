@@ -43,9 +43,10 @@ all required checks. Neither a VM nor a container controls native Mac processes.
 
 Discovery and containment are separate. A running provider process is not
 proof of an installed, approved executable candidate. Passive PATH discovery
-lists candidates under the current trust policy and does not execute binaries.
-For R4, configure the executor's approved harness roots; these restrict PATH
-discovery and do not add directories to PATH. An explicit `--executable` selects
+lists installed candidates and does not execute binaries. Unapproved candidates
+retain `untrusted` / `selection_required`; discovery alone cannot prepare a launch.
+For R4, configure the executor's approved harness roots; these establish local
+selection and do not add directories to PATH. An explicit `--executable` selects
 a file for the applicable CLI flow but does not bypass containment, build
 qualification or approval. `NOT_INSTALLED` / `no_installed_candidate` means the
 inventory found no candidate; it is not by itself evidence that containment

@@ -41,7 +41,10 @@ owner. Reconnection requires reconciliation before productive dispatch.
 
 ## Installation and workspace selection
 
-Discovery is passive and constrained by locally approved roots. The Server stores
+Discovery is passive. PATH observations remain untrusted unless their physical
+targets are inside locally approved roots; execution still requires qualification
+and an approved binding. Known Windows package layouts are read without running
+their wrappers. The Server stores
 path-free catalog/availability evidence and does not inspect remote files or
 requalify a remote installation using the Server's operating system.
 
