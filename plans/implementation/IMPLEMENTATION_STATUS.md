@@ -2,6 +2,13 @@
 
 ## Core .56 POSIX discovery adoption
 
+The updated open issues are reconciled in [the October 2 report](ISSUES_20261002.md).
+Issue #2's human summary now distinguishes host containment from adapter OS
+support and retains found/untrusted facts; 52 installed checks passed per OS.
+Issue #1 now links Core #1 and an unprototyped macOS plan, still dependent on a
+maintainer decision and native qualification. IPC/state documentation is aligned
+with current code. Hosted CI is deferred by explicit user direction.
+
 The Connector now pins Core .56 (7a964db) and its exact reviewed wheel.
 Installed discovery/inventory/diagnostic checks passed 48 cases on each of
 Windows and WSL Linux. Compact human output and full JSON are preserved.

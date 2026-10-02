@@ -15,17 +15,19 @@ from ..output import Output
 
 def _human_status(row):
     reasons = row.get("reasons", ())
-    if ("containment_unavailable:platform" in reasons or
-            any(reason.startswith("platform_not_implemented:") for reason in reasons)):
-        return "Unsupported on this OS"
     if row.get("state") == "NOT_INSTALLED":
         return "Not detected"
+    if any(reason.startswith("platform_not_implemented:") for reason in reasons):
+        return "Harness unsupported on this OS"
+    if "containment_unavailable:platform" in reasons:
+        return "Host containment unavailable" + (
+            "; untrusted" if "selection_required" in reasons else "")
     if row.get("containment") == "unavailable":
         return "Host check failed"
     if row.get("state") == "NOT_PROBED" and "selection_required" in reasons:
         return "Needs selection and probe"
     return {
-        "UNSUPPORTED_PLATFORM": "Unsupported on this OS",
+        "UNSUPPORTED_PLATFORM": "Harness unsupported on this OS",
         "NOT_PROBED": "Needs version check",
         "UNQUALIFIED_BUILD": "Build not qualified",
         "CONTAINMENT_UNAVAILABLE": "Host check failed",
@@ -38,10 +40,12 @@ def render_summary(result, output: Output, *, harness=None):
     """One human-readable row per Core-assessed family; no new discovery."""
     candidates = result["candidates"]
     families = {}
+    host_unsupported = False
     for row in result["availability"]["rows"]:
         adapter = row["adapter_id"]
         if harness and adapter != harness:
             continue
+        host_unsupported |= "containment_unavailable:platform" in row.get("reasons", ())
         family = families.setdefault(adapter, {"name": row["display_name"], "states": set()})
         family["states"].add(_human_status(row))
     rows = []
@@ -60,6 +64,8 @@ def render_summary(result, output: Output, *, harness=None):
         output.line(line(row))
     output.line("")
     output.line("Discovery starts nothing; runtime approval is separate.")
+    if host_unsupported:
+        output.line("Managed execution is unavailable on this host. See docs/runbook.md#unsupported-executor-platform.")
     if not candidates:
         output.line("No installations detected. Check local CLI paths and discovery configuration.")
     output.line("Use --verbose for installation details, or --json for automation.")

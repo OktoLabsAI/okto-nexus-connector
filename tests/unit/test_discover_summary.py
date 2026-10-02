@@ -62,6 +62,43 @@ def test_filter_and_unsupported_host_are_explicit(inventory, capsys):
     inventory['availability']['rows'].pop(1)
     assert main(['discover', '--harness', 'codex_app_server', '--server-id', 'first']) == 0
     text = capsys.readouterr().out
-    assert 'Unsupported on this OS' in text
+    assert 'Host containment unavailable; untrusted' in text
+    assert 'docs/runbook.md#unsupported-executor-platform' in text
     assert 'Pi (Node RPC)' not in text
     assert 'Technically ready' not in text
+
+
+@pytest.mark.parametrize('verbose', [False, True])
+def test_found_untrusted_host_unsupported_keeps_json_facts(inventory, capsys, verbose):
+    row = inventory['availability']['rows'][0]
+    row.update(containment='unavailable')
+    row['reasons'].append('containment_unavailable:platform')
+    inventory['availability']['rows'].pop(1)
+    inventory['candidates'] = [dict(inventory['candidates'][0], trust='untrusted')]
+    assert main(['--json', 'discover', *(['--verbose'] if verbose else [])]) == 0
+    assert json.loads(capsys.readouterr().out) == inventory
+    assert main(['discover']) == 0
+    text = capsys.readouterr().out
+    line = next(line for line in text.splitlines() if 'Codex (app-server)' in line)
+    assert '1' in line and 'Host containment unavailable; untrusted' in line
+    assert 'Harness unsupported' not in text
+
+
+def test_adapter_os_support_is_distinct_from_host_containment(inventory, capsys):
+    row = inventory['availability']['rows'][0]
+    row['reasons'] = ['platform_not_implemented:darwin']
+    row['state'] = 'UNSUPPORTED_PLATFORM'
+    inventory['availability']['rows'].pop(1)
+    assert main(['discover']) == 0
+    text = capsys.readouterr().out
+    assert 'Harness unsupported on this OS' in text
+    assert 'Host containment unavailable' not in text
+    assert 'unsupported-executor-platform' not in text
+
+
+def test_missing_installation_and_filtered_host_do_not_claim_harness_unsupported(inventory, capsys):
+    inventory['availability']['rows'][0]['reasons'].append('containment_unavailable:platform')
+    assert main(['discover', '--harness', 'pi_rpc']) == 0
+    text = capsys.readouterr().out
+    assert 'Not detected' in text
+    assert 'containment' not in text and 'unsupported-executor-platform' not in text

@@ -52,6 +52,21 @@ qualification or approval. `NOT_INSTALLED` / `no_installed_candidate` means the
 inventory found no candidate; it is not by itself evidence that containment
 filtered one out. See [discovery configuration](../README.md#persisted-r4-executor-discovery).
 
+In the summary table, `Host containment unavailable` describes this host's
+missing containment backend, not a provider's OS support. `Found: 1` still means
+an installation was discovered; `untrusted` means local selection is pending.
+`Harness unsupported on this OS` instead describes adapter platform support.
+Use `discover --verbose` for the separate technical reasons.
+
+macOS uses the existing POSIX state layout: `$XDG_STATE_HOME/okto-nexus-connector`
+when set, otherwise `~/.local/state/okto-nexus-connector`. `--state-dir` or
+`OKTO_NEXUS_CONNECTOR_STATE` selects an explicit root. Keep the same root for CLI,
+daemon and service; changing it selects another local trust domain and does not
+migrate identities or ownership. The IPC implementation uses AF_UNIX on macOS
+when available. Neither this transport nor the state layout qualifies native
+managed execution. The existing launchd service plan still needs current-macOS
+validation; see [the macOS tracking issue](https://github.com/OktoLabsAI/okto-nexus-connector/issues/1).
+
 ## First use: import an existing canonical key
 
 Import the existing agent key through the masked prompt or an explicitly selected

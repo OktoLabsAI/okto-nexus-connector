@@ -1,7 +1,7 @@
 """Authenticated local IPC server (plan C02.2/C02.4).
 
 Transport: an AF_UNIX stream socket with per-user permissions where
-supported (Linux; macOS and Windows fall back), otherwise a loopback-only
+supported (non-Windows platforms with AF_UNIX, including macOS), otherwise a loopback-only
 TCP socket. The loopback variant is bound to 127.0.0.1, uses an ephemeral
 port published only in the per-user readiness file and requires a 256-bit
 connection token stored with user-only permissions — qualified as

@@ -111,6 +111,10 @@ okto-nexus-connector --json discover
 
 `--verbose` also works with `--server-id` and `--harness`. JSON output retains
 the complete structured inventory regardless of `--verbose`.
+`Host containment unavailable` means the Connector cannot own managed processes
+on this host; the `Found` count still reports detected installations. An
+`untrusted` suffix means explicit selection is also required. This is distinct
+from `Harness unsupported on this OS`, which concerns the adapter itself.
 Zero candidates means none were found under the current discovery policy;
 it does not establish that a provider is absent or that networking failed.
 On Windows, inspect the local command locations without running a provider:
