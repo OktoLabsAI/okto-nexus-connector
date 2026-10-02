@@ -141,7 +141,11 @@ def operation(opening, action, payload, **extra):
 
 
 async def observed(queue, owner):
-    observation = asyncio.timeout(3)
+    # This is a deadlock watchdog, not a receipt-latency requirement. The
+    # installed Core opens durable journals in worker threads; hosted Windows
+    # runners can spend over three seconds there before native execution.
+    # Runtime lease/close deadlines remain independently enforced and tested.
+    observation = asyncio.timeout(15)
     try:
         async with observation:
             while queue.empty():
@@ -149,14 +153,14 @@ async def observed(queue, owner):
                     raise owner.failure
                 # Producers perform journal and filesystem work in worker threads.
                 # A zero-delay spin contends for the GIL without observing any
-                # additional state. Keep the same three-second deadline.
+                # additional state.
                 await asyncio.sleep(.005)
             return queue.get_nowait()
     except TimeoutError as error:
         if not observation.expired():
             raise
         raise AssertionError(
-            "Receipt exceeded the existing three-second observation limit.\n"
+            "Receipt exceeded the fifteen-second test watchdog.\n"
             + pending_task_locations()) from error
 
 
