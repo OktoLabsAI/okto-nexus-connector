@@ -6,9 +6,12 @@ Pi and Claude Code run, imports canonical agent credentials, binds
 identity/harness/project and administers managed runtimes through
 [`nexus-connector-core`](https://github.com/OktoLabsAI/okto-nexus-connector-core).
 
+**Managed execution hosts currently require Windows or Linux.** Native macOS
+execution is unsupported; see [platform support](#platform-support-before-installation).
+
 - Distribution `okto-nexus-connector`, import `okto_nexus_connector`,
   Python ≥ 3.11, entry point `okto-nexus-connector`, consuming
-  `nexus-connector-core==0.2.53.dev0` (public `create_runtime`
+  `nexus-connector-core==0.2.55.dev0` (public `create_runtime`
   composition).
 - **No MCP implementation of any transport.** Harness MCP clients talk
   directly to the Nexus Server over HTTP; the connector only *configures*
@@ -36,6 +39,9 @@ executor and verify every containment requirement. Containers may restrict
 required kernel capabilities and are not automatically qualified. A Linux
 guest cannot manage or attach to a native macOS provider process.
 See the [platform runbook](docs/runbook.md#unsupported-executor-platform).
+Future native macOS containment remains an open design decision tracked in
+[issue #1](https://github.com/OktoLabsAI/okto-nexus-connector/issues/1); no native
+macOS release support is promised by the current build.
 
 ## What it does
 
@@ -91,6 +97,20 @@ addendum — Copyright 2026 Okto Labs (same licensor decision as
 
 `discover` inventories provider installations on the computer running the
 Connector. It does not search the LAN for Nexus servers or other Connectors.
+The default display is a compact table: one row per known managed harness,
+the number of installations found and a readable technical status. Multiple
+installations are counted separately; mixed readiness requires reviewing the
+details. A ready technical status is not runtime authorization. To inspect paths,
+versions, fingerprints, selection references and all diagnostic reasons:
+
+~~~powershell
+okto-nexus-connector discover
+okto-nexus-connector discover --verbose
+okto-nexus-connector --json discover
+~~~
+
+`--verbose` also works with `--server-id` and `--harness`. JSON output retains
+the complete structured inventory regardless of `--verbose`.
 Zero candidates means none were found under the current discovery policy;
 it does not establish that a provider is absent or that networking failed.
 On Windows, inspect the local command locations without running a provider:

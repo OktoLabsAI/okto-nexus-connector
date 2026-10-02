@@ -13,6 +13,58 @@ from ...services.discovery_service import (
 from ..output import Output
 
 
+def _human_status(row):
+    reasons = row.get("reasons", ())
+    if ("containment_unavailable:platform" in reasons or
+            any(reason.startswith("platform_not_implemented:") for reason in reasons)):
+        return "Unsupported on this OS"
+    if row.get("state") == "NOT_INSTALLED":
+        return "Not detected"
+    if row.get("containment") == "unavailable":
+        return "Host check failed"
+    if row.get("state") == "NOT_PROBED" and "selection_required" in reasons:
+        return "Needs selection and probe"
+    return {
+        "UNSUPPORTED_PLATFORM": "Unsupported on this OS",
+        "NOT_PROBED": "Needs version check",
+        "UNQUALIFIED_BUILD": "Build not qualified",
+        "CONTAINMENT_UNAVAILABLE": "Host check failed",
+        "PREPARATION_REQUIRED": "Needs local preparation",
+        "READY_FOR_RUNTIME": "Technically ready",
+    }.get(row.get("state"), "Needs review")
+
+
+def render_summary(result, output: Output, *, harness=None):
+    """One human-readable row per Core-assessed family; no new discovery."""
+    candidates = result["candidates"]
+    families = {}
+    for row in result["availability"]["rows"]:
+        adapter = row["adapter_id"]
+        if harness and adapter != harness:
+            continue
+        family = families.setdefault(adapter, {"name": row["display_name"], "states": set()})
+        family["states"].add(_human_status(row))
+    rows = []
+    for adapter, family in families.items():
+        count = sum(candidate["adapter_id"] == adapter for candidate in candidates)
+        states = family["states"]
+        status = next(iter(states)) if len(states) == 1 else "Mixed readiness; see --verbose"
+        rows.append((family["name"], str(count), status))
+    headers = ("Harness", "Found", "Status")
+    widths = [max(len(row[index]) for row in [headers, *rows]) for index in range(3)]
+    def line(row):
+        return "  ".join(value.ljust(width) for value, width in zip(row, widths)).rstrip()
+    output.line(line(headers))
+    output.line(line(tuple("-" * width for width in widths)))
+    for row in rows:
+        output.line(line(row))
+    output.line("")
+    output.line("Discovery starts nothing; runtime approval is separate.")
+    if not candidates:
+        output.line("No installations detected. Check local CLI paths and discovery configuration.")
+    output.line("Use --verbose for installation details, or --json for automation.")
+
+
 def _assessment(candidates):
     try:
         return availability_snapshot(candidates)
@@ -64,7 +116,6 @@ async def run_discover(args, output: Output, root: Path):
         if len(matches) != 1 or matches[0] != record:
             raise ConnectorError("STALE_GENERATION", "discover",
                 "The executor configuration changed during discovery.")
-        output.line(f"{len(candidates)} candidate(s); discovery executes nothing and authorizes nothing")
         result = {"candidates": [_entry_of(found).to_json() for found in candidates],
                 "availability": _assessment(candidates),
                 "note": "Persisted executor discovery configuration; runtime authorization is separate."}
@@ -72,7 +123,7 @@ async def run_discover(args, output: Output, root: Path):
             result["hint"] = _empty_hint(configured=True)
         return result
 
-    notes = ["selection is an explicit connect-time decision; PATH "
+    notes = ["selection is an explicit local operator decision; PATH "
              "candidates are not trusted automatically"]
     pi_root = getattr(args, "pi_releases_root", None)
     pi_node = getattr(args, "pi_node", None)
@@ -101,8 +152,6 @@ async def run_discover(args, output: Output, root: Path):
         [harness] if harness else None, extra=release_candidates)
     payload = [_entry_of(found).to_json() for found in candidates]
     snapshot = _assessment(candidates)
-    output.line(f"{len(payload)} candidate(s); discovery executes nothing "
-                "and authorizes nothing")
     result = {"candidates": payload, "note": " ".join(notes)}
     result["availability"] = snapshot
     if not candidates:

@@ -23,7 +23,10 @@ async def test_empty_discovery_explains_local_scope_without_effects(tmp_path, mo
     output = Output(json_mode=json_mode, stream=stream)
     before = list(tmp_path.iterdir())
     result = await discover.run_discover(build_parser().parse_args(['discover']), output, tmp_path)
-    output.result(result)
+    if json_mode:
+        output.result(result)
+    else:
+        discover.render_summary(result, output)
     assert result['candidates'] == []
     assert 'other computers on the network' in result['hint']
     assert 'Get-Command' in result['hint']
@@ -32,8 +35,9 @@ async def test_empty_discovery_explains_local_scope_without_effects(tmp_path, mo
     if json_mode:
         assert json.loads(stream.getvalue()) == result
     else:
-        assert '0 candidate(s)' in stream.getvalue()
-        assert result['hint'] in stream.getvalue()
+        assert 'No installations detected' in stream.getvalue()
+        assert 'Harness' in stream.getvalue() and '--verbose' in stream.getvalue()
+        assert 'fingerprint' not in stream.getvalue()
 
 
 async def test_configured_empty_discovery_points_to_persisted_roots(registered, tmp_path, monkeypatch):

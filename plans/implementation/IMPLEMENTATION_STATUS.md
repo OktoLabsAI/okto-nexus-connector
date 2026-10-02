@@ -1,5 +1,16 @@
 # Implementation status — 2026-09-29 (CN5 corrected, 0.5.0.dev0)
 
+## Current discovery display and macOS issue follow-up — 2026-10-02
+
+The default `discover` display is a compact harness/count/status table.
+`--verbose` exposes full diagnostics; JSON retains the complete inventory.
+Twenty-eight installed checks passed on each of Windows and WSL Linux, and the
+real local CLI found all three providers without running them. The README now
+highlights Windows/Linux execution and pins Core .55 correctly. Updated issue #1
+confirms clearer macOS diagnosis but leaves native containment and missing
+Codex/Pi discovery unresolved. See [evidence and scope](DISCOVER_SUMMARY.md).
+No native macOS support, full provider acceptance or release gate is claimed.
+
 ## Current CI recheck — 2026-10-02
 
 The installed Windows/Python 3.13.1 full suite passed 699 tests with two skips.

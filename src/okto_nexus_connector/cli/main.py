@@ -130,6 +130,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     discover = sub.add_parser("discover",
                               help="local harness inventory (redacted)")
+    discover.add_argument("--verbose", action="store_true",
+                          help="show full installation paths, identities and technical diagnostics")
     discover.add_argument("--server-id", default=None,
                           help="preview persisted executor discovery configuration")
     discover.add_argument("--harness", default=None)
@@ -289,7 +291,11 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OK
     if isinstance(result, int):
         return result
-    output.result(result)
+    if args.command == "discover" and not args.json and not args.verbose:
+        from .commands.discover import render_summary
+        render_summary(result, output, harness=args.harness)
+    else:
+        output.result(result)
     return EXIT_OK
 
 

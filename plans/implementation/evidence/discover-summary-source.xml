@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="13" time="1.682" timestamp="2026-10-02T08:53:19.044234-03:00" hostname="Alienware_m15"><testcase classname="tests.unit.test_discover_summary" name="test_default_table_counts_copies_without_leaking_details" time="0.017" /><testcase classname="tests.unit.test_discover_summary" name="test_verbose_preserves_full_diagnostic_payload" time="0.019" /><testcase classname="tests.unit.test_discover_summary" name="test_json_is_complete_and_unchanged[False]" time="0.020" /><testcase classname="tests.unit.test_discover_summary" name="test_json_is_complete_and_unchanged[True]" time="0.016" /><testcase classname="tests.unit.test_discover_summary" name="test_filter_and_unsupported_host_are_explicit" time="0.017" /><testcase classname="tests.unit.test_discover_diagnostics" name="test_empty_discovery_explains_local_scope_without_effects[False]" time="0.277"><failure message="KeyError: 'availability'">tmp_path = WindowsPath('C:/Users/jpamb/AppData/Local/Temp/pytest-of-jpamb/pytest-4866/test_empty_discovery_explains_0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001F87AE8ED50&gt;
+json_mode = False
+
+    @pytest.mark.parametrize('json_mode', [False, True])
+    async def test_empty_discovery_explains_local_scope_without_effects(tmp_path, monkeypatch, json_mode):
+        async def empty(*args, **kwargs):
+            return []
+        monkeypatch.setattr(discover, 'inventory_candidates', empty)
+        monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('Passive discovery executed a process'))
+        stream = io.StringIO()
+        output = Output(json_mode=json_mode, stream=stream)
+        before = list(tmp_path.iterdir())
+        result = await discover.run_discover(build_parser().parse_args(['discover']), output, tmp_path)
+        if json_mode:
+            output.result(result)
+        else:
+&gt;           discover.render_summary(result, output)
+
+tests\unit\test_discover_diagnostics.py:29: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+result = {'candidates': [], 'note': 'selection is an explicit local operator decision; PATH candidates are not trusted automati...rver-id SERVER_ID to preview its approved roots. Discovery does not execute providers or grant runtime authorization.'}
+output = &lt;okto_nexus_connector.cli.output.Output object at 0x000001F87A809B50&gt;
+harness = None
+
+    def render_summary(result, output: Output, *, harness=None):
+        """One human-readable row per Core-assessed family; no new discovery."""
+        candidates = result["candidates"]
+        families = {}
+&gt;       for row in result["availability"]["availability"]:
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'availability'
+
+src\okto_nexus_connector\cli\commands\discover.py:41: KeyError</failure></testcase><testcase classname="tests.unit.test_discover_diagnostics" name="test_empty_discovery_explains_local_scope_without_effects[True]" time="0.020" /><testcase classname="tests.unit.test_discover_diagnostics" name="test_configured_empty_discovery_points_to_persisted_roots" time="0.038" /><testcase classname="tests.unit.test_discover_diagnostics" name="test_candidates_and_assessment_share_one_filtered_observation" time="0.022" /><testcase classname="tests.unit.test_discover_diagnostics" name="test_assessment_failure_is_not_silently_reported_as_success" time="0.022" /><testcase classname="tests.unit.test_doctor_platform_support" name="test_doctor_distinguishes_platform_support[preflight0-unsupported]" time="0.400" /><testcase classname="tests.unit.test_doctor_platform_support" name="test_doctor_distinguishes_platform_support[preflight1-fail]" time="0.008" /><testcase classname="tests.unit.test_doctor_platform_support" name="test_doctor_distinguishes_platform_support[preflight2-ok]" time="0.010" /></testsuite></testsuites>
