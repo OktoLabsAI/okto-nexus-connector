@@ -134,7 +134,10 @@ backend; the Core receives the scoped reference and current authority.
 The installed integration campaign exercises this backend and the Nexus
 embedded backend against the same canonical handoff services. Automatic
 daemon launch, Pi socket ownership and capability renewal remain separate
-host integration work; remote R4 readiness remains false.
+host integration work in that historical campaign. Core 0.2.53.dev0 now
+exports the executable R4 bundle; Nexus negotiates its explicit revision
+after installed consumer conformance. This does not qualify native provider
+builds or close independent-host and final-release acceptance.
 
 ## Pi native action ownership
 
