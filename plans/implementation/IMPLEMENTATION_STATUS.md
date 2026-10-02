@@ -5,8 +5,10 @@
 The updated open issues are reconciled in [the October 2 report](ISSUES_20261002.md).
 Issue #2's human summary now distinguishes host containment from adapter OS
 support and retains found/untrusted facts; 52 installed checks passed per OS.
-Issue #1 now links Core #1 and an unprototyped macOS plan, still dependent on a
-maintainer decision and native qualification. IPC/state documentation is aligned
+Issue #1 now links Core #1 and user-operated Intel Mac scenario evidence. The
+parent tracker failed 24/24 fast escaped-orphan cases; a dedicated launchd job
+coalition found and stopped 10/10. The revised backend remains unimplemented and
+unqualified; see the October 2 report for remaining validation. IPC/state documentation is aligned
 with current code. Hosted CI is deferred by explicit user direction.
 
 The Connector now pins Core .56 (7a964db) and its exact reviewed wheel.
