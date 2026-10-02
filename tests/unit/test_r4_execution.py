@@ -144,14 +144,17 @@ async def observed(queue, owner):
         while queue.empty():
             if owner.failure is not None:
                 raise owner.failure
-            await asyncio.sleep(0)
+            # Producers perform journal and filesystem work in worker threads.
+            # A zero-delay spin contends for the GIL without observing any
+            # additional state. Keep the same three-second deadline.
+            await asyncio.sleep(.005)
         return queue.get_nowait()
 
 
 async def failed(owner):
     async with asyncio.timeout(3):
         while owner.failure is None or owner.pending_count:
-            await asyncio.sleep(0)
+            await asyncio.sleep(.005)
 
 
 async def test_control_and_cancelled_stop_do_not_abandon_receipt_producer(execution):

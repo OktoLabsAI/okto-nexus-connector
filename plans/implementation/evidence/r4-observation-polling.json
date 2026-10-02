@@ -1,0 +1,10 @@
+{
+  "scope": "Test observation helper only; product runtime unchanged",
+  "change": "Replace zero-delay busy polling with 5ms yielding for thread-backed journal/filesystem work; retain 3-second observation deadline",
+  "validation": "64 tests passed on installed Connector/Core, Windows/Python 3.13",
+  "limitations": [
+    "No hosted timeout closure claimed until CI rerun",
+    "Short 1.5/1.6-second lease fixtures remain under review",
+    "No provider qualification from synthetic peers"
+  ]
+}
