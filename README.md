@@ -83,6 +83,21 @@ addendum — Copyright 2026 Okto Labs (same licensor decision as
 
 ## Persisted R4 executor discovery
 
+`discover` inventories provider installations on the computer running the
+Connector. It does not search the LAN for Nexus servers or other Connectors.
+Zero candidates means none were found under the current discovery policy;
+it does not establish that a provider is absent or that networking failed.
+On Windows, inspect the local command locations without running a provider:
+
+~~~powershell
+Get-Command codex,claude,pi,node -ErrorAction SilentlyContinue | Select-Object Name,Source,CommandType
+okto-nexus-connector --json discover
+~~~
+
+The standalone preview does not load a registered executor's approved roots.
+Use `discover --server-id SERVER_ID` for that executor's persisted configuration.
+A running desktop application alone does not establish a discoverable CLI.
+
 After importing an identity and registering the executor, configure discovery
 for that Server. This replaces the previous discovery configuration for that
 executor; it does not approve a workspace binding or authorize a runtime.
