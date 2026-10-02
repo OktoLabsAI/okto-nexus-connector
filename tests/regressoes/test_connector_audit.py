@@ -735,16 +735,7 @@ async def test_15_shutdown_does_not_discard_core_ownership_on_unknown(
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
     from nexus_connector_core import ShutdownReport
-    host = CoreRuntimeHost.__new__(CoreRuntimeHost)
-    host.root = tmp_path
-    host._vault = None
-    host._journal_path = paths.journal_path(tmp_path)
-    host._ledger_path = paths.owned_slot_ledger_path(tmp_path)
-    host._runtimes = {}
-    host._journal = None
-    host._ledger = None
-    host._journal_gate = None
-    host._ledger_gate = None
+    host = CoreRuntimeHost(tmp_path, None)
     binary = _exe(tmp_path / "codex.exe")
     binding = BindingRecord(
         binding_id="bind_a", alias="local-srv_a", server_id="srv_a",

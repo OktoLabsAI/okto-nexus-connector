@@ -39,6 +39,7 @@ def _fake_binary(root: Path) -> Path:
     binary = root / "fake-codex.exe"
     if not binary.exists():
         binary.write_bytes(b"synthetic selected codex binary")
+        binary.chmod(binary.stat().st_mode | 0o100)
     return binary
 
 

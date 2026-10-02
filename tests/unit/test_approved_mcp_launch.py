@@ -60,7 +60,15 @@ async def test_default_owner_mcp_configuration_and_secret_environment(execution,
             from nexus_connector_core.environment import ProcessHTTPEnvironment
             assert isinstance(env,ProcessHTTPEnvironment)
             assert Path(env['HOME'])==tmp_path/'provider-home'
-            assert not list((tmp_path/'provider-home').iterdir())
+            provider_home = tmp_path/'provider-home'
+            if candidate.adapter_id == 'codex_app_server':
+                # Core binds CODEX_HOME to the approved home. HTTP secrets stay
+                # in the process environment, never a persistent config file.
+                assert Path(env['CODEX_HOME']) == provider_home/'.codex'
+                assert sorted(p.name for p in provider_home.iterdir()) == ['.codex']
+                assert not list((provider_home/'.codex').iterdir())
+            else:
+                assert not list(provider_home.iterdir())
             assert 'OPENAI_API_KEY' not in env
             template=env.http_templates[0]
             assert template.entry_name.startswith('nexus_') and template.entry_name!='nexus'

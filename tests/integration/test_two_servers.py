@@ -35,6 +35,7 @@ AGENT_2 = "ag_two"
 def _binary(root: Path, name: str) -> Path:
     binary = root / name
     binary.write_bytes(f"binary for {name}".encode())
+    binary.chmod(binary.stat().st_mode | 0o100)
     return binary
 
 

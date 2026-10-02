@@ -72,6 +72,7 @@ async def test_cli_identity_connect_and_daemon(tmp_path: Path, fake_server):
     project.mkdir(parents=True, exist_ok=True)
     binary = root / "fake-codex.exe"
     binary.write_bytes(b"e2e synthetic binary")
+    binary.chmod(binary.stat().st_mode | 0o100)
 
     # 1. identity add via protected stdin entry (with vault approval)
     result = await run_cli(root, "--json", "identity", "add", "--server", url,

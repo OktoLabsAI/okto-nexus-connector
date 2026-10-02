@@ -179,13 +179,11 @@ def test_pi_release_layout_discovered_passively(tmp_path: Path):
     assert pi_release_candidates(tmp_path, node) == []
     found = pi_release_candidates(tmp_path, node,
                                   trusted_roots=(tmp_path,))
-    if os.name == "nt":
-        assert len(found) == 1
-        assert found[0].launch_script == str(cli)
-        assert found[0].build_identity is not None
-        assert found[0].version == "0.87.1"
-    else:
-        assert found == []
+    # Core now recognizes the approved composite layout on Windows and POSIX.
+    assert len(found) == 1
+    assert found[0].launch_script == str(cli)
+    assert found[0].build_identity is not None
+    assert found[0].version == "0.87.1"
 
 
 def test_select_explicit_returns_core_candidate(tmp_path: Path):
