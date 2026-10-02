@@ -30,25 +30,22 @@ KEY = "nxs_e2e_key"
 SERVER_ID = "srv_fake"
 AGENT = "ag_e2e"
 
-SRC = Path(__file__).parents[2] / "src"
-
-
 def _env(root: Path) -> dict[str, str]:
-    env = dict(os.environ)
+    env = {key: value for key, value in os.environ.items()
+           if key not in {"PYTHONPATH", "PYTHONHOME"}}
     env["OKTO_NEXUS_CONNECTOR_STATE"] = str(root)
     env["OKTO_NEXUS_CONNECTOR_VAULT"] = "file"
-    env["PYTHONPATH"] = str(SRC) + os.pathsep + env.get("PYTHONPATH", "")
     return env
 
 
 async def run_cli(root: Path, *args: str, stdin: str = "") -> subprocess.CompletedProcess:
     """Run the real CLI process without blocking the test event loop
     (the fake peers serve on that loop)."""
-    command = [sys.executable, "-m", "okto_nexus_connector.cli.main",
+    command = [sys.executable, "-I", "-m", "okto_nexus_connector.cli.main",
                "--state-dir", str(root), *args]
     process = await asyncio.create_subprocess_exec(
         *command,
-        env=_env(root), stdin=asyncio.subprocess.PIPE,
+        cwd=root, env=_env(root), stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     stdout, stderr = await asyncio.wait_for(
         process.communicate(stdin.encode()), timeout=120)
@@ -72,8 +69,8 @@ async def foreground_supervisor():
 
     async def start(root):
         process = subprocess.Popen(
-            [sys.executable, "-m", "okto_nexus_connector.cli.main",
-             "--state-dir", str(root), "daemon", "run"], env=_env(root),
+            [sys.executable, "-I", "-m", "okto_nexus_connector.cli.main",
+             "--state-dir", str(root), "daemon", "run"], cwd=root, env=_env(root),
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
         processes.append((root, process))

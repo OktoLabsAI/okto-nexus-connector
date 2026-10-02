@@ -94,10 +94,15 @@ def control(tmp_path):
     return owner, peer, store, host, vault
 
 
-async def eventually(predicate):
-    async with asyncio.timeout(3):
-        while not predicate():
-            await asyncio.sleep(0.005)
+async def eventually(predicate, *, diagnostics=None):
+    try:
+        async with asyncio.timeout(3):
+            while not predicate():
+                await asyncio.sleep(0.005)
+    except TimeoutError as error:
+        if diagnostics is not None:
+            error.add_note(f"Daemon status at observation timeout: {diagnostics()}")
+        raise
 
 
 async def dispose(owner, host):

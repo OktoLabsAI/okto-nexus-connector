@@ -134,7 +134,7 @@ async def test_default_daemon_publishes_retained_observation_without_probing(con
     owner.discover = None
     owner.start()
     try:
-        await eventually(lambda: owner.status()['control_ready'])
+        await eventually(lambda: owner.status()['control_ready'], diagnostics=owner.status)
         evidence = peer.publications[-1]['evidence'][0]
         assert evidence['version'] == '0.159.0'
         assert str(tmp_path) not in str(peer.publications[-1])

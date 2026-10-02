@@ -1,5 +1,16 @@
 # Implementation status — 2026-09-29 (CN5 corrected, 0.5.0.dev0)
 
+## Current CI recheck — 2026-10-02
+
+The installed Windows/Python 3.13.1 full suite passed 699 tests with two skips.
+Two recent hosted Windows discovery waits timed out in different cells and were
+not reproduced locally. Their test diagnostics now retain public daemon status;
+54 affected checks passed without changing timeout or product behavior. See
+[evidence and limits](CI_DISCOVERY_RECHECK.md). The CLI E2E fixture also no longer
+injects the checkout; all three scenarios passed with isolated installed CLI and
+daemon processes. Hosted diagnosis and release gates
+remain open; the dated increment sections below are historical records.
+
 ## R4 session capability consumer — 2026-09-30
 
 [The capability client](R4_SESSION_CAPABILITIES.md) validates exact opening

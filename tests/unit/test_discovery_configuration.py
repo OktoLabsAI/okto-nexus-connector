@@ -244,7 +244,7 @@ async def test_stop_joins_cancelled_passive_reader_without_publishing(control, t
     owner.start()
     stopper = None
     try:
-        await eventually(entered.is_set)
+        await eventually(entered.is_set, diagnostics=owner.status)
         stopper = asyncio.create_task(owner.stop())
         await eventually(owner._stopped.is_set)
         assert not stopper.done()  # A current OS read remains owned.
