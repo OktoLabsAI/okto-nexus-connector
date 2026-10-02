@@ -15,6 +15,16 @@ okto-nexus-connector daemon start      # background; returns after IPC readiness
 Without a service manager, run `daemon run` in the foreground (container
 path). No admin privilege is required for common use.
 
+On Windows, a terminal, CI runner or service supervisor may prohibit Job Object
+breakaway. If independent process creation is denied, `daemon start` reports
+`DAEMON_UNAVAILABLE` with a corrective action. It does not retry inside the
+restrictive job and claim independence: that daemon could die when the CLI exits.
+Run `daemon run` under a persistent supervisor, then connect from another client
+using the same state directory, or use a terminal that permits independent
+daemon creation. Foreground mode shares its supervisor's lifetime; closing that
+supervisor can terminate the daemon. No supervisor policy is modified.
+See [Windows nested-job rules](https://learn.microsoft.com/en-us/windows/win32/procthread/nested-jobs).
+
 ## First use: import an existing canonical key
 
 The Server screen proposes a command; the key enters through a protected

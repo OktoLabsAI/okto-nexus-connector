@@ -19,7 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 keyring = ["keyring>=25,<26"]
-test = ["pytest>=8", "pytest-asyncio>=0.24", "build>=1"]
+test = ["pytest>=8", "pytest-asyncio>=0.24", "build>=1", "pywin32; sys_platform == 'win32'"]
 
 [project.scripts]
 okto-nexus-connector = "okto_nexus_connector.cli.main:main"
