@@ -11,6 +11,24 @@ from tests.unit.test_r4_daemon_execution import lifecycle
 from tests.unit.test_r4_execution import observed, operation
 
 
+def pending_task_locations():
+    """Report await locations only; never serialize coroutine arguments."""
+    rows = []
+    for task in asyncio.all_tasks():
+        if task is asyncio.current_task():
+            continue
+        locations = []
+        current = task.get_coro()
+        while current is not None:
+            code = getattr(current, "cr_code", getattr(current, "gi_code", None))
+            frame = getattr(current, "cr_frame", getattr(current, "gi_frame", None))
+            if code is not None:
+                locations.append(f"{code.co_name}:{frame.f_lineno if frame else '?'}")
+            current = getattr(current, "cr_await", getattr(current, "gi_yieldfrom", None))
+        rows.append(f"{task.get_name()}: {' -> '.join(locations)}")
+    return "\n".join(sorted(rows))
+
+
 async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False):
     owner, _, store, frame, native, _, published, _ = lifecycle
     entered, release = asyncio.Event(), asyncio.Event()
@@ -115,8 +133,15 @@ async def test_cancelled_cleanup_observer_does_not_abandon_pending_renewal(lifec
         with pytest.raises(asyncio.CancelledError):
             await closing
         assert not session.renewal.done() and not owner._close_task.done()
+        retained_cleanup = owner._close_task
         release.set()
-        await asyncio.wait_for(owner.close(),3)
+        try:
+            await asyncio.wait_for(owner.close(),3)
+        except TimeoutError as error:
+            raise AssertionError(
+                "Cleanup exceeded the existing three-second observation limit.\n"
+                + pending_task_locations()) from error
+        assert owner._close_task is retained_cleanup and retained_cleanup.done()
         assert session.renewal.done() and native.native.stopped
     finally:
         release.set()
