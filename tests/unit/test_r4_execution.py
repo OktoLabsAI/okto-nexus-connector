@@ -15,6 +15,7 @@ from okto_nexus_connector.platform.paths import state_dir
 from okto_nexus_connector.transport.r4_connection import ReceivedOperation
 from okto_nexus_connector.transport.wss_r4 import R4ControlState
 from tests.unit.test_execution_selection import selection
+from tests.unit.async_diagnostics import pending_task_locations
 
 
 class Connection:
@@ -140,15 +141,23 @@ def operation(opening, action, payload, **extra):
 
 
 async def observed(queue, owner):
-    async with asyncio.timeout(3):
-        while queue.empty():
-            if owner.failure is not None:
-                raise owner.failure
-            # Producers perform journal and filesystem work in worker threads.
-            # A zero-delay spin contends for the GIL without observing any
-            # additional state. Keep the same three-second deadline.
-            await asyncio.sleep(.005)
-        return queue.get_nowait()
+    observation = asyncio.timeout(3)
+    try:
+        async with observation:
+            while queue.empty():
+                if owner.failure is not None:
+                    raise owner.failure
+                # Producers perform journal and filesystem work in worker threads.
+                # A zero-delay spin contends for the GIL without observing any
+                # additional state. Keep the same three-second deadline.
+                await asyncio.sleep(.005)
+            return queue.get_nowait()
+    except TimeoutError as error:
+        if not observation.expired():
+            raise
+        raise AssertionError(
+            "Receipt exceeded the existing three-second observation limit.\n"
+            + pending_task_locations()) from error
 
 
 async def failed(owner):
