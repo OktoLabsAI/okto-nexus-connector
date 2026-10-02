@@ -1,5 +1,13 @@
 # Implementation status — 2026-09-29 (CN5 corrected, 0.5.0.dev0)
 
+## Core .56 POSIX discovery adoption
+
+The Connector now pins Core .56 (7a964db) and its exact reviewed wheel.
+Installed discovery/inventory/diagnostic checks passed 48 cases on each of
+Windows and WSL Linux. Compact human output and full JSON are preserved.
+See [artifacts and scope](POSIX_DISCOVERY_056.md). Native macOS containment,
+full integrated acceptance and release gates remain open.
+
 ## Current discovery display and macOS issue follow-up — 2026-10-02
 
 The default `discover` display is a compact harness/count/status table.

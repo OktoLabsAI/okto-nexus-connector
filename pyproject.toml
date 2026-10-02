@@ -12,7 +12,7 @@ authors = [{name = "Okto Labs"}]
 license = "Elastic-2.0"
 license-files = ["LICENSE"]
 dependencies = [
-    "nexus-connector-core==0.2.55.dev0",
+    "nexus-connector-core==0.2.56.dev0",
     "websockets>=13,<18",
     "httpx>=0.27,<1",
 ]
