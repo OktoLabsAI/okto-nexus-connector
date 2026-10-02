@@ -45,7 +45,7 @@ See the [platform runbook](docs/runbook.md#unsupported-executor-platform).
 | Daemon | One instance per OS account + state dir under an OS lock with process birth identity; readiness = authenticated IPC ping; bounded drain with per-session reports |
 | IPC | Unix socket (POSIX) / loopback+token (Windows), hello-authentication before any effect, streamed log follow |
 | Transport | Authenticated R4 HTTP management and outbound NXL R4 WSS: scoped tickets, binding lanes, generation fencing, reconnect/reconcile and retained publication |
-| Runtimes | Start/reuse/new-session, submit, interrupt (keeps runtime) vs stop (closes owned resources), logs, inspect — all via the Core's public API with the Server-authorizing `intents:resolve` flow |
+| Runtimes | Canonical start/reuse, submit, steer, interrupt and close intents; daemon-owned Core execution; retained operation/session reads from the Server |
 | MCP config | Declarative direct-HTTP entries (Codex TOML / Claude JSON) with plan/apply/backup/CAS/ownership; tools-only needs no daemon; Pi gets the non-MCP native bridge |
 | Ops | `doctor` layered diagnostics, `service install` per-OS plans with honest survival matrix, redacted exports |
 
