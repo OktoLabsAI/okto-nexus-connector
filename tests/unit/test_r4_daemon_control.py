@@ -140,7 +140,7 @@ async def test_lost_publication_reply_never_reuses_sequence(control):
     peer.lost = True
     owner.start()
     try:
-        await eventually(lambda: owner.status()['control_ready'])
+        await eventually(lambda: owner.status()['control_ready'], diagnostics=owner.status)
         assert [p['publication_sequence'] for p in peer.publications] == [1, 2]
         assert peer.calls == 2 and len(peer.sockets) == 2 and not peer.sockets[0].online
     finally:
@@ -182,7 +182,7 @@ async def test_local_change_during_discovery_fences_publication(control):
     peer.after_discovery = lambda: store.update(lambda state: setattr(state.identities[0], 'revoked', True))
     owner.start()
     try:
-        await eventually(lambda: owner.error_code is not None)
+        await eventually(lambda: owner.error_code is not None, diagnostics=owner.status)
         assert not peer.publications and all(not socket.online for socket in peer.sockets)
         assert store.load().execution_executors[0].inventory_publication_sequence == 0
     finally:
@@ -206,7 +206,8 @@ async def test_nonempty_or_unavailable_history_cannot_be_reported_empty(control,
         journal.claimed_sessions = fail
     owner.start()
     try:
-        await eventually(lambda: owner.phase == 'RECOVERING' and owner.error_code is not None)
+        await eventually(lambda: owner.phase == 'RECOVERING' and owner.error_code is not None,
+                         diagnostics=owner.status)
         assert all(not socket.online for socket in peer.sockets) and not owner.status()['control_ready']
         if history == 'claim':
             assert peer.report['claims'][0]['state'] == 'UNKNOWN'

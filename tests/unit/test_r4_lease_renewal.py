@@ -14,6 +14,13 @@ from tests.unit.test_r4_execution import observed, operation, failed
 from tests.unit.async_diagnostics import pending_task_locations
 
 
+class LeaseClock:
+    now = 100.0
+
+    def monotonic(self):
+        return self.now
+
+
 async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None):
     owner, _, store, frame, native, _, published, _ = lifecycle
     if clock is not None:
@@ -134,9 +141,14 @@ async def test_interrupt_progresses_while_productive_work_waits_for_renewal(life
 
 
 @pytest.mark.parametrize("selection",[True],indirect=True)
-async def test_cancelled_cleanup_observer_does_not_abandon_pending_renewal(lifecycle,monkeypatch):
-    owner,_,_,native,_,session,entered,release,_=await setup(lifecycle,monkeypatch,hold=True)
+@pytest.mark.parametrize("scheduling_delay", [0, 1.7], ids=["normal", "delayed-loop"])
+async def test_cancelled_cleanup_observer_does_not_abandon_pending_renewal(lifecycle,monkeypatch,scheduling_delay):
+    owner,_,_,native,_,session,entered,release,_=await setup(
+        lifecycle,monkeypatch,hold=True,clock=LeaseClock())
     try:
+        # Deliberate scheduling fault: the renewal task cannot run during this
+        # pause. The cleanup ordering assertion must not depend on host speed.
+        time.sleep(scheduling_delay)
         await asyncio.wait_for(entered.wait(),3)
         closing=asyncio.create_task(owner.close())
         await asyncio.sleep(0)
@@ -154,6 +166,23 @@ async def test_cancelled_cleanup_observer_does_not_abandon_pending_renewal(lifec
                 + pending_task_locations()) from error
         assert owner._close_task is retained_cleanup and retained_cleanup.done()
         assert session.renewal.done() and native.native.stopped
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize("selection",[True],indirect=True)
+async def test_expired_lease_before_renewal_refuses_another_request(lifecycle,monkeypatch):
+    clock = LeaseClock()
+    owner,_,_,native,_,session,entered,release,calls=await setup(
+        lifecycle,monkeypatch,hold=True,clock=clock)
+    try:
+        initial = session.deadline
+        clock.now = initial
+        await failed(owner.owner)
+        assert owner.owner.failure.code == "LEASE_EXPIRED"
+        assert session.deadline == initial and not owner.connection.online
+        assert not entered.is_set() and len(calls) == 1
+        assert len(native.opened) == 1
     finally:
         release.set()
 

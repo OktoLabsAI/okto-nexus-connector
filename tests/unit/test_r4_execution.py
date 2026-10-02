@@ -165,9 +165,15 @@ async def observed(queue, owner):
 
 
 async def failed(owner):
-    async with asyncio.timeout(3):
-        while owner.failure is None or owner.pending_count:
-            await asyncio.sleep(.005)
+    try:
+        async with asyncio.timeout(3):
+            while owner.failure is None or owner.pending_count:
+                await asyncio.sleep(.005)
+    except TimeoutError as error:
+        error.add_note(
+            f"Failure observation: failure_present={owner.failure is not None}, "
+            f"pending_count={owner.pending_count}\n" + pending_task_locations())
+        raise
 
 
 async def test_control_and_cancelled_stop_do_not_abandon_receipt_producer(execution):
