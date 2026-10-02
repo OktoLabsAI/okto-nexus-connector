@@ -7,13 +7,18 @@ and never recommends disabling TLS or the sandbox.
 ## Install (normal and without a service manager)
 
 ```bash
-pip install okto-nexus-connector-<version>.whl nexus-connector-core-<version>.whl
-okto-nexus-connector doctor            # layered diagnostics, no side effects
-okto-nexus-connector daemon start      # background; returns after IPC readiness
+python -m pip install "CONNECTOR_WHEEL[keyring]" CORE_WHEEL
+okto-nexus-connector doctor
 ```
 
 Without a service manager, run `daemon run` in the foreground (container
 path). No admin privilege is required for common use.
+
+Replace the wheel placeholders with the approved artifact paths and verify their
+hashes. Use the pinned Core dependency. Complete identity import, registration and
+discovery configuration below before expecting an executor to publish inventory.
+Start the daemon with `daemon start`; its IPC readiness does not prove a qualified
+provider, an approved binding or remote execution authority.
 
 On Windows, a terminal, CI runner or service supervisor may prohibit Job Object
 breakaway. If independent process creation is denied, `daemon start` reports
@@ -48,13 +53,14 @@ filtered one out. See [discovery configuration](../README.md#persisted-r4-execut
 
 ## First use: import an existing canonical key
 
-The Server screen proposes a command; the key enters through a protected
-entry (masked input, `--credential-stdin`, or an MCP entry you select
-explicitly). Nothing is scanned automatically.
+Import the existing agent key through the masked prompt or an explicitly selected
+stdin/environment source. An agent ID hint is checked against the authenticated
+identity; it is not a substitute for the key.
 
 ```bash
-okto-nexus-connector connect --server https://nexus.example --agent ag_123
-# paste the canonical key when prompted; approve the aggregated binding
+okto-nexus-connector identity add --server https://nexus.example --agent AGENT_ID --alias SUBJECT
+okto-nexus-connector executor register --identity SUBJECT --label "Execution host"
+okto-nexus-connector executor list
 ```
 
 If no OS keyring is available, the restricted-file fallback is offered
@@ -62,14 +68,25 @@ once with an explicit warning; approve it or install a keyring backend.
 
 ## Bind and start a runtime
 
+Follow [discovery, explicit observation and launch consent](../README.md#persisted-r4-executor-discovery)
+using the returned Server ID. Publish the workspace realization through the
+daemon, then prepare/apply the reviewed binding with any required operator proof.
+Use its acknowledged alias; a provider name or current directory does not select
+an approved R4 workspace. Execution authorization remains separate from binding.
+
 ```bash
-okto-nexus-connector runtime start codex      # from the project directory
-okto-nexus-connector runtime status           # daemon/transport/runtime layers
-okto-nexus-connector runtime logs <session> --follow
+okto-nexus-connector runtime start ALIAS --client-intent-id OPEN_INTENT
+okto-nexus-connector runtime operation --alias ALIAS --client-intent-id OPEN_INTENT
+okto-nexus-connector runtime status --alias ALIAS
+okto-nexus-connector runtime inspect SESSION_ID --alias ALIAS
+okto-nexus-connector runtime stop SESSION_ID --alias ALIAS --client-intent-id CLOSE_INTENT --reason "Work completed."
 ```
 
-`interrupt` cancels the active turn and keeps the runtime; `stop` closes
-resources owned by this daemon; attach targets are only detached.
+Admission is not completion. Query the retained operation until its outcome is
+known. `runtime interrupt` uses the adapter's explicit turn/current-run target;
+`stop` requests closure of owned resources. Status lists locally retained sessions,
+not every Server session. The legacy `runtime logs` command is not a documented
+complete R4 event viewer; use the Server's authorized operation/session views.
 
 ## Vault locked or unavailable
 
@@ -84,7 +101,7 @@ location.
 The launch environment passes only whitelisted essentials; provider
 authentication happens through the provider's own local login. Run the
 harness's login flow on this host, or approve the provider-home overlay
-explicitly at connect time. The error is `PROVIDER_AUTH_REQUIRED` with a
+explicitly through `executor configure-launch --provider-home`. The error is `PROVIDER_AUTH_REQUIRED` with a
 local action; no secret is sent to the Server.
 
 ## Canonical key rotated or revoked
@@ -112,39 +129,49 @@ replaces it safely under the OS lock. If the daemon is wedged, use
 
 ## Journal full
 
-`doctor` warns as the technical journal approaches its ceiling; new
-admissions fail closed with `JOURNAL_FULL` (no phantom facts). Stop the
-daemon, archive or compact the state directory per your retention
-policy, and restart; the daemon reconciles before new effects.
+New admissions fail closed with `JOURNAL_FULL` when durable capacity is exhausted.
+Preserve the journal and uncertain operations. Stop/drain through the daemon's
+normal lifecycle and inspect its report before backing up state. No general
+Connector CLI compaction command is provided: do not delete journal rows or move
+live state to make space. Use a supported, reviewed retention/recovery procedure
+for the exact artifact and keep execution disabled if its safety is unproved.
 
 ## Uncertain outcome (unknown result)
 
 `OUTCOME_UNKNOWN` means an effect may have happened without proof. Do
-not re-run the same work under a new operation ID: query
-`runtime inspect`, `reconcile`, and the Server's operation by its ID.
-Re-submitting is a **new** explicit intent.
+not re-run the same work under a new operation ID. Query `runtime operation`
+with the original alias/client intent, and inspect the related session. The daemon
+owns reconciliation on the authenticated control channel; there is no standalone
+`reconcile` CLI command. Repeat an admission request only with the original exact
+intent. A different ID creates new work and can duplicate an uncertain effect.
 
 ## Update / rollback
 
 Stop the daemon (drain is bounded and reported per session), install the
 pinned wheels, and start again. Active native pipes do not survive the
 swap; the daemon reconciles durable facts instead of pretending the old
-conversation continued. Rollback = install the previous wheels; state
-schema migrations are forward-only with explicit versions.
+conversation continued. State migrations have explicit versions: an older binary
+refuses newer state. Installing previous wheels alone is not a rollback procedure.
+Retain a consistent pre-upgrade backup and preserve later journals/uncertain effects
+for reviewed recovery. Never restore old state while a newer owner can still act.
 
 ## Remove connector-owned configuration
 
-`mcp-config remove` (and `bind remove --keep-config=false`) delete only
-entries recorded as owned; third-party MCP entries and other settings
-survive, with a backup written before any change. Full uninstall
-preserves evidence by default; `identity remove` is a separate explicit
-step from any central revocation.
+Use `mcp-config remove --help` to select the exact harness, file and owned entry.
+Owned-entry removal preserves unrelated settings and requires the stored
+predecessor to match. `bind remove` belongs to legacy local configuration
+management and is not canonical R4 binding revocation; `--keep-config` is a
+boolean flag and does not accept `=false`.
+Do not infer remote revocation from deleting a local alias or identity. Preserve
+third-party entries and recovery evidence, and use the Server's authenticated
+canonical policy surface for execution revocation.
 
 ## Diagnostic export (read-only)
 
 ```bash
-okto-nexus-connector doctor --probe --json
+okto-nexus-connector --json doctor --probe
 ```
 
-Inspection never mutates state; exports are redacted (keys, tickets and
-capabilities are replaced with `[redacted]`).
+`--probe` contacts configured Servers using the selected protected identities.
+Diagnostics redact credential material; review the output before sharing host
+paths or identifiers. Global options such as `--json` precede the subcommand.

@@ -50,7 +50,21 @@ async def run_doctor(args, output: Output, root: Path):
     try:
         import nexus_connector_core as core
         check("core", "version", "ok", core.__version__)
-        check("core", "contract", "ok", core.CONTRACT_REVISION)
+        check("core", "legacy_contract", "ok", core.CONTRACT_REVISION)
+        revision = getattr(core, 'R4_CONTRACT_REVISION', None)
+        executable = getattr(core, 'R4_BUNDLE_EXECUTABLE', False) is True
+        verify = getattr(core, 'verify_r4_bundle', None)
+        try:
+            if not revision or not executable or not callable(verify):
+                raise ValueError('No executable R4 contract')
+            verify()
+        except Exception:
+            check('core', 'contract', 'fail', 'R4 bundle unavailable or invalid',
+                  'Install the approved Connector and its exact pinned Core artifact.')
+        else:
+            check('core', 'contract', 'ok', revision)
+            check('core', 'execution_scope', 'ok',
+                  'R4 bundle verified; provider qualification, binding, authorization and applied lease are separate.')
     except Exception as exc:
         check("core", "import", "fail", str(exc),
               "reinstall the okto-nexus-connector distribution")

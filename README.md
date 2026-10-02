@@ -4,7 +4,7 @@ Remote harness connector application for [Okto Nexus](https://github.com/OktoLab
 the lightweight CLI + daemon that lives on the machines where Codex,
 Pi and Claude Code run, imports canonical agent credentials, binds
 identity/harness/project and administers managed runtimes through
-[`nexus-connector-core`](../okto-nexus-connector-core).
+[`nexus-connector-core`](https://github.com/OktoLabsAI/okto-nexus-connector-core).
 
 - Distribution `okto-nexus-connector`, import `okto_nexus_connector`,
   Python ≥ 3.11, entry point `okto-nexus-connector`, consuming
