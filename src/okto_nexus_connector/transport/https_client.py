@@ -69,6 +69,7 @@ class R4ProtocolInfo:
     management_revision: str
     executor_snapshot_format: int
     remote_execution_ready: bool
+    inventory_refresh_supported: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,11 +332,14 @@ class NexusHTTPClient:
                         json_body: dict[str, object] | None = None,
                         expect: int | tuple[int, ...] = 200,
                         require_revision: bool = False,
-                        binding_ticket_errors: bool = False) -> dict[str, object]:
+                        binding_ticket_errors: bool = False,
+                        refresh_delivery_id: str | None = None) -> dict[str, object]:
         assert self._client is not None, "use 'async with NexusHTTPClient'"
         headers: dict[str, str] = {}
         if key is not None:
             headers["Authorization"] = f"Bearer {key}"
+        if refresh_delivery_id is not None:
+            headers['X-Nexus-Inventory-Refresh'] = refresh_delivery_id
         mutating = method.upper() in ("POST", "PUT", "PATCH", "DELETE")
         try:
             response = await self._client.request(
@@ -404,17 +408,18 @@ class NexusHTTPClient:
                                       require_revision=True)
         accepted = payload.get("nxl_accepted")
         ready = payload.get("remote_execution_ready")
+        refresh = payload.get('inventory_refresh_supported', False)
         if (payload.get("management_revision") != MANAGEMENT_REVISION or
                 type(payload.get("protocol_major")) is not int or payload["protocol_major"] != 1 or
                 payload.get("core_version") != __version__ or
                 type(payload.get("executor_snapshot_format")) is not int or
                 payload["executor_snapshot_format"] != SNAPSHOT_FORMAT_VERSION or
-                type(ready) is not bool or not isinstance(accepted, list) or
+                type(ready) is not bool or type(refresh) is not bool or not isinstance(accepted, list) or
                 any(type(value) is not str for value in accepted) or
                 (ready and R4_PREVIEW_REVISION not in accepted)):
             raise ConnectorError("VERSION_INCOMPATIBLE", "protocol",
                                  "The Server does not advertise a compatible R4 protocol.")
-        return R4ProtocolInfo(MANAGEMENT_REVISION, SNAPSHOT_FORMAT_VERSION, ready)
+        return R4ProtocolInfo(MANAGEMENT_REVISION, SNAPSHOT_FORMAT_VERSION, ready, refresh)
 
     async def me(self, key: str) -> MeInfo:
         payload = await self._request("GET", "/v1/connections/me", key=key,
@@ -497,11 +502,26 @@ class NexusHTTPClient:
             authorization_revision=ticket["authorization_revision"],
         )
 
+    async def claim_inventory_refresh(self, ticket: str, *, server_id: str,
+                                      executor_id: str, producer_instance_id: str) -> str | None:
+        payload = await self._request('POST',
+            f'/v1/runtime/executors/{executor_id}/inventory:claim-refresh', key=ticket,
+            json_body={'producer_instance_id': producer_instance_id}, require_revision=True)
+        delivery = payload.get('delivery_id')
+        if (set(payload) != {'server_id', 'executor_id', 'producer_instance_id', 'delivery_id'}
+                or payload['server_id'] != server_id or payload['executor_id'] != executor_id
+                or payload['producer_instance_id'] != producer_instance_id
+                or (delivery is not None and (not isinstance(delivery, str) or not 1 <= len(delivery) <= 160))):
+            raise ConnectorError('VERSION_INCOMPATIBLE', 'inventory',
+                                 'Server returned an invalid inventory refresh delivery.')
+        return delivery
+
     async def publish_inventory(self, ticket: str, *, executor_id: str,
-                                snapshot: dict[str, object]) -> InventoryAccepted:
+                                snapshot: dict[str, object], refresh_delivery_id: str | None = None) -> InventoryAccepted:
         payload = await self._request(
             "PUT", f"/v1/runtime/executors/{executor_id}/inventory", key=ticket,
             json_body=snapshot, require_revision=True,
+            refresh_delivery_id=refresh_delivery_id,
         )
         if (payload.get("accepted") is not True or
                 payload.get("executor_id") != executor_id or

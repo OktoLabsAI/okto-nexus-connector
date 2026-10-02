@@ -200,7 +200,8 @@ class R4DaemonControl:
         self.store.update(reserve)
         return result
 
-    async def _publish(self, http, bootstrap, snapshot):
+    async def _publish(self, http, bootstrap, snapshot, refresh_delivery_id=None):
+        await self._require(snapshot)
         observed_at = self.clock()
         candidates = tuple(await self.discover() if self.discover is not None else
                            await configured_candidates(snapshot[0].discovery_configuration,
@@ -219,7 +220,8 @@ class R4DaemonControl:
             raise ConnectorError('CONTROL_DISCONNECTED', 'r4_inventory',
                                  'The bootstrap ticket expired before inventory publication.')
         accepted = await http.publish_inventory(bootstrap.ticket,
-            executor_id=bootstrap.executor.executor_id, snapshot=value)
+            executor_id=bootstrap.executor.executor_id, snapshot=value,
+            **({'refresh_delivery_id': refresh_delivery_id} if refresh_delivery_id is not None else {}))
         await self._require(snapshot)
         self.inventory_revision = accepted.inventory_revision
         return self.clock() + max(0.5, accepted.fresh_for_ms / 1000 * 0.7)
@@ -311,7 +313,17 @@ class R4DaemonControl:
                                      'Local recovery facts do not permit control readiness.')
             await self._require(snapshot)
             self.phase = 'PUBLISHING_INVENTORY'
-            refresh_at = await self._publish(http, bootstrap, snapshot)
+            async def claim_refresh():
+                if not getattr(protocol, 'inventory_refresh_supported', False):
+                    return None
+                delivery = await http.claim_inventory_refresh(bootstrap.ticket,
+                    server_id=self.server_id, executor_id=self.executor_id,
+                    producer_instance_id=self.connection.state.connection_id)
+                await self._require(snapshot)
+                return delivery
+            delivery = await claim_refresh()
+            refresh_at = await self._publish(http, bootstrap, snapshot, delivery)
+            poll_refresh_at = self.clock() + 5
             from .r4_execution import R4DaemonExecution
             self.execution = R4DaemonExecution(self, http, recovered_lanes=recovered_lanes)
             try:
@@ -325,8 +337,12 @@ class R4DaemonControl:
                         # A bootstrap cannot rotate an attached lane or renew a
                         # runtime lease. Reconnect control with a fresh proof.
                         return
-                    if self.clock() >= refresh_at:
-                        refresh_at = await self._publish(http, bootstrap, snapshot)
+                    delivery = None
+                    if self.clock() >= poll_refresh_at:
+                        delivery = await claim_refresh()
+                        poll_refresh_at = self.clock() + 5
+                    if delivery is not None or self.clock() >= refresh_at:
+                        refresh_at = await self._publish(http, bootstrap, snapshot, delivery)
                     await self._wait(min(self.poll_seconds, max(0.001, renew_at - self.clock())))
                 if not self._stopped.is_set():
                     raise ConnectorError('CONTROL_DISCONNECTED', 'r4_startup', 'The R4 control link was lost.')

@@ -104,6 +104,13 @@ The standalone preview does not load a registered executor's approved roots.
 Use `discover --server-id SERVER_ID` for that executor's persisted configuration.
 A running desktop application alone does not establish a discoverable CLI.
 
+When the Server advertises `inventory_refresh_supported`, a reconciled daemon
+checks for passive inventory refresh requests every five seconds. It claims a
+request before discovery and correlates the resulting publication; a periodic
+publication alone does not acknowledge a user request. This does not run a
+version probe, change local discovery roots or authorize execution. Servers
+without this capability keep the existing periodic-publication behavior.
+
 After importing an identity and registering the executor, configure discovery
 for that Server. This replaces the previous discovery configuration for that
 executor; it does not approve a workspace binding or authorize a runtime.
