@@ -136,6 +136,30 @@ schema 9 state. Final release qualification remains under integration.
 
 ### Launch consent and realization
 
+If the selected installation reports `NOT_PROBED`, explicitly observe its version
+before creating a realization. The command runs only Core's contained version
+probe for the exact installation and inventory revision selected locally:
+
+~~~powershell
+okto-nexus-connector discover --server-id SERVER_ID
+okto-nexus-connector executor probe --server-id SERVER_ID --harness codex_app_server --candidate-ref CANDIDATE_REF --inventory-revision INVENTORY_REVISION
+okto-nexus-connector discover --server-id SERVER_ID
+~~~
+
+Use the resulting `executor_revision` after the daemon has published that
+inventory. A probe response marked `publication_pending` does not acknowledge
+Server publication. The daemon detects the changed local evidence and reconciles
+its control connection before publishing. A version observation can still be
+`UNQUALIFIED_BUILD`; it never overrides Core's qualified-build or containment
+requirements and grants no runtime authority.
+
+Schema 13 stores at most 64 local observations per executor, bound to the exact
+passive candidate evidence, Core version and platform. Changed bytes or discovery
+scope invalidate reuse. Reconfiguring discovery clears these observations.
+Migration from earlier schemas adds no observations; older clients refuse schema
+13. Probe before binding: advancing inventory evidence can make an existing
+binding stale and require explicit replacement/reapproval.
+
 Stage explicit local launch consent using an imported identity on the registered
 Server. The configuration digest binds the identity, executor, adapter, consent
 ID, profile revision, protected secret references and optional provider login

@@ -12,6 +12,12 @@ from .identity import _vault
 
 async def run_executor(args, output, root):
     store = StateStore(paths.state_file(root))
+    if args.subcommand == 'probe':
+        from ...services.installation_observation import observe_installation
+        result = await observe_installation(store, server_id=args.server_id,
+            adapter_id=args.harness, candidate_ref=args.candidate_ref, inventory_revision=args.inventory_revision)
+        output.line('Version observed. Wait for daemon inventory publication; binding approval and runtime authority are separate.')
+        return result
     if args.subcommand in ("configure-launch", "realize"):
         from ...services.executor_onboarding import ExecutorOnboarding
         service = ExecutorOnboarding(store)

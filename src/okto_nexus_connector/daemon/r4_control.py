@@ -204,6 +204,7 @@ class R4DaemonControl:
         observed_at = self.clock()
         candidates = tuple(await self.discover() if self.discover is not None else
                            await configured_candidates(snapshot[0].discovery_configuration,
+                               observations=snapshot[0].installation_observations,
                                cancel_requested=self._discovery_stopped.is_set))
         await self._require(snapshot)
         sequence = await asyncio.to_thread(self._reserve_sequence, snapshot)

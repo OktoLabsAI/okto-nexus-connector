@@ -75,7 +75,8 @@ class R4DaemonExecution:
         await self._current(frame)
         if self.control.discover is None:
             snapshot = await asyncio.to_thread(self.control._snapshot)
-            candidates = tuple(await configured_candidates(snapshot[0].discovery_configuration))
+            candidates = tuple(await configured_candidates(snapshot[0].discovery_configuration,
+                               observations=snapshot[0].installation_observations))
             await self.control._require(snapshot)
         else:
             candidates = tuple(await self.control.discover())

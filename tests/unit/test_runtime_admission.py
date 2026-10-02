@@ -168,7 +168,7 @@ async def test_cli_routes_r4_start_and_query_without_legacy_owner(runtime, monke
 
 def test_schema_ten_migration_adds_no_runtime_authority():
     state = state_from_json({"schema_version": 10})
-    assert state.schema_version == 12 and not state.runtime_intents
+    assert state.schema_version == 13 and not state.runtime_intents
 
 
 async def test_cross_scope_operation_read_cannot_overwrite_intent(runtime):

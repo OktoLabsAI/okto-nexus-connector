@@ -64,18 +64,20 @@ def configure_discovery(store, *, server_id, roots=(), pi_install_root=None, pi_
             raise _error("Register this Server executor before configuring discovery.")
         configuration_arguments(value)
         matches[0].discovery_configuration = value
+        matches[0].installation_observations = []
     store.update(update)
     return value
 
 
-async def configured_candidates(configuration, *, adapter_ids=None, cancel_requested=None):
+async def configured_candidates(configuration, *, adapter_ids=None, cancel_requested=None, observations=()):
     """Use the public Core facade and preserve complete InstallationCandidate values."""
     def discover():
         arguments = configuration_arguments(configuration)
         inventory = discover_installations(adapter_ids=adapter_ids,
             **({"cancel_requested": cancel_requested} if cancel_requested is not None else {}), **arguments)
         configuration_arguments(configuration)
-        return list(inventory.candidates)
+        from .installation_observation import apply_observations
+        return apply_observations(list(inventory.candidates), observations)
     try:
         return await asyncio.to_thread(discover)
     except DiscoveryCancelled:

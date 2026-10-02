@@ -122,6 +122,12 @@ def build_parser() -> argparse.ArgumentParser:
     discovery.add_argument("--pi-install-root", default=None, help="approved Pi releases directory")
     discovery.add_argument("--pi-node", default=None, help="Node executable for the Pi releases")
 
+    probe = executor_sub.add_parser("probe", help="explicitly run the selected installation's sealed version probe")
+    probe.add_argument("--server-id", required=True)
+    probe.add_argument("--harness", required=True)
+    probe.add_argument("--candidate-ref", required=True)
+    probe.add_argument("--inventory-revision", required=True)
+
     discover = sub.add_parser("discover",
                               help="local harness inventory (redacted)")
     discover.add_argument("--server-id", default=None,

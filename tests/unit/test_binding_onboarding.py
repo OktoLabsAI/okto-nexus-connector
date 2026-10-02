@@ -154,7 +154,7 @@ async def test_proposal_mutation_is_not_application_authority(binding):
 
 def test_schema_nine_has_no_implicit_binding_intents():
     state = state_from_json({"schema_version": 9})
-    assert state.schema_version == 12 and not state.binding_intents and not state.execution_bindings
+    assert state.schema_version == 13 and not state.binding_intents and not state.execution_bindings
 
 
 async def test_local_acknowledgment_failure_keeps_one_recoverable_apply(binding, monkeypatch):
@@ -250,7 +250,7 @@ async def test_schema_eleven_binding_history_migrates_without_replacement_author
         for field in ("replace_binding_id", "replacement_snapshot", "applied_binding"):
             record.pop(field)
     migrated = state_from_json(old)
-    assert migrated.schema_version == 12
+    assert migrated.schema_version == 13
     record = migrated.binding_intents[0]
     assert record.status == "APPLIED"
     assert record.replace_binding_id is record.replacement_snapshot is record.applied_binding is None

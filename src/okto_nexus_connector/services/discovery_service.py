@@ -226,7 +226,7 @@ def select_explicit(adapter_id: str, executable: str | Path):
                              str(error), retry_safe=error.retry_safe) from None
 
 
-async def probe_version(selected):
+async def probe_version(selected, *, strict=False):
     """Sealed, secret-free ``--version`` probe for one selected candidate.
 
     Returns the Core's updated candidate, carrying the observed version
@@ -258,6 +258,9 @@ async def probe_version(selected):
     except CoreError as error:
         raise ConnectorError(error.code, "probe", str(error)) from None
     except Exception:
+        if strict:
+            raise ConnectorError('NATIVE_VERSION_UNQUALIFIED', 'probe',
+                                 'The selected installation version could not be observed.') from None
         # A probe that cannot run or parse simply yields no version;
         # selection and qualification happen through the Core anyway.
         return selected

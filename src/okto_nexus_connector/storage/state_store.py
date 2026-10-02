@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -163,6 +163,8 @@ class ExecutionExecutorRecord:
     inventory_publication_sequence: int = 0
     # Local discovery scope only; never runtime or binding authority.
     discovery_configuration: dict[str, Any] = field(default_factory=dict)
+    # Explicit, byte-bound version observations; never execution authority.
+    installation_observations: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)

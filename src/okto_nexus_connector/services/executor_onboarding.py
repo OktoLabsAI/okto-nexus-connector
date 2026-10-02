@@ -77,7 +77,8 @@ class ExecutorOnboarding:
             raise ConnectorError("BINDING_NOT_AUTHORIZED", "executor_onboarding",
                                  "Bootstrap realization requires the executor registration identity.")
         configuration = await asyncio.to_thread(self._configuration, scope, configuration_digest, adapter_id)
-        candidates = tuple(await configured_candidates(record.discovery_configuration))
+        candidates = tuple(await configured_candidates(record.discovery_configuration,
+                           observations=record.installation_observations))
         await asyncio.to_thread(self._require, identity_alias, scope)
         # Staging validates the exact inventory, physical candidate/root, stable
         # client intent and consent before any credential access or HTTP call.

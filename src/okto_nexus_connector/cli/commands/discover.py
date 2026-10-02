@@ -58,7 +58,7 @@ async def run_discover(args, output: Output, root: Path):
                 "The Server executor registration is missing or ambiguous.")
         record = records[0]
         candidates = await configured_candidates(record.discovery_configuration,
-            adapter_ids=(harness,) if harness else None)
+            adapter_ids=(harness,) if harness else None, observations=record.installation_observations)
         current = await asyncio.to_thread(store.load)
         matches = [r for r in current.execution_executors if r.server_id == server_id]
         if len(matches) != 1 or matches[0] != record:

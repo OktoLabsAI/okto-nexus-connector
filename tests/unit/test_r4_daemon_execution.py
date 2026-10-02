@@ -309,11 +309,12 @@ async def test_default_execution_discovery_uses_persisted_scope_and_revalidates(
     candidates = await owner.control.discover()
     owner.control.discover = None
     configuration = {"approved_scope": "fixture"}
-    snapshot = (SimpleNamespace(discovery_configuration=configuration), None, None)
+    snapshot = (SimpleNamespace(discovery_configuration=configuration, installation_observations=[]), None, None)
     owner.control._snapshot = lambda: snapshot
     calls = []
-    async def discover(value):
+    async def discover(value, *, observations):
         assert value == configuration
+        assert observations == []
         calls.append("discover")
         return candidates
     async def require(value):

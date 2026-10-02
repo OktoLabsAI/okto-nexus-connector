@@ -21,8 +21,9 @@ async def onboarding(registration, tmp_path, monkeypatch):
     binary.write_bytes(b"technical selected executable")
     selected = InstallationCandidate("codex_app_server", str(binary), fingerprint(binary),
         "explicit", "selected", installation_ref=installation_ref("codex_app_server", str(binary)))
-    async def discover(configuration):
+    async def discover(configuration, *, observations):
         assert configuration == {}
+        assert observations == []
         return [selected]
     monkeypatch.setattr(module, "configured_candidates", discover)
     configuration = await service.configure_launch(identity_alias="selected", adapter_id="codex_app_server",
