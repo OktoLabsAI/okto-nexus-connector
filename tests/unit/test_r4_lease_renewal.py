@@ -8,17 +8,27 @@ from nexus_connector_core import R4_PREVIEW_REVISION, SessionKey
 from okto_nexus_connector.errors import ConnectorError
 from tests.unit.test_execution_selection import selection
 from tests.unit.test_r4_daemon_execution import lifecycle
-from tests.unit.test_r4_execution import observed, operation
+from tests.unit.test_r4_execution import observed, operation, failed
 
 
 from tests.unit.async_diagnostics import pending_task_locations
 
 
-async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False):
+async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None):
     owner, _, store, frame, native, _, published, _ = lifecycle
+    if clock is not None:
+        from okto_nexus_connector.services import core_host
+        original = core_host.create_runtime
+        def controlled_runtime(**kwargs):
+            return original(**kwargs, clock=clock)
+        monkeypatch.setattr(core_host, "create_runtime", controlled_runtime)
+        owner.clock = clock.monotonic
     entered, release = asyncio.Event(), asyncio.Event()
     calls = []
     async def lease(runtime, *, scope, grant_id, purpose="initial", require_current=None, fence_on_error=True):
+        if clock is not None and purpose == "renew":
+            # Renewal is sent after the initial request in the shared clock.
+            clock.now += .8
         if require_current is not None:
             await require_current()
         attempt = await runtime.begin_r4_lease_request(scope=scope, grant_id=grant_id,
@@ -89,16 +99,32 @@ async def test_authority_change_while_grant_is_pending_prevents_install(lifecycl
 
 
 @pytest.mark.parametrize("selection",[True],indirect=True)
-async def test_interrupt_progresses_while_productive_work_waits_for_renewal(lifecycle,monkeypatch):
-    owner,_,frame,native,published,session,entered,release,_=await setup(lifecycle,monkeypatch,hold=True)
+@pytest.mark.parametrize("expire_before_reply", [False, True])
+async def test_interrupt_progresses_while_productive_work_waits_for_renewal(lifecycle,monkeypatch,expire_before_reply):
+    class Clock:
+        now = 100.0
+        def monotonic(self):
+            return self.now
+    clock = Clock()
+    owner,_,frame,native,published,session,entered,release,_=await setup(
+        lifecycle,monkeypatch,hold=True,clock=clock)
     try:
         await asyncio.wait_for(entered.wait(),3)
+        # Both owners use the same public injected Core clock. Disk latency
+        # cannot consume the authority window of this ordering test.
         await owner.connection.emit(operation(frame,"turn.submit",{"text":"After renewal"}))
         await owner.connection.emit(operation(frame,"turn.interrupt",{"reason":"Stop the turn"}))
         receipt=await observed(published,owner.owner)
         assert receipt["operation_id"]=="turn.interrupt"
         assert [row[0] for row in native.native.sent]==["interrupt"]
+        if expire_before_reply:
+            clock.now = session.deadline
         release.set()
+        if expire_before_reply:
+            await failed(owner.owner)
+            assert owner.owner.failure.code == "LEASE_EXPIRED"
+            assert [row[0] for row in native.native.sent] == ["interrupt"]
+            return
         receipt=await observed(published,owner.owner)
         assert receipt["operation_id"]=="turn.submit"
         assert [row[0] for row in native.native.sent]==["interrupt","send_turn"]
