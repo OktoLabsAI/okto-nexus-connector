@@ -25,6 +25,27 @@ daemon creation. Foreground mode shares its supervisor's lifetime; closing that
 supervisor can terminate the daemon. No supervisor policy is modified.
 See [Windows nested-job rules](https://learn.microsoft.com/en-us/windows/win32/procthread/nested-jobs).
 
+## Unsupported executor platform
+
+Managed execution currently requires the Core Windows or Linux containment
+backend and successful preflight. macOS has no qualified backend, so doctor
+reports `UNSUPPORTED_PLATFORM` and launches retain
+`PROCESS_CONTAINMENT_UNAVAILABLE`. Installing a keyring or starting the daemon
+does not remove that restriction. Use a Windows/Linux executor, or a Linux VM
+with providers and workspace installed inside it; validate containment with
+`doctor` there. A container is usable only if its kernel and supervisor allow
+all required checks. Neither a VM nor a container controls native Mac processes.
+
+Discovery and containment are separate. A running provider process is not
+proof of an installed, approved executable candidate. Passive PATH discovery
+lists candidates under the current trust policy and does not execute binaries.
+For R4, configure the executor's approved harness roots; these restrict PATH
+discovery and do not add directories to PATH. An explicit `--executable` selects
+a file for the applicable CLI flow but does not bypass containment, build
+qualification or approval. `NOT_INSTALLED` / `no_installed_candidate` means the
+inventory found no candidate; it is not by itself evidence that containment
+filtered one out. See [discovery configuration](../README.md#persisted-r4-executor-discovery).
+
 ## First use: import an existing canonical key
 
 The Server screen proposes a command; the key enters through a protected

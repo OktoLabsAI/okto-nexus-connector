@@ -8,16 +8,34 @@ identity/harness/project and administers managed runtimes through
 
 - Distribution `okto-nexus-connector`, import `okto_nexus_connector`,
   Python ≥ 3.11, entry point `okto-nexus-connector`, consuming
-  `nexus-connector-core==0.2.8.dev0` (public `create_runtime`
+  `nexus-connector-core==0.2.52.dev0` (public `create_runtime`
   composition).
 - **No MCP implementation of any transport.** Harness MCP clients talk
   directly to the Nexus Server over HTTP; the connector only *configures*
   those clients. Stdio of the native runtime protocols is not MCP.
 - **No Nexus user login.** The canonical agent key already used by MCP
   authenticates onboarding; the OS account is only a local boundary.
-- Status: `0.1.0.dev0` — development build; see
+- Status: `0.5.0.dev0` — development build; see
   [plans/implementation/status](plans/implementation/IMPLEMENTATION_STATUS.md)
   for gates, evidence and honestly-blocked items.
+
+## Platform support before installation
+
+| Executor platform | Managed native execution |
+|---|---|
+| Windows | Job Object backend; requires successful containment preflight and a qualified provider build |
+| Linux | procfs, child tracking, pidfd and subreaper backend; requires successful preflight and a qualified provider build |
+| macOS | Unsupported: no qualified Core containment backend; managed launches are refused |
+
+Installation, passive discovery and an available macOS keyring do not qualify
+managed execution. The final Windows/Linux provider matrix remains under
+validation; platform backend availability alone is not release acceptance.
+On a Mac, use a separate Windows/Linux executor or a Linux VM with its own
+workspace, provider installation and credentials. Run `doctor` inside that
+executor and verify every containment requirement. Containers may restrict
+required kernel capabilities and are not automatically qualified. A Linux
+guest cannot manage or attach to a native macOS provider process.
+See the [platform runbook](docs/runbook.md#unsupported-executor-platform).
 
 ## What it does
 

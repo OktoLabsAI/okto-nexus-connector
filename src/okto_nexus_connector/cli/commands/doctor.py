@@ -145,14 +145,17 @@ async def run_doctor(args, output: Output, root: Path):
         preflight = containment_status()
         missing = [f"{name}: {detail}" for name, detail in
                    preflight.items() if detail != "ok"]
+        unsupported = "platform" in preflight and preflight["platform"] != "ok"
         check("containment", "preflight",
-              "ok" if not missing else "fail",
+              "unsupported" if unsupported else "ok" if not missing else "fail",
+              "UNSUPPORTED_PLATFORM: " + "; ".join(missing) if unsupported else
               "; ".join(missing) if missing else
               ", ".join(f"{k}=ok" for k in preflight),
               "" if not missing else
               "managed launches will be refused "
               "(PROCESS_CONTAINMENT_UNAVAILABLE); run the daemon on a "
-              "platform with a qualified containment backend")
+              "Windows/Linux executor with successful containment preflight. "
+              "See https://github.com/OktoLabsAI/okto-nexus-connector/blob/feature/v0.2.0/docs/runbook.md#unsupported-executor-platform")
     except Exception as exc:
         check("containment", "preflight", "unknown", str(exc))
 
@@ -204,10 +207,11 @@ async def run_doctor(args, output: Output, root: Path):
     passed = sum(1 for c in checks if c["status"] == "ok")
     failed = sum(1 for c in checks if c["status"] == "fail")
     warned = sum(1 for c in checks if c["status"] == "warn")
+    unsupported = sum(1 for c in checks if c["status"] == "unsupported")
     summary = {"checks": checks, "summary": {
-        "ok": passed, "warn": warned, "fail": failed,
+        "ok": passed, "warn": warned, "fail": failed, "unsupported": unsupported,
         "version": __version__}}
-    output.line(f"doctor: {passed} ok, {warned} warn, {failed} fail")
+    output.line(f"doctor: {passed} ok, {warned} warn, {failed} fail, {unsupported} unsupported")
     return summary
 
 

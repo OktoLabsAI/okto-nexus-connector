@@ -1,0 +1,12 @@
+{
+  "issue": "https://github.com/OktoLabsAI/okto-nexus-connector/issues/1",
+  "resolution_scope": "Document unsupported macOS managed execution and explicit platform diagnostic; no new macOS backend",
+  "criteria": {
+    "platform_matrix": "README before quickstart",
+    "doctor": "unsupported status and UNSUPPORTED_PLATFORM detail, docs action; supported host preflight failures remain fail",
+    "workaround": "Windows/Linux executor or Linux VM; preflight and provider qualification still required",
+    "discovery": "Separate candidate visibility/trust from containment; running Mac processes are not guest targets"
+  },
+  "validation": "15 tests passed, 1 platform skip on Windows/Python 3.13; darwin diagnostic is simulated, not macOS runtime qualification",
+  "wheel_sha256": "6e294c0ed92993a93f5a16b01eee86e3ff4f8e8c63f941300d3e25fd88a165fc"
+}
