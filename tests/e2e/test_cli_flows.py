@@ -114,7 +114,8 @@ async def test_cli_identity_connect_and_daemon(tmp_path: Path, fake_server):
         "--executable", str(binary), "--credential-stdin",
         "--project", str(project),
         stdin=f"{KEY}\ny\n")
-    assert result.returncode == 0, result.stderr
+    if result.returncode != 0:
+        pytest.fail(result.stderr.decode('utf-8', errors='replace'))
     connected = json.loads(result.stdout)
     assert connected["connected"] is True
     binding = connected["binding"]
