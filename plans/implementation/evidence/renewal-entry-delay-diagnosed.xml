@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="3" time="13.457" timestamp="2026-10-02T06:48:42.717309-03:00" hostname="Alienware_m15"><testcase classname="tests.unit.test_r4_lease_renewal" name="test_automatic_renewal_keeps_the_same_runtime_past_its_initial_deadline[delayed-loop-True]" time="5.303"><failure message="TimeoutError&#10;Renewal entry timed out; owner failure code: LEASE_EXPIRED&#10;Task-4: _pump:2555&#10;Task-5: _watch_lease:2388 -&gt; sleep:718&#10;r4-execution-control: _consume:194 -&gt; receive_operation:31 -&gt; get:186&#10;r4-execution-productive: _consume:194 -&gt; receive_operation:31 -&gt; get:186&#10;r4-receipt-observer: _observe_receipts:178 -&gt; wait_for:507 -&gt; wait:213">C:\Python313\Lib\asyncio\tasks.py:507: in wait_for
+    return await fut
+           ^^^^^^^^^
+C:\Python313\Lib\asyncio\locks.py:213: in wait
+    await fut
+E   asyncio.exceptions.CancelledError
+
+The above exception was the direct cause of the following exception:
+tests\unit\test_r4_lease_renewal.py:84: in test_automatic_renewal_keeps_the_same_runtime_past_its_initial_deadline
+    await renewal_entered(owner, entered)
+tests\unit\test_r4_lease_renewal.py:26: in renewal_entered
+    await asyncio.wait_for(entered.wait(), 3)
+C:\Python313\Lib\asyncio\tasks.py:506: in wait_for
+    async with timeouts.timeout(timeout):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Python313\Lib\asyncio\timeouts.py:116: in __aexit__
+    raise TimeoutError from exc_val
+E   TimeoutError
+E   Renewal entry timed out; owner failure code: LEASE_EXPIRED
+E   Task-4: _pump:2555
+E   Task-5: _watch_lease:2388 -&gt; sleep:718
+E   r4-execution-control: _consume:194 -&gt; receive_operation:31 -&gt; get:186
+E   r4-execution-productive: _consume:194 -&gt; receive_operation:31 -&gt; get:186
+E   r4-receipt-observer: _observe_receipts:178 -&gt; wait_for:507 -&gt; wait:213</failure></testcase><testcase classname="tests.unit.test_r4_lease_renewal" name="test_renewal_failure_does_not_extend_deadline_or_repeat_native_open[delayed-loop-True]" time="5.021"><failure message="TimeoutError&#10;Renewal entry timed out; owner failure code: LEASE_EXPIRED&#10;Task-15: _pump:2555&#10;Task-16: _watch_lease:2388 -&gt; sleep:718&#10;r4-execution-control: _consume:194 -&gt; receive_operation:31 -&gt; get:186&#10;r4-execution-productive: _consume:194 -&gt; receive_operation:31 -&gt; get:186&#10;r4-receipt-observer: _observe_receipts:171 -&gt; refresh_receipt_facts:39 -&gt; to_thread:25">C:\Python313\Lib\asyncio\tasks.py:507: in wait_for
+    return await fut
+           ^^^^^^^^^
+C:\Python313\Lib\asyncio\locks.py:213: in wait
+    await fut
+E   asyncio.exceptions.CancelledError
+
+The above exception was the direct cause of the following exception:
+tests\unit\test_r4_lease_renewal.py:101: in test_renewal_failure_does_not_extend_deadline_or_repeat_native_open
+    await renewal_entered(owner, entered)
+tests\unit\test_r4_lease_renewal.py:26: in renewal_entered
+    await asyncio.wait_for(entered.wait(), 3)
+C:\Python313\Lib\asyncio\tasks.py:506: in wait_for
+    async with timeouts.timeout(timeout):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Python313\Lib\asyncio\timeouts.py:116: in __aexit__
+    raise TimeoutError from exc_val
+E   TimeoutError
+E   Renewal entry timed out; owner failure code: LEASE_EXPIRED
+E   Task-15: _pump:2555
+E   Task-16: _watch_lease:2388 -&gt; sleep:718
+E   r4-execution-control: _consume:194 -&gt; receive_operation:31 -&gt; get:186
+E   r4-execution-productive: _consume:194 -&gt; receive_operation:31 -&gt; get:186
+E   r4-receipt-observer: _observe_receipts:171 -&gt; refresh_receipt_facts:39 -&gt; to_thread:25</failure></testcase><testcase classname="tests.unit.test_r4_lease_renewal" name="test_cancelled_cleanup_observer_does_not_abandon_pending_renewal[delayed-loop-True]" time="2.585" /></testsuite></testsuites>

@@ -92,9 +92,23 @@ async def test_retry_without_new_event_converges_without_repeating_native_effect
         monkeypatch.setattr(owner.store,"advance",fail)
     await owner.ensure(SCOPE)
     await owner.ensure(SCOPE)
-    async with asyncio.timeout(3):
-        while owner.store.read(SCOPE)["core_applied"]!=1:
-            await asyncio.sleep(.01)
+    progress = None
+    try:
+        async with asyncio.timeout(3):
+            while True:
+                # Match the publisher: SQLite may wait on a writer, so the
+                # observer must not block the event loop that drives recovery.
+                progress = await asyncio.to_thread(owner.store.read, SCOPE)
+                if progress['core_applied'] == 1:
+                    break
+                await asyncio.sleep(.01)
+    except TimeoutError as error:
+        from tests.unit.async_diagnostics import pending_task_locations
+        counters = None if progress is None else {
+            name: progress[name] for name in ('remote_acked', 'core_applied')}
+        error.add_note(f'Event retry fault={fault}; injected={failures}; '
+                       f'progress={counters}; sends={len(connection.calls)}\n' + pending_task_locations())
+        raise
     assert failures==1 and len(owner.tasks)==1
     assert owner.store.read(SCOPE)["remote_acked"]==1
     assert len(connection.calls)==1

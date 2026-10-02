@@ -21,6 +21,17 @@ class LeaseClock:
         return self.now
 
 
+async def renewal_entered(owner, entered):
+    try:
+        await asyncio.wait_for(entered.wait(), 3)
+    except TimeoutError as error:
+        code = getattr(owner.owner.failure, 'code', None)
+        if code not in (None, 'LEASE_EXPIRED', 'AGENT_AUTH_REQUIRED', 'CONTROL_DISCONNECTED', 'STALE_GENERATION'):
+            code = 'OTHER'
+        error.add_note(f'Renewal entry timed out; owner failure code: {code}\n' + pending_task_locations())
+        raise
+
+
 async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None):
     owner, _, store, frame, native, _, published, _ = lifecycle
     if clock is not None:
@@ -32,10 +43,14 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None)
         owner.clock = clock.monotonic
     entered, release = asyncio.Event(), asyncio.Event()
     calls = []
+    last_request_at = clock.now if clock is not None else None
     async def lease(runtime, *, scope, grant_id, purpose="initial", require_current=None, fence_on_error=True):
+        nonlocal last_request_at
         if clock is not None and purpose == "renew":
-            # Renewal is sent after the initial request in the shared clock.
-            clock.now += .8
+            # Advance to the next request time, preserving explicit advances
+            # made by expiry/boundary tests instead of adding host latency.
+            clock.now = max(clock.now, last_request_at + .8)
+            last_request_at = clock.now
         if require_current is not None:
             await require_current()
         attempt = await runtime.begin_r4_lease_request(scope=scope, grant_id=grant_id,
@@ -65,13 +80,20 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None)
 
 
 @pytest.mark.parametrize("selection",[True],indirect=True)
-async def test_automatic_renewal_keeps_the_same_runtime_past_its_initial_deadline(lifecycle,monkeypatch):
-    owner,_,frame,native,_,session,entered,_,calls=await setup(lifecycle,monkeypatch)
+@pytest.mark.parametrize("scheduling_delay", [0, 1.7], ids=["normal", "delayed-loop"])
+async def test_automatic_renewal_keeps_the_same_runtime_past_its_initial_deadline(lifecycle,monkeypatch,scheduling_delay):
+    clock = LeaseClock()
+    owner,_,frame,native,_,session,entered,_,calls=await setup(lifecycle,monkeypatch,clock=clock)
     initial=session.deadline
-    await asyncio.wait_for(entered.wait(),3)
+    time.sleep(scheduling_delay)
+    await renewal_entered(owner, entered)
     async with asyncio.timeout(4):
-        while time.monotonic()<=initial or session.deadline<=initial:
+        while session.deadline<=initial:
             await asyncio.sleep(.02)
+    # Cross the original authority boundary only after a renewed grant is
+    # installed. The exact same public clock drives Core and the daemon.
+    clock.now = max(clock.now, initial + .01)
+    assert initial < clock.monotonic() < session.deadline
     snapshot=await session.runtime.inspect(SessionKey(frame["server_id"],frame["executor_id"],frame["session_id"]))
     assert snapshot.lease_state=="ACTIVE" and snapshot.ownership=="owned"
     assert owner.ready and len(native.opened)==1 and not native.native.stopped
@@ -80,10 +102,12 @@ async def test_automatic_renewal_keeps_the_same_runtime_past_its_initial_deadlin
 
 
 @pytest.mark.parametrize("selection",[True],indirect=True)
-async def test_renewal_failure_does_not_extend_deadline_or_repeat_native_open(lifecycle,monkeypatch):
-    owner,_,_,native,_,session,entered,_,_=await setup(lifecycle,monkeypatch,refuse=True)
+@pytest.mark.parametrize("scheduling_delay", [0, 1.7], ids=["normal", "delayed-loop"])
+async def test_renewal_failure_does_not_extend_deadline_or_repeat_native_open(lifecycle,monkeypatch,scheduling_delay):
+    owner,_,_,native,_,session,entered,_,_=await setup(lifecycle,monkeypatch,refuse=True,clock=LeaseClock())
     initial=session.deadline
-    await asyncio.wait_for(entered.wait(),3)
+    time.sleep(scheduling_delay)
+    await renewal_entered(owner, entered)
     async with asyncio.timeout(3):
         while owner.owner.failure is None:
             await asyncio.sleep(.01)
@@ -94,9 +118,9 @@ async def test_renewal_failure_does_not_extend_deadline_or_repeat_native_open(li
 
 @pytest.mark.parametrize("selection",[True],indirect=True)
 async def test_authority_change_while_grant_is_pending_prevents_install(lifecycle,monkeypatch):
-    owner,store,_,_,_,session,entered,release,_=await setup(lifecycle,monkeypatch,hold=True)
+    owner,store,_,_,_,session,entered,release,_=await setup(lifecycle,monkeypatch,hold=True,clock=LeaseClock())
     initial=session.deadline
-    await asyncio.wait_for(entered.wait(),3)
+    await renewal_entered(owner, entered)
     store.update(lambda state: setattr(state.execution_bindings[0],"state","REVOKED"))
     release.set()
     async with asyncio.timeout(3):
