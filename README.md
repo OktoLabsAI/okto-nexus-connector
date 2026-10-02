@@ -44,28 +44,34 @@ See the [platform runbook](docs/runbook.md#unsupported-executor-platform).
 | Identity | Protected import (masked/stdin/MCP entry), /me validation with hint comparison, OS keyring with explicit restricted-file fallback, rotation with epoch bump |
 | Daemon | One instance per OS account + state dir under an OS lock with process birth identity; readiness = authenticated IPC ping; bounded drain with per-session reports |
 | IPC | Unix socket (POSIX) / loopback+token (Windows), hello-authentication before any effect, streamed log follow |
-| Transport | Contract HTTPS client (plan A.5 routes) + outbound NXL r3 WSS: lanes per binding with scoped tickets, heartbeats, bounded priority queues, generation fencing, reconnect+reconcile |
+| Transport | Authenticated R4 HTTP management and outbound NXL R4 WSS: scoped tickets, binding lanes, generation fencing, reconnect/reconcile and retained publication |
 | Runtimes | Start/reuse/new-session, submit, interrupt (keeps runtime) vs stop (closes owned resources), logs, inspect — all via the Core's public API with the Server-authorizing `intents:resolve` flow |
 | MCP config | Declarative direct-HTTP entries (Codex TOML / Claude JSON) with plan/apply/backup/CAS/ownership; tools-only needs no daemon; Pi gets the non-MCP native bridge |
 | Ops | `doctor` layered diagnostics, `service install` per-OS plans with honest survival matrix, redacted exports |
 
 ## Quickstart
 
-```bash
-# on the harness machine, from the Server screen's proposed command:
-okto-nexus-connector connect --server https://nexus.example --agent ag_123
-# → paste the canonical key, pick the local harness, confirm the binding
+Use the canonical R4 flow on the execution host. Import the existing agent key
+through the masked prompt, then register this host:
 
-okto-nexus-connector runtime start codex      # in the project directory
-okto-nexus-connector runtime status
-okto-nexus-connector runtime logs <session> --follow
+```bash
+okto-nexus-connector identity add --server https://nexus.example --agent AGENT_ID --alias SUBJECT
+okto-nexus-connector executor register --identity SUBJECT --label "Execution host"
+okto-nexus-connector executor list
 ```
+
+Use the returned Server ID to [configure discovery](#persisted-r4-executor-discovery),
+[observe the selected installation and stage consent](#launch-consent-and-realization),
+then [review and apply its binding](#review-and-apply-an-r4-binding).
+Only after binding approval and execution authorization, use the explicit alias
+with the [canonical runtime commands](#canonical-runtime-intents).
+Registration alone does not approve a workspace or start a provider. The legacy
+`connect` helper is not the R4 executor onboarding flow.
 
 ## Development
 
 ```bash
-python -m pip install -e .[test]
-python -m pip install <core wheel>            # pinned nexus-connector-core
+python -m pip install --find-links vendor/wheels ".[test]"
 python -m pytest -q                           # unit + contract + integration + e2e
 python -m build                               # wheel + sdist
 ```
@@ -193,8 +199,8 @@ persisted before HTTP and acknowledged after scope checks. No path or credential
 material is included in the realization response.
 
 The acknowledged realization remains pending binding approval. Use the binding commands below to obtain and apply a reviewable proposal.
-Initial child turns and final remote provider qualification remain under
-integration; these commands do not imply runtime readiness.
+Final provider/platform acceptance remains under integration; these commands
+do not imply runtime readiness.
 
 ### Review and apply an R4 binding
 
@@ -253,7 +259,8 @@ admission state and receipt revision. Query it to observe progress. The CLI
 does not launch Core directly or infer an applied lease.
 
 R4 start automatically reuses one compatible session; --new-session requests a distinct session.
-Initial turn text is currently submitted through a separate runtime submit command.
+Use `--text` with start for an initial child turn, or `runtime submit` for a
+subsequent turn after the session is ready.
 The project and harness come from the approved binding. Session controls accept
 an explicit --alias; a session previously resolved here can identify that alias
 when unambiguous. Steering and interruption accept --expected-turn-id or
