@@ -12,6 +12,12 @@ from ..output import Output
 async def dispatch(args, output: Output):
     root = _state_dir(args)
     command = args.command
+    if command == 'configure':
+        from .configure import run_configure
+        return await run_configure(args, output, root)
+    if command == 'connection-config':
+        from .connection_config import run_connection_config
+        return await run_connection_config(args, output, root)
     if command == 'harness-config':
         from .harness_config import run_harness_config
         return await run_harness_config(args, output, root)

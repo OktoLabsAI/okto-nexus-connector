@@ -36,6 +36,27 @@ def build_parser() -> argparse.ArgumentParser:
                         help="override the per-user state directory")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    configure = sub.add_parser('configure', help='interactive connection wizard (JSON optional)')
+    configure.add_argument('--file', type=Path, help='portable connection template; destination paths are ignored')
+    configure.add_argument('--identity', help='existing identity alias, or alias to register with a hidden key prompt')
+    configure.add_argument('--server', help='Server URL when adding an identity')
+    configure.add_argument('--agent', help='identity hint, or target agent for Server-hosted configuration')
+    configure.add_argument('--credential-stdin', action='store_true')
+    configure.add_argument('--credential-env')
+    configure.add_argument('--host', choices=['connector','server'], default='connector', help='execution host (default: this Connector machine)')
+    configure.add_argument('--harness')
+    configure.add_argument('--project', help='workspace path on the execution host')
+    configure.add_argument('--workspace-label')
+    configure.add_argument('--provider-home', help='explicit login directory on the execution host')
+    configure.add_argument('--candidate-ref', default='')
+    configure.add_argument('--executor-id', default='')
+    configure.add_argument('--inventory-revision', default='')
+    configure.add_argument('--workspace-id')
+    configure.add_argument('--binding-id')
+    configure.add_argument('--request-id', help='stable ID to resume configuration after an uncertain response')
+    configure.add_argument('--operator-identity', help='imported operator identity to apply Nexus policies after binding approval')
+    configure.add_argument('--operator-proof-ref', help='operator approval reference from the binding proposal')
+
     connect = sub.add_parser("connect", help="guided first-use flow")
     connect.add_argument("--server", required=True,
                          help="Nexus Server base URL")
@@ -286,6 +307,24 @@ def build_parser() -> argparse.ArgumentParser:
         if command == 'apply':
             item.add_argument('--file', type=Path, required=True)
             item.add_argument('--expected-revision', type=int, required=True, help='revision reviewed with harness-config show')
+    connection = sub.add_parser('connection-config', help='reuse a complete Nexus connection JSON')
+    connection_sub = connection.add_subparsers(dest='subcommand', required=True)
+    for command in ('validate', 'apply'):
+        item = connection_sub.add_parser(command)
+        item.add_argument('--file', type=Path, required=True)
+        if command == 'apply':
+            item.add_argument('--identity', required=True, help='imported operator identity')
+            item.add_argument('--agent', required=True)
+            item.add_argument('--request-id', required=True, help='stable ID for safe retries')
+            item.add_argument('--executor-id', default='')
+            item.add_argument('--candidate-ref', default='')
+            item.add_argument('--inventory-revision', default='')
+            item.add_argument('--workspace-id', default=None)
+            item.add_argument('--binding-id', default=None, help='existing connection to replace')
+            item.add_argument('--project', help='workspace folder on the destination host; never imported')
+            item.add_argument('--workspace-label', default=None)
+            item.add_argument('--provider-home', help='login directory on the destination host; never imported')
+            item.add_argument('--execution-location', choices=['local','remote','all'], default='local')
     return parser
 
 
@@ -298,6 +337,8 @@ def main(argv: list[str] | None = None) -> int:
         result = asyncio.run(dispatch(args, output))
     except ConnectorError as error:
         return output.error(error)
+    except EOFError:
+        return output.error(ConnectorError('VALIDATION_ERROR','cli','Terminal input ended. Configuration canceled.'))
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
         return EXIT_USAGE
