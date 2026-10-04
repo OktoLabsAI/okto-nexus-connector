@@ -272,6 +272,20 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_remove.add_argument("--file", type=Path, required=True)
     mcp_remove.add_argument("--entry-name", default="nexus")
 
+    harness = sub.add_parser('harness-config', help='inspect, validate and apply Core harness parameters')
+    harness_sub = harness.add_subparsers(dest='subcommand', required=True)
+    describe = harness_sub.add_parser('describe', help='show portable Core parameters; native availability needs a live observation')
+    describe.add_argument('--harness', required=True, choices=['codex_app_server', 'claude_stream', 'pi_rpc'])
+    validate = harness_sub.add_parser('validate', help='validate a reusable JSON settings file without applying it')
+    validate.add_argument('--file', type=Path, required=True)
+    validate.add_argument('--harness', default=None)
+    for command in ('show', 'apply'):
+        item = harness_sub.add_parser(command, help='read or update canonical settings using an authorized imported identity')
+        item.add_argument('--identity', required=True)
+        item.add_argument('--endpoint-id', required=True)
+        if command == 'apply':
+            item.add_argument('--file', type=Path, required=True)
+            item.add_argument('--expected-revision', type=int, required=True, help='revision reviewed with harness-config show')
     return parser
 
 

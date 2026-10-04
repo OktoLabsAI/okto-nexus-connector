@@ -13,7 +13,7 @@ import secrets
 import time
 
 from nexus_connector_core import (
-    CoreError, LaunchIntent, OpenOperation, TurnOperation, ControlOperation,
+    CoreError, LaunchIntent, OpenOperation, TurnOperation, ControlOperation, validate_harness_settings,
     project_r4_open_receipt, project_r4_turn_receipt, project_r4_steer_receipt,
     project_r4_interrupt_receipt, project_r4_close_receipt,
     project_r4_decision_receipt, r4_close_operation, r4_native_decision_operation,
@@ -363,7 +363,8 @@ class R4ExecutionOwner:
             context = self._context(item, runtime)
             prepared = await runtime.prepare(LaunchIntent(frame['agent_id'], frame['workspace_id'],
                 payload['adapter_id'], mode=payload['mode'], model=payload.get('model'),
-                auth_refs=setup.auth_refs), context)
+                auth_refs=setup.auth_refs,
+                harness_settings=validate_harness_settings(payload['adapter_id'], payload.get('harness_settings', {}))), context)
             # prepare and environment discovery may yield. The current lane
             # and installed authority are checked again before open.
             context = self._context(item, runtime)

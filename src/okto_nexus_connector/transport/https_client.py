@@ -401,6 +401,20 @@ class NexusHTTPClient:
 
     # -- contract routes (plan A.5) ---------------------------------------
 
+    async def harness_settings(self, key, endpoint_id, *, changes=None):
+        from urllib.parse import quote
+        if not isinstance(endpoint_id, str) or not 1 <= len(endpoint_id) <= 160:
+            raise ConnectorError('VALIDATION_ERROR', 'harness_config', 'An endpoint ID is required.')
+        payload = await self._request('PUT' if changes is not None else 'GET',
+            '/api/v1/harness/endpoints/' + quote(endpoint_id, safe='') + '/harness-settings',
+            key=key, json_body=changes)
+        data = payload.get('data')
+        if (payload.get('ok') is not True or not isinstance(data, dict) or
+                data.get('endpoint_id') != endpoint_id or type(data.get('revision')) is not int or
+                not isinstance(data.get('configuration'), dict) or not isinstance(data.get('settings'), dict)):
+            raise ConnectorError('VERSION_INCOMPATIBLE', 'harness_config', 'Invalid Server settings response.')
+        return data
+
     async def r4_protocol(self) -> R4ProtocolInfo:
         """Check public compatibility before requesting any credential."""
         from nexus_connector_core import R4_PREVIEW_REVISION, SNAPSHOT_FORMAT_VERSION, __version__
@@ -1103,13 +1117,15 @@ class NexusHTTPClient:
             body = native_action_request_body(request, capability.scope)
         except CoreError as error:
             raise ConnectorError(error.code, 'native_action', 'Invalid native action request.') from None
-        domain_action = {'context': 'handoff.get', 'claim': 'handoff.claim', 'complete': 'handoff.complete'}[body['action']]
+        domain_action = {'context': 'handoff.get', 'claim': 'handoff.claim', 'complete': 'handoff.complete',
+                         'input_list': 'runtime.input.list', 'input_respond': 'runtime.input.respond',
+                         'message_create': 'message.create'}[body['action']]
         if request.capability_ref != capability.capability_ref or domain_action not in capability.actions:
             raise ConnectorError('BINDING_NOT_AUTHORIZED', 'native_action', 'The native action is outside the capability scope.')
         if time.monotonic() >= capability.deadline_monotonic:
             raise ConnectorError('AUTH_EXPIRED', 'native_action', 'The native capability has expired.')
         assert self._client is not None, "Use 'async with NexusHTTPClient'."
-        mutation = body['action'] != 'context'
+        mutation = body['action'] not in {'context', 'input_list'}
 
         def uncertain():
             return ConnectorError('OUTCOME_UNKNOWN' if mutation else 'EXECUTOR_OFFLINE', 'native_action',
@@ -1152,9 +1168,22 @@ class NexusHTTPClient:
                         or data['action_id'] != request.operation_id or data['action'] != body['action']
                         or type(data['state']) is not str or not 1 <= len(data['state']) <= 160
                         or type(data['result']) is not dict or len(data['result']) > 64
-                        or data['result'].get('handoff_id') != request.handoff_id
-                        or data['result'].get('status') != data['state']
                         or {'jsonrpc', 'method', 'params', 'tools', 'mcpServers'} & data['result'].keys()):
+                    raise uncertain()
+                result = data['result']
+                if body['action'] in {'context', 'claim', 'complete'}:
+                    if result.get('handoff_id') != request.handoff_id or result.get('status') != data['state']:
+                        raise uncertain()
+                elif body['action'] == 'input_list':
+                    if data['state'] != 'SUCCEEDED' or type(result.get('items')) is not list:
+                        raise uncertain()
+                elif body['action'] == 'input_respond':
+                    if (data['state'] != 'SUCCEEDED' or type(result.get('decision')) is not dict
+                            or type(result.get('reused')) is not bool):
+                        raise uncertain()
+                elif (data['state'] != result.get('status', 'SUCCEEDED')
+                      or not isinstance(result.get('approval_id') if data['state'] == 'pending_approval'
+                                        else result.get('message_id'), str)):
                     raise uncertain()
                 # A late response cannot refresh an expired credential or disclose
                 # scoped content. A mutation may already have committed.

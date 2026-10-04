@@ -9,6 +9,7 @@ import pytest
 
 from nexus_connector_core import CoreError
 from nexus_connector_core.native_action_bridge import ContextGet, HandoffClaim, HandoffComplete
+from nexus_connector_core.native_action_bridge import MessageCreate, RuntimeInputList, RuntimeInputRespond
 from okto_nexus_connector.errors import ConnectorError
 from okto_nexus_connector.transport.https_client import (
     MANAGEMENT_REVISION, NexusHTTPClient, R4SessionCapability,
@@ -19,6 +20,37 @@ SCOPE = dict(server_id="srv", executor_id="exe", binding_id="binding", agent_id=
              workspace_id="ws", workspace_binding_id="wxb", session_id="session",
              session_owner_generation=1, authorization_revision=1, configuration_revision=1,
              binding_revision=1, credential_epoch=1)
+
+
+@pytest.mark.parametrize('action,typed,result', [
+    ('message_create',MessageCreate('original-id','session','native-cap:cap',{'subject':'Test','body':'Hello','target':{}}),{'message_id':'msg-1'}),
+    ('input_list',RuntimeInputList('original-id','session','native-cap:cap'),{'items':[]}),
+    ('input_respond',RuntimeInputRespond('original-id','session','native-cap:cap',{'decision':'deny'}),{'decision':{'canonical_state':'CONFIRMED'},'reused':False}),
+])
+@pytest.mark.parametrize('lost_reply',[False,True])
+def test_message_and_question_transport_preserves_contract_and_uncertainty(action,typed,result,lost_reply):
+    async def run():
+        seen=[]
+        cap=capability(actions=('message.create','runtime.input.list','runtime.input.respond'))
+        def handler(req):
+            seen.append(json.loads(req.content))
+            if lost_reply:
+                raise httpx.ReadTimeout('Reply lost',request=req)
+            return httpx.Response(200,json={'action_id':'original-id','action':action,'state':'SUCCEEDED','result':result},
+                headers={'X-Nexus-Connections-Revision':MANAGEMENT_REVISION})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as raw:
+            async with NexusHTTPClient('https://nexus.test',client=raw) as http:
+                backend=NexusNativeActions(http,cap)
+                if lost_reply:
+                    with pytest.raises(CoreError) as error:
+                        await backend._invoke(typed)
+                    assert error.value.code==('EXECUTOR_OFFLINE' if action=='input_list' else 'OUTCOME_UNKNOWN')
+                else:
+                    assert await backend._invoke(typed)==result
+        assert len(seen)==1 and seen[0]['action']==action
+        assert seen[0]['scope']==SCOPE
+        assert 'handoff_id' not in seen[0]['payload']
+    asyncio.run(run())
 
 
 def capability(**changes):

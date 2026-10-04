@@ -254,10 +254,14 @@ async def test_frozen_open_selection_and_typed_control_projection(execution):
         return await candidates(frame)
     owner.candidate_provider = mutating
     opening['payload']['model'] = 'approved-model'
+    opening['payload']['harness_settings'] = {'effort':'low', 'approval_policy':'on-request', 'user_input':'enabled'}
     await connection.emit(opening)
     assert (await observed(receipts, owner))['operation_id'] == 'open'
     assert factory.opened[0].intent.mode == 'managed'
     assert factory.opened[0].intent.model == 'approved-model'
+    assert factory.opened[0].intent.harness_settings.effort == 'low'
+    assert factory.opened[0].intent.harness_settings.approval_policy == 'on-request'
+    assert factory.opened[0].intent.harness_settings.user_input == 'enabled'
     await connection.emit(operation(opening, 'turn.steer', {'text': 'Continue.'},
                                     expected_turn_id='native-turn'))
     assert (await observed(receipts, owner))['operation_id'] == 'turn.steer'
