@@ -755,7 +755,7 @@ async def test_p04_availability_surface_preserves_real_pi_pair(
     finally:
         discovery_service.inventory_candidates = original
     rows = [row for row in snapshot["rows"]
-            if row.get("display_name", "").startswith("Pi")]
+            if row.get("candidate_ref") == pi.installation_ref]
     assert rows, "the Pi pair disappeared from the snapshot"
     row = rows[0]
     assert row.get("version") == "0.87.1", row
