@@ -6,6 +6,15 @@ Pi and Claude Code run, imports canonical agent credentials, binds
 identity/harness/project and administers managed runtimes through
 [`nexus-connector-core`](https://github.com/OktoLabsAI/okto-nexus-connector-core).
 
+Runtime message delivery and automatic recovery use Core's shared defaults.
+The daemon reconnects automatically and verifies retained receipts, resource
+ownership and event history before enabling execution. Five unsuccessful
+recovery attempts produce `RECOVERY_ATTENTION_REQUIRED` in executor status;
+restart the daemon after resolving the reported condition to retry. Transport
+reconnects use a separate backoff. Previously submitted work is never replayed
+by the recovery supervisor. The `configure` wizard and JSON imports use the
+same automatic-message default as Nexus.
+
 **Managed execution hosts currently require Windows or Linux.** Native macOS
 execution is unsupported; see [platform support](#platform-support-before-installation).
 

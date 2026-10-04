@@ -13,6 +13,7 @@ import secrets
 import time
 import threading
 from urllib.parse import urlsplit
+from nexus_connector_core import DEFAULT_RUNTIME_AUTOMATION
 
 from ..errors import ConnectorError
 from ..services.discovery_service import executor_inventory_snapshot
@@ -55,8 +56,8 @@ class R4DaemonControl:
 
     def __init__(self, store, vault, host, server_id, *, http_factory=NexusHTTPClient,
                  connect=connect_r4_connection, discover=None,
-                 clock=time.monotonic, retry_delays=(0.5, 1, 2, 5, 10, 30),
-                 poll_seconds=0.5):
+                 clock=time.monotonic, retry_delays=DEFAULT_RUNTIME_AUTOMATION.retry_delays,
+                 poll_seconds=DEFAULT_RUNTIME_AUTOMATION.message_interval):
         if not retry_delays or min(retry_delays) <= 0 or poll_seconds <= 0:
             raise ValueError('Invalid R4 startup timing settings.')
         self.store, self.vault, self.host, self.server_id = store, vault, host, server_id
@@ -143,6 +144,8 @@ class R4DaemonControl:
     def status(self):
         connection = self.connection
         return dict(state=self.phase, executor_id=self.executor_id,
+            automatic_messages=DEFAULT_RUNTIME_AUTOMATION.automatic_messages,
+            automatic_recovery=DEFAULT_RUNTIME_AUTOMATION.automatic_recovery,
             control_ready=bool(connection is not None and connection.online and
                                connection.state.control_ready and self.phase == 'CONTROL_READY'),
             execution_ready=bool(self.execution is not None and self.execution.ready), error_code=self.error_code,
@@ -354,29 +357,33 @@ class R4DaemonControl:
                 self.execution = None
 
     async def _run(self):
-        failures = 0
-        try:
-            while not self._stopped.is_set():
-                self.attempts += 1
-                try:
-                    await self._attempt()
-                    failures = 0
-                except Exception as error:
-                    # Never expose exception text containing credentials or
-                    # remote payloads through IPC/status.
-                    code = self._recovery_error or getattr(error, 'code', None)
-                    self.error_code = code if type(code) is str and code in _STATUS_ERRORS else 'CONTROL_DISCONNECTED'
-                    self.phase = 'RECOVERING' if self.error_code in ('RECONCILIATION_REQUIRED', 'JOURNAL_UNAVAILABLE') else 'RETRY_WAIT'
-                    failures += 1
-                finally:
-                    if self.connection is not None:
-                        await self.connection.close()
-                        if getattr(self.connection, 'close_error', None) is not None:
-                            self.cleanup_pending = True
-                            self.error_code = 'CONTROL_DISCONNECTED'
-                            return
+        from nexus_connector_core import RuntimeAutomation, RuntimeAutomationPolicy
+        async def cycle():
+            self.attempts += 1
+            try:
+                await self._attempt()
+            finally:
+                if self.connection is not None:
+                    await self.connection.close()
+                    if getattr(self.connection, 'close_error', None) is not None:
+                        self.cleanup_pending = True
+                        self.error_code = 'CONTROL_DISCONNECTED'
+                        self._stopped.set()
+                    else:
                         self.connection = None
-                if not self._stopped.is_set():
-                    await self._wait(self.retry_delays[min(max(0, failures - 1), len(self.retry_delays) - 1)])
+        async def failed(error):
+            # Error text can contain credentials or remote payloads.
+            code = self._recovery_error or getattr(error, 'code', None)
+            self.error_code = code if type(code) is str and code in _STATUS_ERRORS else 'CONTROL_DISCONNECTED'
+            recovering = self.error_code in ('RECONCILIATION_REQUIRED', 'JOURNAL_UNAVAILABLE')
+            self._recovery_error = self.error_code if recovering else None
+            self.phase = 'RECOVERING' if recovering else 'RETRY_WAIT'
+            return recovering
+        async def exhausted():
+            self.phase = 'RECOVERY_ATTENTION_REQUIRED'
+        try:
+            automation = RuntimeAutomation(RuntimeAutomationPolicy(retry_delays=self.retry_delays))
+            await automation.supervise_connection(cycle=cycle, stop=self._stopped,
+                failed=failed, exhausted=exhausted, wait=self._wait)
         finally:
             self.phase = 'CLEANUP_PENDING' if self.cleanup_pending else 'STOPPED'

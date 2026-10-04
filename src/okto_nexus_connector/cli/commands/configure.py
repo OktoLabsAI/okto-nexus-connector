@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from urllib.parse import quote, urlencode
 import uuid
 
-from nexus_connector_core import discover_harness_configuration, CoreError
+from nexus_connector_core import discover_harness_configuration, CoreError, DEFAULT_RUNTIME_AUTOMATION
 from nexus_connector_core.connection_configuration import (parse_portable_connection_configuration,
     materialize_connection_configuration)
 from ...errors import ConnectorError
@@ -19,7 +19,8 @@ from .connection_config import apply_configuration
 
 def template():
     return dict(format='okto-nexus-connection',version=2,adapter_id='',runtime_enabled=True,
-        session_policy=None,alias='',harness_settings={},automatic_reply=True,tool_access='ask',
+        session_policy=None,alias='',harness_settings={},
+        automatic_reply=DEFAULT_RUNTIME_AUTOMATION.automatic_messages,tool_access='ask',
         authorization=dict(minutes=60,actions=20))
 
 

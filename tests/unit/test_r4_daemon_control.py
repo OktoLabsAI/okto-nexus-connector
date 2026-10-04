@@ -147,6 +147,39 @@ async def test_lost_publication_reply_never_reuses_sequence(control):
         await dispose(owner, host)
 
 
+async def test_core_automation_recovers_without_cli_intervention(control):
+    owner, peer, _, host, _ = control
+    original = owner._attempt
+    async def transient_recovery():
+        if owner.attempts < 3:
+            raise ConnectorError('RECONCILIATION_REQUIRED', 'test', 'Retained proof is not ready.')
+        await original()
+    owner._attempt = transient_recovery
+    owner.start()
+    try:
+        await eventually(lambda: owner.status()['control_ready'])
+        assert owner.attempts == 3 and len(peer.sockets) == 1
+        assert owner.status()['automatic_messages'] is True
+        assert owner.status()['automatic_recovery'] is True
+    finally:
+        await dispose(owner, host)
+
+
+async def test_core_automation_exhaustion_is_visible_without_native_effects(control):
+    owner, peer, _, host, _ = control
+    async def blocked():
+        raise ConnectorError('RECONCILIATION_REQUIRED', 'test', 'Ownership remains uncertain.')
+    owner._attempt = blocked
+    owner.start()
+    try:
+        await eventually(lambda: owner.phase == 'RECOVERY_ATTENTION_REQUIRED')
+        await asyncio.sleep(.03)
+        assert owner.attempts == 5 and not peer.sockets and not peer.publications
+        assert not owner.status()['control_ready']
+    finally:
+        await dispose(owner, host)
+
+
 async def test_unqualified_server_publishes_inventory_without_opening_socket(control):
     owner, peer, _, host, _ = control
     peer.ready = False
