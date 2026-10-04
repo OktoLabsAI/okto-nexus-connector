@@ -8,6 +8,15 @@ toggle in the wizard. Legacy `automatic_reply` JSON fields are normalized to tru
 use the runtime-enabled/MCP-only setting to stop runtime delivery. Execution and
 tool approvals still apply.
 
+Conversation context offers **Shared**, **One session per sender**, and
+**One session per sender + source session** (`per_sender_session`), or global
+inheritance. The third mode separates simultaneous conversations from the same
+agent. Managed tools identify the source session automatically through their
+authenticated runtime capability. Traditional MCP sends need a verified session
+ID and secret. Sessionless messages share a separate conversation per sender.
+Portable JSON preserves this choice; it requires a Nexus Server supporting the
+new policy and Core 0.2.63.dev0 or later.
+
 1. Select an existing identity or add one using a Server URL and a hidden canonical
    agent-key prompt. Existing identities reuse the vault.
 2. Select the harness from the Core catalog.

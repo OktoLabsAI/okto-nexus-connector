@@ -12,13 +12,15 @@ def document():
         authorization={'minutes':60,'actions':20})
 
 
-async def test_validate_full_configuration_offline(tmp_path):
-    file=tmp_path/'connection.json';file.write_text(json.dumps(document()))
+@pytest.mark.parametrize('policy',['shared','per_sender','per_sender_session',None])
+async def test_validate_full_configuration_offline(tmp_path, policy):
+    file=tmp_path/'connection.json';file.write_text(json.dumps(document() | {'session_policy':policy}))
     args=build_parser().parse_args(['connection-config','validate','--file',str(file)])
     config=(await module.run_connection_config(args,None,tmp_path))['configuration']
     assert config['version']==2
     assert 'workspace_root' not in config
     assert 'provider_home' not in config
+    assert config['session_policy']==policy
 
 
 async def test_lost_finish_reply_retries_exact_request_without_retesting(tmp_path,monkeypatch):

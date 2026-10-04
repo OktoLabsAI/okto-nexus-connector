@@ -57,7 +57,7 @@ def preferences(configuration, schema):
             value=text(field['label']+' (optional)',current.get(name,''))
         if value:result[name]=value
     configuration['harness_settings']=result
-    configuration['session_policy']=choice('Conversation context',[(None,'Use global setting'),('per_sender','One session per sender'),('shared','Shared')],configuration['session_policy'])
+    configuration['session_policy']=choice('Conversation context',[(None,'Use global setting'),('per_sender','One session per sender'),('per_sender_session','One session per sender + source session'),('shared','Shared')],configuration['session_policy'])
     configuration['automatic_reply']=True
     configuration['tool_access']=choice('Nexus tool approval',[('ask','Ask for approval'),('always_allow','Always allow')],configuration['tool_access'])
     configuration['authorization']={'minutes':limit('Authorization duration in minutes',configuration['authorization']['minutes'],1440),
