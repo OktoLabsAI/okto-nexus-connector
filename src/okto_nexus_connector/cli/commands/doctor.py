@@ -111,7 +111,7 @@ async def run_doctor(args, output: Output, root: Path):
             detail = f"{record.base_url} ({record.server_id})"
             if args.probe:
                 status, message, action = await _probe_server(record, state,
-                                                              store)
+                                                  root)
                 check("server", record.server_id, status,
                       f"{detail} — {message}", action)
             else:
@@ -229,7 +229,7 @@ async def run_doctor(args, output: Output, root: Path):
     return summary
 
 
-async def _probe_server(record, state, store):
+async def _probe_server(record, state, root):
     identity = next((i for i in state.identities
                      if i.server_id == record.server_id), None)
     if identity is None:

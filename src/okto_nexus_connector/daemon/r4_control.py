@@ -12,6 +12,7 @@ from dataclasses import replace
 import secrets
 import time
 import threading
+import logging
 from urllib.parse import urlsplit
 from nexus_connector_core import DEFAULT_RUNTIME_AUTOMATION
 
@@ -274,6 +275,9 @@ class R4DaemonControl:
                                      'The Server has not qualified remote R4 execution.')
             await self._require(snapshot)
             from ..services.r4_publications import recover_publications
+            from ..services.binding_authority import refresh_idle_binding_authority
+            await refresh_idle_binding_authority(self.store, self.vault, http, self.host,
+                server_id=self.server_id, executor_id=self.executor_id)
             self._retained_lanes = {k:v for k,v in self._retained_lanes.items() if self.clock()<v.deadline}
             recovered_lanes = await recover_publications(self.store, self.vault, http,
                 server_id=self.server_id, executor_id=self.executor_id,
@@ -375,6 +379,9 @@ class R4DaemonControl:
             # Error text can contain credentials or remote payloads.
             code = self._recovery_error or getattr(error, 'code', None)
             self.error_code = code if type(code) is str and code in _STATUS_ERRORS else 'CONTROL_DISCONNECTED'
+            logging.getLogger(__name__).warning(
+                'Runtime connection failed: phase=%s code=%s exception=%s',
+                self.phase, self.error_code, type(error).__name__)
             recovering = self.error_code in ('RECONCILIATION_REQUIRED', 'JOURNAL_UNAVAILABLE')
             self._recovery_error = self.error_code if recovering else None
             self.phase = 'RECOVERING' if recovering else 'RETRY_WAIT'
