@@ -36,6 +36,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="override the per-user state directory")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    reach = sub.add_parser('reach', help='test Server reachability and report supported versions (no credentials required)')
+    reach.add_argument('--server', required=True, help='Nexus Server base URL')
+
     configure = sub.add_parser('configure', help='interactive connection wizard (JSON optional)')
     configure.add_argument('--file', type=Path, help='portable connection template; destination paths are ignored')
     configure.add_argument('--identity', help='existing identity alias, or alias to register with a hidden key prompt')

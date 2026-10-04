@@ -10,6 +10,9 @@ from ..output import Output
 
 
 async def dispatch(args, output: Output):
+    if args.command == 'reach':
+        from .reach import run_reach
+        return await run_reach(args)
     root = _state_dir(args)
     command = args.command
     if command == 'configure':

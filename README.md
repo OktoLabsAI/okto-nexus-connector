@@ -6,6 +6,20 @@ Pi and Claude Code run, imports canonical agent credentials, binds
 identity/harness/project and administers managed runtimes through
 [`nexus-connector-core`](https://github.com/OktoLabsAI/okto-nexus-connector-core).
 
+### Check Server reachability
+
+```sh
+okto-nexus-connector reach --server https://nexus.example.com
+okto-nexus-connector --json reach --server https://nexus.example.com
+```
+
+`reach` calls the public `GET /v1/reach` endpoint before identity setup or daemon
+startup. It reports `server_version`, `server_core_version`,
+`minimum_cli_version`, the local `cli_version`, and `latency_ms`. A successful
+probe exits with code 0; a connection failure exits with code 3. Remote origins
+use HTTPS; loopback HTTP is supported for local development. The Core version
+is `null` when the optional Core distribution is absent on the Server.
+
 Runtime message delivery and automatic recovery use Core's shared defaults.
 The daemon reconnects automatically and verifies retained receipts, resource
 ownership and event history before enabling execution. Five unsuccessful

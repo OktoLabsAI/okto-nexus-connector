@@ -401,6 +401,18 @@ class NexusHTTPClient:
 
     # -- contract routes (plan A.5) ---------------------------------------
 
+    async def reach(self) -> dict[str, object]:
+        payload = await self._request('GET', '/v1/reach', key=None)
+        fields = ('server_version', 'minimum_cli_version')
+        core = payload.get('server_core_version')
+        if (payload.get('service') != 'okto-nexus'
+                or any(type(payload.get(key)) is not str or not 1 <= len(payload[key]) <= 128
+                       for key in fields)
+                or 'server_core_version' not in payload
+                or core is not None and (type(core) is not str or not 1 <= len(core) <= 128)):
+            raise ConnectorError('VERSION_INCOMPATIBLE', 'reach', 'Invalid Nexus reach response.')
+        return {key: payload[key] for key in ('server_version', 'server_core_version', 'minimum_cli_version')}
+
     async def harness_settings(self, key, endpoint_id, *, changes=None):
         from urllib.parse import quote
         if not isinstance(endpoint_id, str) or not 1 <= len(endpoint_id) <= 160:
