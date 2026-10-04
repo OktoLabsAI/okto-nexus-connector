@@ -65,7 +65,7 @@ async def test_public_probe_persists_observation_and_passive_preview_reuses_it(h
     assert not state.execution_executors[1].installation_observations
 
 
-@pytest.mark.parametrize('change', ['fingerprint', 'core', 'platform', 'configuration'])
+@pytest.mark.parametrize('change', ['fingerprint', 'platform', 'configuration'])
 async def test_observation_cannot_be_reused_after_identity_change(host, change):
     store, candidate, _, _ = host
     await service.observe_installation(store, **arguments(candidate))
@@ -79,6 +79,14 @@ async def test_observation_cannot_be_reused_after_identity_change(host, change):
     else:
         observations[0]['core_version' if change == 'core' else 'platform'] = 'different'
     assert service.apply_observations([candidate], observations)[0].version is None
+
+
+async def test_core_upgrade_preserves_observation_of_identical_harness_bytes(host):
+    store, candidate, _, _ = host
+    await service.observe_installation(store, **arguments(candidate))
+    observations = store.load().execution_executors[0].installation_observations
+    observations[0]['core_version'] = 'previous-core'
+    assert service.apply_observations([candidate], observations)[0].version == '0.159.0'
 
 
 async def test_stale_selection_is_refused_before_probe(host):

@@ -21,6 +21,12 @@ use HTTPS; loopback HTTP is supported for local development. The Core version
 is `null` when the optional Core distribution is absent on the Server.
 
 Runtime message delivery and automatic recovery use Core's shared defaults.
+With a Server that supports automatic inventory revalidation, unchanged selected
+installations remain usable after Core upgrades or unrelated inventory changes.
+The Connector preserves the original binding and local consent, checks the exact
+selected executable and workspace at launch, and reuses version observations only
+for an identical source on the same platform. A changed executable or execution
+contract still requires review; a Core version change alone does not.
 The daemon reconnects automatically and verifies retained receipts, resource
 ownership and event history before enabling execution. Five unsuccessful
 recovery attempts produce `RECOVERY_ATTENTION_REQUIRED` in executor status;

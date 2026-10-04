@@ -59,6 +59,17 @@ def selection(tmp_path, request):
     return store, candidate, binding, frame, local, published
 
 
+def test_unrelated_inventory_change_preserves_approved_and_running_selection(selection):
+    from okto_nexus_connector.services.execution_selection import revalidate_running_selection
+    store, candidate, binding, frame, *_ = selection
+    acknowledge_execution_binding(store, binding=binding)
+    selected = resolve_execution_selection(store, frame=frame, candidates=[candidate])
+    other = replace(candidate, executable=candidate.executable + '.other', installation_ref='')
+    assert calculate_inventory_revision([candidate, other]) != binding.inventory_revision
+    assert resolve_execution_selection(store, frame=frame, candidates=[candidate, other]) == selected
+    assert revalidate_running_selection(store, frame=frame, candidates=[candidate, other], expected=selected) == selected
+
+
 def test_approved_binding_roundtrip_does_not_downgrade_on_publication_replay(selection):
     store, candidate, binding, frame, local, published = selection
     with pytest.raises(ConnectorError):

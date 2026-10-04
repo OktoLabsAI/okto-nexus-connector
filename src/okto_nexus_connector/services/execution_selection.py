@@ -137,8 +137,12 @@ def _resolve_execution_selection(store: StateStore, *, frame: dict, candidates,
     local = _local_for(state, binding)
     if local.status != 'BOUND' or not _matches(local, binding) or _digest(local) != binding.realization_snapshot_digest:
         raise ConnectorError('PROFILE_DRIFT', 'execution_selection', 'The approved local realization changed.')
-    selected = resolve_executor_installation(candidates, adapter_id=binding.adapter_id,
-        candidate_ref=binding.candidate_ref, expected_inventory_revision=binding.inventory_revision)
+    # The server revalidates the selected inventory evidence before dispatch.
+    # Preserve the original binding/realization digests across inventory refresh;
+    # the exact consented physical candidate is still checked below.
+    from nexus_connector_core import resolve_installation
+    selected = resolve_installation(candidates, adapter_id=binding.adapter_id,
+        candidate_ref=binding.candidate_ref)
     try:
         physical_executable = str(Path(selected.executable).resolve(strict=True))
         physical_root = str(Path(local.workspace_root).resolve(strict=True))

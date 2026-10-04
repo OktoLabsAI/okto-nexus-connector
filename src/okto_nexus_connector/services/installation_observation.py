@@ -26,7 +26,7 @@ def apply_observations(candidates, observations):
         for entry in observations:
             if not isinstance(entry, dict) or set(entry) != {'core_version', 'platform', 'source', 'version'}:
                 raise _error('The installation observation is invalid.', 'VALIDATION_ERROR')
-            if (entry['core_version'] == CORE_VERSION and entry['platform'] == sys.platform
+            if (entry['platform'] == sys.platform
                     and entry['source'] == asdict(candidate)):
                 if not isinstance(entry['version'], str) or not 1 <= len(entry['version']) <= 160:
                     raise _error('The observed version is invalid.', 'VALIDATION_ERROR')
