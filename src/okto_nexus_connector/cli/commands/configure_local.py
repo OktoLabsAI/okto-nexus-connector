@@ -24,6 +24,7 @@ from ...daemon import manager
 from ..wizard_prompts import text,choice,preferences
 from .identity import _vault
 from .connection_config import apply_configuration
+from .binding_conflicts import resolve_conflict
 
 
 async def ipc(root,method,body=None):
@@ -55,6 +56,14 @@ async def configure_local(args,output,root,store,identity,server,portable):
     storage_key=f'configure.{identity.server_id}.{identity.agent_id}.{args.request_id}'
     saved=store.load().preferences.get(storage_key)
     if saved is None:
+        portable['alias']=text('Connection name',portable['alias'] or identity.agent_id+'-'+portable['adapter_id'],required=True)
+        conflict=resolve_conflict(store,identity,portable | {'workspace_root': args.project},output,
+            request_id=args.request_id,binding_id=args.binding_id)
+        if conflict.get('canceled'):return {'saved':False,'canceled':True}
+        args.binding_id=conflict['binding_id']
+        if conflict.get('workspace_id'):
+            args.workspace_id=conflict['workspace_id']
+            args.project=conflict['workspace_root']
         records=[r for r in store.load().execution_executors if r.server_id==identity.server_id]
         discovery=records[0].discovery_configuration if len(records)==1 else {}
         observations=records[0].installation_observations if len(records)==1 else ()
@@ -68,7 +77,6 @@ async def configure_local(args,output,root,store,identity,server,portable):
         label=args.workspace_label or text('Workspace name',Path(project).name,required=True)
         home=local_directory('Provider login directory (optional)',args.provider_home,
             discover_provider_home(portable['adapter_id']) or '',optional=True)
-        portable['alias']=text('5. Connection name',portable['alias'] or identity.agent_id+'-'+portable['adapter_id'],required=True)
         output.line('6. Harness preferences and requested Nexus policies')
         portable=preferences(portable,discover_harness_configuration(portable['adapter_id']))
         configuration=materialize_connection_configuration(portable,execution_location='remote',
@@ -79,7 +87,7 @@ async def configure_local(args,output,root,store,identity,server,portable):
             return {'saved':False,'canceled':True}
         saved=dict(configuration=configuration,candidate_ref=selected,inventory_revision=calculate_inventory_revision(candidates),
             stage='register',identity=args.identity,host_label=socket.gethostname(),workspace_id=args.workspace_id,
-            replace_binding_id=args.binding_id)
+            replace_binding_id=args.binding_id,conflict_checked=True)
         store.update(lambda s:s.preferences.update({storage_key:saved}))
     elif saved['identity']!=args.identity:
         raise ConnectorError('OPERATION_CONFLICT','configure','Resume with the original identity.')
@@ -135,6 +143,13 @@ async def configure_local(args,output,root,store,identity,server,portable):
         checkpoint('prepare',realization_ref=publication['realization_ref'])
     bindings=BindingOnboarding(store,vault)
     if saved['stage']=='prepare':
+        # Recover requests saved by older clients that discovered the alias
+        # conflict only after the user completed the wizard.
+        if not saved.get('conflict_checked'):
+            conflict=resolve_conflict(store,identity,c,output,request_id=args.request_id,
+                binding_id=saved['replace_binding_id'])
+            if conflict.get('canceled'):return {'saved':False,'canceled':True,'request_id':args.request_id}
+            checkpoint('prepare',replace_binding_id=conflict['binding_id'],conflict_checked=True)
         requested = parse_portable_connection_configuration(c)
         if requested['runtime_enabled'] is False:
             raise ConnectorError('VALIDATION_ERROR', 'configure', 'Enable runtime access to connect this harness.')

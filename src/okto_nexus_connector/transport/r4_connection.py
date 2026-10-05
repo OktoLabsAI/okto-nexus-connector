@@ -8,6 +8,7 @@ producer completes, and revalidate it before building the Core context.
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 import secrets
 import time
@@ -139,8 +140,23 @@ class R4Connection:
         try:
             await asyncio.wait_for(self.websocket.close(), self.send_timeout)
         except Exception as error:
-            # Failure is retained; socket cleanup cannot grant authority.
             self.close_error = error
+            # A lost peer can fail the graceful close handshake. Fence the
+            # underlying transport and observe connection_lost before allowing
+            # a fresh authenticated control connection. Never drop an owner
+            # whose physical socket closure cannot be established.
+            transport = getattr(self.websocket, 'transport', None)
+            wait_closed = getattr(self.websocket, 'wait_closed', None)
+            if transport is not None and callable(getattr(transport, 'abort', None)) and callable(wait_closed):
+                try:
+                    transport.abort()
+                    await asyncio.wait_for(wait_closed(), self.send_timeout)
+                except Exception as abort_error:
+                    self.close_error = abort_error
+                else:
+                    self.close_error = None
+                    logging.getLogger(__name__).warning(
+                        'Control socket graceful close failed; transport closure confirmed after abort.')
 
     async def close(self):
         self._fence(ConnectorError('CONTROL_DISCONNECTED', 'r4_link', 'The control connection was closed.'))
