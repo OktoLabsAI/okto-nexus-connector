@@ -27,6 +27,9 @@ async def test_status_requires_live_agent_attachment(monkeypatch, tmp_path, runn
         'state': 'CONTROL_READY', 'control_ready': not error, 'execution_ready': attached,
         'attached_bindings': ['binding'] if attached else [], 'error_code': error}}}}, close=lambda: None)
     monkeypatch.setattr(diagnostics.manager, 'connect', lambda _: client)
+    async def checked(*args):
+        return {'local': {'connections': [{'binding_id':'binding', 'status':'CONNECTED'}]}}
+    monkeypatch.setattr(diagnostics, '_query_connections', checked)
     result = await diagnostics.run_status(NS(agent=None), Output(json_mode=True), tmp_path)
     assert result['agents'][0]['status'] == expected
     assert result['servers'][0]['error'] == (error if running else None)
@@ -90,6 +93,29 @@ async def test_status_reports_wizard_resume_id_without_exporting_configuration(m
                      'configure.s.a.finished': {'stage': 'done'}})
     monkeypatch.setattr(diagnostics, 'StateStore', lambda _: NS(load=lambda: state))
     monkeypatch.setattr(diagnostics.manager, 'status', lambda _: NS(running=False, pid=None))
+    async def checked(*args): return {}
+    monkeypatch.setattr(diagnostics, '_query_connections', checked)
     result = await diagnostics.run_status(NS(agent=None), Output(json_mode=True), tmp_path)
     assert result['agents'][0]['pending_requests'] == [{'request_id': 'my-request', 'status': 'apply'}]
     assert 'do-not-show' not in str(result)
+
+
+async def test_status_reports_each_connection_and_server_revocation(monkeypatch, tmp_path):
+    bindings = [NS(server_id='s', agent_id='a', adapter_id='claude_stream', binding_id=b, state='APPROVED') for b in ('one','two')]
+    state = NS(servers={'s':NS(base_url='http://server')}, execution_bindings=bindings,
+               identities=[NS(server_id='s',agent_id='a',alias='agent',revoked=False)], preferences={})
+    monkeypatch.setattr(diagnostics, 'StateStore', lambda _: NS(load=lambda:state))
+    monkeypatch.setattr(diagnostics.manager, 'status', lambda _:NS(running=True,pid=1))
+    monkeypatch.setattr(diagnostics.manager, 'connect', lambda _:NS(close=lambda:None,
+        call=lambda _:dict(ok=True,result={'r4_controls':{'s':{'control_ready':True,'execution_ready':True,'attached_bindings':['one','two']}}})))
+    async def checked(*args):
+        return {'agent':{'connections':[{'binding_id':'one','status':'CONNECTED','machine_id':'machine-x'},
+                                        {'binding_id':'two','status':'REVOKED','machine_id':'machine-y'}]}}
+    monkeypatch.setattr(diagnostics, '_query_connections', checked)
+    result = await diagnostics.run_status(NS(agent=None),Output(json_mode=True),tmp_path)
+    assert [r['status'] for r in result['connections']] == ['CONNECTED','REVOKED']
+    assert result['agents'][0]['status'] == 'PARTIAL'
+    async def unavailable(*args): return {'agent':{'connections':[],'error':'EXECUTOR_OFFLINE'}}
+    monkeypatch.setattr(diagnostics, '_query_connections', unavailable)
+    result = await diagnostics.run_status(NS(agent=None),Output(json_mode=True),tmp_path)
+    assert all(r['status']=='SERVER_UNREACHABLE' for r in result['connections'])
