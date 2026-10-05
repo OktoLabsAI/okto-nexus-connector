@@ -1,193 +1,94 @@
-# Runbook — okto-nexus-connector
+# Connector troubleshooting
 
-Operational procedures required by plan section 10.1. Recovery guidance
-never recommends deleting the journal and re-running an uncertain task,
-and never recommends disabling TLS or the sandbox.
+## Start with evidence
 
-## Install (normal and without a service manager)
+Run on the computer hosting the Connector, under the same OS user and state directory as its daemon:
 
-```bash
-python -m pip install "CONNECTOR_WHEEL[keyring]" CORE_WHEEL
-okto-nexus-connector doctor
+```sh
+okto-nexus-connector status
+okto-nexus-connector --json status
+okto-nexus-connector logs --errors --tail 100
+okto-nexus-connector doctor --probe
 ```
 
-Without a service manager, run `daemon run` in the foreground (container
-path). No admin privilege is required for common use.
+`status` queries current server and daemon facts. `daemon status` only describes the local process/IPC. `reach` checks the public server endpoint, not credentials or a harness. `doctor` checks individual environment layers; a mostly green report does not prove an approved, connected R4 binding. Its legacy binding count can be zero while an R4 setup is pending; use `status` for connection progress.
 
-Replace the wheel placeholders with the approved artifact paths and verify their
-hashes. Use the pinned Core dependency. Complete identity import, registration and
-discovery configuration below before expecting an executor to publish inventory.
-Start the daemon with `daemon start`; its IPC readiness does not prove a qualified
-provider, an approved binding or remote execution authority.
+## Interpret progress
 
-On Windows, a terminal, CI runner or service supervisor may prohibit Job Object
-breakaway. If independent process creation is denied, `daemon start` reports
-`DAEMON_UNAVAILABLE` with a corrective action. It does not retry inside the
-restrictive job and claim independence: that daemon could die when the CLI exits.
-Run `daemon run` under a persistent supervisor, then connect from another client
-using the same state directory, or use a terminal that permits independent
-daemon creation. Foreground mode shares its supervisor's lifetime; closing that
-supervisor can terminate the daemon. No supervisor policy is modified.
-See [Windows nested-job rules](https://learn.microsoft.com/en-us/windows/win32/procthread/nested-jobs).
+| Status | Meaning | Next action |
+|---|---|---|
+| `DAEMON_STOPPED` | No active local owner | `daemon start` |
+| `AWAITING_APPROVAL` | Request submitted | Review it in Nexus |
+| `COMPLETING_SETUP` | Approved but not applied/attached yet | Inspect logs; verify daemon is running |
+| `CONNECTED` | Current control/binding connection is live | Send a test message; inspect execution logs |
+| `ATTACHING` / `RECONNECTING` | Connection not yet ready | Check ticket, inventory and binding errors |
+| `OFFLINE` / `SERVER_UNREACHABLE` | Server or executor not reachable | Check address, network, proxy and daemon |
+| `AUTHORIZATION_REQUIRED` | Execution grant unavailable/exhausted | Review authorization in Nexus |
+| `EXPIRED` | Proposal or scoped authority expired | Identify the expired item; request renewed approval |
+| `REVOKED` / `REJECTED` | Access removed or request denied | Review in Nexus; do not repeat automatically |
+| `CLEANUP_PENDING` | Resource/socket cleanup could not be confirmed | Inspect logs; update Connector and restart after resolving the cause |
+| `RECOVERY_ATTENTION_REQUIRED` | Recovery attempts exhausted | Resolve the reported condition, then restart |
 
-## Unsupported executor platform
+Exact text differs between CLI and dashboard. A process can be running while its connection supervisor is stopped. `EXPIRED` on a proposal does not necessarily mean the canonical agent key expired.
 
-Managed execution currently requires the Core Windows or Linux containment
-backend and successful preflight. macOS has no qualified backend, so doctor
-reports `UNSUPPORTED_PLATFORM` and launches retain
-`PROCESS_CONTAINMENT_UNAVAILABLE`. Installing a keyring or starting the daemon
-does not remove that restriction. Use a Windows/Linux executor, or a Linux VM
-with providers and workspace installed inside it; validate containment with
-`doctor` there. A container is usable only if its kernel and supervisor allow
-all required checks. Neither a VM nor a container controls native Mac processes.
+## Approval accepted but setup never completes
 
-Discovery and containment are separate. A running provider process is not
-proof of an installed, approved executable candidate. Passive PATH discovery
-lists installed candidates and does not execute binaries. Unapproved candidates
-retain `untrusted` / `selection_required`; discovery alone cannot prepare a launch.
-For R4, configure the executor's approved harness roots; these establish local
-selection and do not add directories to PATH. An explicit `--executable` selects
-a file for the applicable CLI flow but does not bypass containment, build
-qualification or approval. `NOT_INSTALLED` / `no_installed_candidate` means the
-inventory found no candidate; it is not by itself evidence that containment
-filtered one out. See [discovery configuration](../README.md#persisted-r4-executor-discovery).
+Check whether the request was actually submitted, then whether the daemon attempted binding application. A server-side 500 can prevent application after a valid approval. Check Nexus Execution log/server logs as well as Connector logs. After fixing the cause, resume the original request with `configure --identity ALIAS --request-id ORIGINAL_ID`. Do not reuse an expired approval or start many parallel wizards.
 
-In the summary table, `Host containment unavailable` describes this host's
-missing containment backend, not a provider's OS support. `Found: 1` still means
-an installation was discovered; `untrusted` means local selection is pending.
-`Harness unsupported on this OS` instead describes adapter platform support.
-Use `discover --verbose` for the separate technical reasons.
+## Connection or inventory errors
 
-macOS uses the existing POSIX state layout: `$XDG_STATE_HOME/okto-nexus-connector`
-when set, otherwise `~/.local/state/okto-nexus-connector`. `--state-dir` or
-`OKTO_NEXUS_CONNECTOR_STATE` selects an explicit root. Keep the same root for CLI,
-daemon and service; changing it selects another local trust domain and does not
-migrate identities or ownership. The IPC implementation uses AF_UNIX on macOS
-when available. Neither this transport nor the state layout qualifies native
-managed execution. The existing launchd service plan still needs current-macOS
-validation; see [the macOS tracking issue](https://github.com/OktoLabsAI/okto-nexus-connector/issues/1).
+Use the Nexus LAN hostname/IP from another computer; loopback addresses point to that computer. HTTP/WS are allowed when the Nexus transport policy permits them; HTTPS-only mode requires HTTPS/WSS. Check `reach`, proxy settings and server listening address. `PERMISSION_DENIED` can concern a scoped execution ticket even when `/me` accepts the agent key.
 
-## First use: import an existing canonical key
+Inventory is published by the daemon. `awaiting_inventory` or `inventory_not_fresh` requires checking its control connection and selected installation. Automatic revalidation can recover unchanged installations. A changed executable, workspace or contract can require review.
 
-Import the existing agent key through the masked prompt or an explicitly selected
-stdin/environment source. An agent ID hint is checked against the authenticated
-identity; it is not a substitute for the key.
+## Existing binding
 
-```bash
-okto-nexus-connector identity add --server https://nexus.example --agent AGENT_ID --alias SUBJECT
-okto-nexus-connector executor register --identity SUBJECT --label "Execution host"
-okto-nexus-connector executor list
+The wizard reports local alias conflicts early. Compatible applied bindings offer replacement or abort. Replacement preserves identity, harness and workspace and requires Nexus approval. Close/reconcile active sessions first. For a pending request, resume its printed ID. For another identity or scope, choose another connection name. `bind remove` is legacy local management, not R4 server revocation.
+
+## Restart and update
+
+```sh
+okto-nexus-connector daemon stop
+okto-nexus-connector daemon start
+okto-nexus-connector status
 ```
 
-If no OS keyring is available, the restricted-file fallback is offered
-once with an explicit warning; approve it or install a keyring backend.
+Stop the daemon before replacing installed packages; start it after installation. A CLI package upgrade does not update an already running process. Automatic reconnect requires the daemon to remain alive. Use `service install` for user autostart or `daemon run` under a persistent supervisor. Windows supervisors can prohibit independent Job Object breakaway; use an appropriate terminal/supervisor rather than weakening containment.
 
-## Bind and start a runtime
+## Provider, platform and credential errors
 
-Follow [discovery, explicit observation and launch consent](../README.md#persisted-r4-executor-discovery)
-using the returned Server ID. Publish the workspace realization through the
-daemon, then prepare/apply the reviewed binding with any required operator proof.
-Use its acknowledged alias; a provider name or current directory does not select
-an approved R4 workspace. Execution authorization remains separate from binding.
+- `PROVIDER_AUTH_REQUIRED`: complete the harness login on the execution host and select the correct provider home.
+- Keyring locked: unlock it for the daemon's OS user. A file fallback must be explicitly approved; it is permission-restricted plaintext.
+- `AGENT_ID_MISMATCH`: the supplied key belongs to another agent. Names cannot replace authentication.
+- `SERVER_ID_CHANGED`: verify the server installation before reimporting credentials.
+- `PROCESS_CONTAINMENT_UNAVAILABLE` or `UNSUPPORTED_PLATFORM`: inspect `doctor` preflight and use a supported host/build. Windows, Linux and macOS have distinct backends; discovery success is not containment success.
+- `PROFILE_DRIFT`: review the exact executable, workspace and login configuration. Do not bypass the check.
 
-```bash
-okto-nexus-connector runtime start ALIAS --client-intent-id OPEN_INTENT
-okto-nexus-connector runtime operation --alias ALIAS --client-intent-id OPEN_INTENT
-okto-nexus-connector runtime status --alias ALIAS
-okto-nexus-connector runtime inspect SESSION_ID --alias ALIAS
-okto-nexus-connector runtime stop SESSION_ID --alias ALIAS --client-intent-id CLOSE_INTENT --reason "Work completed."
+## Uncertain operations and journal capacity
+
+`OUTCOME_UNKNOWN` means the server may have accepted work without an acknowledgment. Query the original operation:
+
+```sh
+okto-nexus-connector runtime operation --alias CONNECTION --client-intent-id ORIGINAL_ID
 ```
 
-Admission is not completion. Query the retained operation until its outcome is
-known. `runtime interrupt` uses the adapter's explicit turn/current-run target;
-`stop` requests closure of owned resources. Status lists locally retained sessions,
-not every Server session. The legacy `runtime logs` command is not a documented
-complete R4 event viewer; use the Server's authorized operation/session views.
+Do not resubmit the work with a new ID. There is no standalone `reconcile` command. The daemon reconciles retained facts; native pipes do not magically survive a restart. For `JOURNAL_FULL`, stop/drain and preserve evidence before reviewing retention. `clean` is a deliberate reset, not safe replay or journal compaction.
 
-## Vault locked or unavailable
+## Reset abandoned local configuration
 
-`doctor` reports the vault layer as `warn`. In service mode, unlock the
-OS keyring for the user session or set
-`OKTO_NEXUS_CONNECTOR_VAULT=file` with the restricted-file fallback
-approved interactively first. Never copy the key to a world-readable
-location.
-
-## Provider login missing
-
-The launch environment passes only whitelisted essentials; provider
-authentication happens through the provider's own local login. Run the
-harness's login flow on this host, or approve the provider-home overlay
-explicitly through `executor configure-launch --provider-home`. The error is `PROVIDER_AUTH_REQUIRED` with a
-local action; no secret is sent to the Server.
-
-## Canonical key rotated or revoked
-
-```bash
-okto-nexus-connector identity replace-credential work --credential-stdin
+```sh
+okto-nexus-connector clean
 ```
 
-The new key must authenticate as the **same** agent; otherwise the
-operation aborts (`AGENT_ID_MISMATCH`). Local removal
-(`identity remove`) never revokes the canonical agent centrally.
+Read the displayed directory and confirm (default No). This disables user autostart, drains/stops the daemon, removes Connector-owned local settings, identities/keys, pending requests, bindings, journals, runtime files and logs. Projects, harness installations and provider logins remain. Unknown files remain; an inert lock file may remain. Shutdown or credential-removal failure stops cleanup; a failure can leave partial progress, so inspect the report before retrying.
 
-## Server changed its identity
+No Nexus records or authorizations are deleted/revoked. Reconfiguring creates a new machine identity subject to Nexus replacement policy. User autostart is account-wide; keyring credentials can be shared with another local state directory. Do not run configuration commands concurrently with cleanup. For explicit automation use `--non-interactive clean --yes`.
 
-`doctor --probe` reports `SERVER_ID_CHANGED` with the observed identity.
-Confirm the new installation, then remove and re-import the identity for
-that profile. Sessions under the old identity are not reused.
+## State locations
 
-## Daemon/IPC stale
+| Platform | Default |
+|---|---|
+| Windows | `%LOCALAPPDATA%/okto-nexus-connector` |
+| Linux/macOS | `$XDG_STATE_HOME/okto-nexus-connector`, otherwise `~/.local/state/okto-nexus-connector` |
 
-`daemon status` verifies readiness, the process birth token and a live
-IPC ping. A stale PID file alone is never authority: `daemon start`
-replaces it safely under the OS lock. If the daemon is wedged, use
-`daemon stop` (bounded drain) and inspect the state directory log.
-
-## Journal full
-
-New admissions fail closed with `JOURNAL_FULL` when durable capacity is exhausted.
-Preserve the journal and uncertain operations. Stop/drain through the daemon's
-normal lifecycle and inspect its report before backing up state. No general
-Connector CLI compaction command is provided: do not delete journal rows or move
-live state to make space. Use a supported, reviewed retention/recovery procedure
-for the exact artifact and keep execution disabled if its safety is unproved.
-
-## Uncertain outcome (unknown result)
-
-`OUTCOME_UNKNOWN` means an effect may have happened without proof. Do
-not re-run the same work under a new operation ID. Query `runtime operation`
-with the original alias/client intent, and inspect the related session. The daemon
-owns reconciliation on the authenticated control channel; there is no standalone
-`reconcile` CLI command. Repeat an admission request only with the original exact
-intent. A different ID creates new work and can duplicate an uncertain effect.
-
-## Update / rollback
-
-Stop the daemon (drain is bounded and reported per session), install the
-pinned wheels, and start again. Active native pipes do not survive the
-swap; the daemon reconciles durable facts instead of pretending the old
-conversation continued. State migrations have explicit versions: an older binary
-refuses newer state. Installing previous wheels alone is not a rollback procedure.
-Retain a consistent pre-upgrade backup and preserve later journals/uncertain effects
-for reviewed recovery. Never restore old state while a newer owner can still act.
-
-## Remove connector-owned configuration
-
-Use `mcp-config remove --help` to select the exact harness, file and owned entry.
-Owned-entry removal preserves unrelated settings and requires the stored
-predecessor to match. `bind remove` belongs to legacy local configuration
-management and is not canonical R4 binding revocation; `--keep-config` is a
-boolean flag and does not accept `=false`.
-Do not infer remote revocation from deleting a local alias or identity. Preserve
-third-party entries and recovery evidence, and use the Server's authenticated
-canonical policy surface for execution revocation.
-
-## Diagnostic export (read-only)
-
-```bash
-okto-nexus-connector --json doctor --probe
-```
-
-`--probe` contacts configured Servers using the selected protected identities.
-Diagnostics redact credential material; review the output before sharing host
-paths or identifiers. Global options such as `--json` precede the subcommand.
+`--state-dir PATH` overrides `OKTO_NEXUS_CONNECTOR_STATE` and the platform default. Use one consistent directory for CLI, daemon and service. Logs are `logs/daemon.log`, rotated at 2 MiB with three backups. `logs --errors` includes warnings. Review host paths/identifiers before sharing diagnostics.

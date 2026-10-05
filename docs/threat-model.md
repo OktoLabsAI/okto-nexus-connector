@@ -15,7 +15,7 @@ Nexus Server ─(R4 HTTPS / ticketed WSS)─ daemon ─(Core native protocols)�
 | Boundary | Mechanism | Residual risk (stated honestly) |
 |---|---|---|
 | OS account → daemon | Per-user state dir (0o700 / user-profile ACL), lock with process birth token, IPC hello-token | A malicious process under the **same OS account** can read the vault and control the daemon; this is the trust domain, not a bug we can fix in-process |
-| Daemon → Server | TLS, canonical management identity, scoped executor tickets for control, exact R4 revision, redirect refusal | A compromised Server can send authorized intents; Core still requires locally approved realization, qualified binaries and applied authority |
+| Daemon → Server | Canonical management identity, scoped executor tickets, exact R4 revision and redirect refusal; TLS when using HTTPS/WSS | HTTP/WS is allowed by the default server policy and does not encrypt credentials or traffic. Use HTTPS/WSS for transport confidentiality. A compromised Server can send authorized intents; Core still requires locally approved realization, qualified binaries and applied authority |
 | Daemon → harness child | Core-owned argv (no shell), whitelisted environment, secret refs resolved per launch, Job Object/guardian containment | Provider sandbox ≠ account isolation; hooks in an approved provider home run with that consent only |
 | CLI → daemon | Loopback/unix IPC with 256-bit token in a user-only file; unauthenticated peers are refused before any dispatch (TC-08) | Same-account local attackers are inside the domain |
 | Journal/state at rest | User-only permissions; secrets only as references; redaction on every IPC/log/export surface | Disk compromise of the account equals domain compromise |

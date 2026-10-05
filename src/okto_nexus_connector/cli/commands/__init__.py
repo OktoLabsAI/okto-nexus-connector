@@ -23,6 +23,9 @@ async def _dispatch(args, output: Output):
         return await run_reach(args)
     root = _state_dir(args)
     command = args.command
+    if command == 'clean':
+        from .clean import run_clean
+        return await run_clean(args, output, root)
     if command in ('status', 'logs'):
         from .diagnostics import run_status, run_logs
         return await (run_status if command == 'status' else run_logs)(args, output, root)

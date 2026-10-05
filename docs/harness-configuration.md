@@ -39,8 +39,12 @@ execution grants, so authorize the new configuration before starting a session.
 The Connector forwards the canonical model and harness settings in R4 launch
 intents; receipt hashes bind those values to the execution.
 
-In Nexus, open Agents → Connections, configure the new local connection, then
-use **Carregar configuração de arquivo JSON** under **Configuração do harness**.
-Loading replaces the form values for review; it does not save or execute.
-Save explicitly. **Exportar configuração JSON** exports the current form values
-for reuse with another connection of the same harness.
+For full connection import/export in Nexus, use Connections, Host & harness.
+That document uses the okto-nexus-connection format and includes harness_settings.
+It is different from the settings-only nexus-harness-config document above.
+Use configure --file for a full connection document, and harness-config validate/apply
+for settings-only documents. See [connection JSON](connection-configuration.md).
+
+Native approval policy, Nexus tool approval and execution grants are separate.
+The Core catalog defines accepted parameters; use harness-config describe for the
+installed version instead of assuming every harness supports the same model or effort.

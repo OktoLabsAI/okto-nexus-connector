@@ -35,6 +35,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--state-dir", type=Path, default=None,
                         help="override the per-user state directory")
     sub = parser.add_subparsers(dest="command", required=True)
+    clean = sub.add_parser('clean', help='reset local Connector state, credentials and pending configurations')
+    clean.add_argument('--yes', action='store_true', help='explicitly confirm cleanup without prompting')
 
     proxy = sub.add_parser('proxy', help='configure the host-local HTTP and WebSocket proxy')
     proxy_sub = proxy.add_subparsers(dest='subcommand', required=True)

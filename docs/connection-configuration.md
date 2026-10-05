@@ -1,87 +1,84 @@
-# Guided configuration and portable JSON
+# Connection wizard and portable JSON
 
-Run `okto-nexus-connector configure` for ordered terminal questions; JSON is optional.
-The default execution host is **the machine running the Connector**.
+## Select the execution computer
 
-Active runtimes automatically receive eligible Nexus messages. There is no reply
-toggle in the wizard. Legacy `automatic_reply` JSON fields are normalized to true;
-use the runtime-enabled/MCP-only setting to stop runtime delivery. Execution and
-tool approvals still apply.
+| Flow | Where the harness runs | Credential |
+|---|---|---|
+| `connect` or `configure` (default) | Connector computer | Target agent key |
+| `configure --host server` | Nexus server computer | Imported operator identity |
+| `connection-config apply` (local destination) | Nexus server computer | Imported operator identity |
 
-Conversation context offers **Shared**, **One session per sender**, and
-**One session per sender + source session** (`per_sender_session`), or global
-inheritance. The third mode separates simultaneous conversations from the same
-agent. Managed tools identify the source session automatically through their
-authenticated runtime capability. Traditional MCP sends need a verified session
-ID and secret. Sessionless messages share a separate conversation per sender.
-Portable JSON preserves this choice; it requires a Nexus Server supporting the
-new policy and Core 0.2.63.dev0 or later.
-
-1. Select an existing identity or add one using a Server URL and a hidden canonical
-   agent-key prompt. Existing identities reuse the vault.
-2. Select the harness from the Core catalog.
-3. Select an exact installation discovered on this machine.
-4. Enter workspace and login directories. Core suggests an existing local login.
-   Enter `-` to clear an optional default.
-5. Name the connection.
-6. Select model, native preferences, conversation/tool policies and requested limits.
-7. Review and Finish to register the executor, check its installation, start the
-   daemon, publish the workspace and prepare/apply the R4 binding.
-
-Canceling before Finish does not create a binding. Adding an identity explicitly
-stores its key in the vault before the runtime configuration steps.
-
-If Server approval is required, the wizard reports pending references and a request
-ID. Approve the binding in Nexus, then resume with the same identity/request ID.
-Completed stages are not repeated. Applying Nexus policies and execution grants
-requires an imported operator identity on the same Server. Without one, the wizard
-reports local setup complete and operator configuration pending. It never bypasses
-Server authorization or claims a pending connection is ready. No runtime is started;
-successful configuration is not a model-response test.
+Select **Remote** for the agent in Nexus when using a Connector. A remote binding stays remote even if both processes run on one computer.
 
 ```sh
 okto-nexus-connector configure
-okto-nexus-connector configure --identity assistant --file connection.json \
-  --project /work/project --provider-home /home/user/.claude
-okto-nexus-connector configure --identity assistant --request-id configure_ID \
-  --operator-identity operator
+okto-nexus-connector configure --identity assistant
+okto-nexus-connector configure --identity assistant --file connection.json
 ```
 
-Use `--candidate-ref`, `--workspace-label`, `--workspace-id` and `--binding-id`
-to preselect destination choices. `configure --help` lists all flags.
-`--host server` optionally configures a Nexus-hosted runtime with an operator
-identity; its paths and discovery refer to the Server machine.
+`assistant` is the local identity alias. The wizard reuses its stored key. Adding a new identity asks for a server URL and hidden agent key; identity import stores the key before the rest of setup.
 
-Export a version 2 `okto-nexus-connection` document from Nexus Connections,
-Host & harness. It contains native settings, connection name, message/tool policies,
-runtime/session policy and requested limits. It excludes identity, credentials,
-active grants, installation IDs, execution-host selection, workspace paths/names,
-login directories and local secret references. Legacy version 1 files are accepted
-but all destination fields are discarded.
-Null runtime and session policies inherit the destination Server's global defaults.
+## Wizard sequence
 
-Validate without contacting Nexus:
+1. Select/import an identity, then select a harness.
+2. Choose a connection name. Compatible existing bindings offer **Replace existing binding** or **Abort setup** (default). Pending or incompatible bindings are reported without overwriting them.
+3. Select the exact installation on this machine.
+4. Enter an existing absolute workspace path and optional provider login directory. Enter `-` to clear an optional default.
+5. Select harness preferences, session policy, Nexus tool access and requested execution limits.
+6. Review and Finish. The CLI registers the host, checks the installation, starts the daemon, publishes the workspace and submits the binding proposal.
+7. Approve in Nexus. For current requests, one approval covers the displayed configuration and limits. The daemon applies it and attaches in the background; no operator key or second approval is needed on this computer.
+
+Cancel before Finish to avoid submitting the binding. An identity explicitly imported earlier remains stored. Replacement preserves identity, harness and workspace; close active sessions first. The previous binding stays unchanged until replacement succeeds.
+
+The terminal can close after submission, but the daemon must remain running. `awaiting_inventory` means submission has not reached approval yet. `saved: true` means configuration was applied, not that a model-response test passed. Verify `status` and send a message in Meta-harness.
+
+## Resume
+
+Keep the printed request ID. After resolving an error, resume that request:
 
 ```sh
-okto-nexus-connector connection-config validate --file agent.connection.json
+okto-nexus-connector configure --identity assistant --request-id configure_ID
 ```
 
-Apply to a server-local harness using an imported **operator** identity:
+Replace `configure_ID` with the original value. Do not create multiple new requests to work around a connectivity failure. Expired, rejected or changed proposals need a new reviewed request. Older saved requests can retain a separate `--operator-identity` stage; this is compatibility behavior, not the current flow.
+
+## Full connection JSON
+
+Export from Nexus Connections, **Host & harness**. Example:
+
+```json
+{
+  "format": "okto-nexus-connection",
+  "version": 2,
+  "adapter_id": "claude_stream",
+  "alias": "claude",
+  "runtime_enabled": true,
+  "session_policy": "per_sender_session",
+  "harness_settings": {},
+  "automatic_reply": true,
+  "tool_access": "ask",
+  "authorization": {"minutes": 60, "actions": 20}
+}
+```
+
+This is preferences plus requested limits, not an authorization grant. It excludes agent keys/identity, machine identity, selected installation, destination workspace and login paths. Version 1 input is accepted with destination fields discarded.
 
 ```sh
-okto-nexus-connector connection-config apply --file agent.connection.json \
-  --identity operator --agent assistant --request-id setup-assistant-1 \
-  --executor-id EXE --candidate-ref CANDIDATE --inventory-revision REVISION \
-  --project /server/work/project --workspace-label Project \
-  --provider-home /server/home/user/.claude
+okto-nexus-connector connection-config validate --file connection.json
+okto-nexus-connector configure --identity assistant --file connection.json --project /work/project --provider-home /home/user/.claude
 ```
 
-Use the installation identifiers from the Server inventory, and optionally
-`--workspace-id` or `--binding-id` to update an existing mapping/connection.
-Paths refer to the execution host. This invokes the same temporary test and
-atomic Finish as the dashboard. Reuse the same request ID after an uncertain
-reply; the CLI retains the exact request and progress for safe recovery.
-After a failed test, review the error and use a new request ID for a new test.
+Paths above are examples on the Connector computer. On Windows use existing absolute paths such as `"C:\Work\My Project"`. Model/account login remains on the execution computer.
 
-This automation command configures the Nexus Server's local runtime integration.
-Use `configure --file` for guided provisioning on the Connector machine.
+Session policy values are `shared`, `per_sender`, `per_sender_session`, or `null` (inherit the server default). Automatic replies are enabled; imported `automatic_reply` is normalized to true. A remote runtime binding requires runtime access enabled. Configure MCP-only access in Nexus rather than submitting a disabled remote runtime binding. Remote runtime authorization requires finite duration and action limits.
+
+## Server-hosted setup and automation
+
+```sh
+okto-nexus-connector configure --host server --identity operator --agent assistant
+okto-nexus-connector --non-interactive connection-config apply --file connection.json --identity operator --agent assistant --request-id setup-assistant-1 --executor-id EXE --candidate-ref CANDIDATE --inventory-revision REVISION --project /server/work/project --workspace-label Project
+```
+
+Here all paths and installation identifiers refer to the Nexus server. Obtain EXE, CANDIDATE and REVISION from its inventory. The apply command uses the server test-and-finish workflow. Reuse the exact request ID/content after an uncertain response. A changed configuration needs a new ID.
+
+For Connector-hosted automation use the explicit executor/realization/binding flow in the [CLI guide](cli.md#advanced-r4-automation). `connection-config apply` does not discover and provision the CLI computer unattended.
