@@ -133,4 +133,6 @@ def mcp_template(capability, *, adapter_id, approved_origin, process_http=False)
     return harness_http_template(adapter_id, cap.mcp_url, cap.capability_ref,
         entry_name="nexus_"+hashlib.sha256(capability.capability_ref.encode()).hexdigest()[:16] if process_http else "nexus",
         approved_origins={approved_origin},
+        # The host has already approved and authenticated this exact origin.
+        allow_remote_http=approved_origin.startswith("http://"),
         harness_is_local=loopback, loopback_reachable=loopback, format_qualified=True)

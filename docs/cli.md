@@ -139,3 +139,9 @@ okto-nexus-connector --non-interactive clean --yes
 ```
 
 The interactive default is No. See [cleanup scope and recovery cautions](runbook.md#reset-abandoned-local-configuration) before confirming. The command is local and does not cancel/revoke records in Nexus. For a transient network failure, use diagnostics and resume the original request instead.
+
+## Reconnect all connections
+
+Run okto-nexus-connector reconnect to gracefully stop and restart the daemon for the selected state directory. Configurations and credentials are preserved. Active harness executions may be interrupted during shutdown. The command returns when the daemon is ready; server connections complete asynchronously. Check okto-nexus-connector status and okto-nexus-connector logs --errors for progress. If shutdown cannot finish within 30 seconds, no second daemon is started.
+
+Automatic connection retries use delays of 2, 4, 8, 16 and 30 seconds, then continue every 30 seconds until the daemon is stopped, including reconciliation failures. Pending socket cleanup is retried before opening another connection. Retrying does not replay submitted work or bypass Nexus authorization.
