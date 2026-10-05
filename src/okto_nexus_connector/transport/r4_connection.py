@@ -69,6 +69,7 @@ class R4Connection:
         self._closed = False
         self.failure = None
         self.close_error = None
+        self.last_received_at = None
         for binding_id,lane in (initial_lanes or {}).items():
             if (len(self._lanes)>=max_lanes or not isinstance(lane,R4LaneProjection) or
                     binding_id!=lane.binding_id or lane.boot_id!=boot_id or
@@ -176,6 +177,7 @@ class R4Connection:
                 if kind != 'lease.granted' and any(frame.get(k) != self._base()[k]
                         for k in ('connection_id', 'connection_generation')):
                     raise CoreError('STALE_GENERATION', 'r4_link')
+                self.last_received_at = time.time()
                 if kind == 'operation.submit':
                     self._admit(frame, encoded)
                 elif kind in ('lease.granted', 'binding.attached'):

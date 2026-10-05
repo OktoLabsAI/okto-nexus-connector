@@ -101,11 +101,11 @@ async def test_replace_credential_rotates_epoch(peer, env):
         await import_identity(http, vault, store, key=KEY_A, alias="work",
                               agent_hint="ag_111")
     server.agents.pop(KEY_A)
-    server.add_agent(FakeAgent(agent_id="ag_111", key="nxs_new_key"))
+    server.add_agent(FakeAgent(agent_id="ag_111", key="nxs_new_key", credential_epoch=7))
     async with NexusHTTPClient(url) as http:
         result = await replace_credential(http, vault, store, alias="work",
                                           key="nxs_new_key")
-    assert result.identity.credential_epoch == 2
+    assert result.identity.credential_epoch == 7
     assert vault.resolve("vault:srv_fake/ag_111") == "nxs_new_key"
 
 

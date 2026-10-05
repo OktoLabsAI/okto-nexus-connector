@@ -193,7 +193,7 @@ async def import_identity(http, vault: SecretVault, store: StateStore,
         handle = vault.store(namespace, key)
         identity = IdentityRecord(
             alias=alias, server_id=me.server_id, agent_id=me.agent_id,
-            secret_handle=handle, credential_epoch=1,
+            secret_handle=handle, credential_epoch=me.credential_epoch,
             added_at=_now(), display_name=me.display_name)
 
         def _append(state_):
@@ -209,13 +209,15 @@ async def import_identity(http, vault: SecretVault, store: StateStore,
             action=f"Use 'identity show {existing.alias}' or remove it first.")
     vault.replace(namespace, key)
     identity = existing
-    if identity.revoked:
+    if identity.revoked or identity.credential_epoch != me.credential_epoch:
         def _clear(state):
             record = state.identity_for(me.server_id, me.agent_id)
             if record is not None:
                 record.revoked = False
+                record.credential_epoch = me.credential_epoch
         store.update(_clear)
         identity.revoked = False
+        identity.credential_epoch = me.credential_epoch
     return ImportResult(identity, False, me.agent_id, me.server_id)
 
 
@@ -237,12 +239,12 @@ async def replace_credential(http, vault: SecretVault, store: StateStore,
     def _mutate(state_):
         target = state_.identity_for(record.server_id, record.agent_id)
         if target is not None:
-            target.credential_epoch += 1
+            target.credential_epoch = me.credential_epoch
             target.revoked = False
 
     vault.replace(f"{record.server_id}/{record.agent_id}", key)
     store.update(_mutate)
-    record.credential_epoch += 1
+    record.credential_epoch = me.credential_epoch
     record.revoked = False
     return ImportResult(record, False, me.agent_id, me.server_id)
 

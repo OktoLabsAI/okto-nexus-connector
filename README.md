@@ -127,7 +127,7 @@ macOS release support is promised by the current build.
 | Transport | Authenticated R4 HTTP management and outbound NXL R4 WSS: scoped tickets, binding lanes, generation fencing, reconnect/reconcile and retained publication |
 | Runtimes | Canonical start/reuse, submit, steer, interrupt and close intents; daemon-owned Core execution; retained operation/session reads from the Server |
 | MCP config | Declarative direct-HTTP entries (Codex TOML / Claude JSON) with plan/apply/backup/CAS/ownership; tools-only needs no daemon; Pi gets the non-MCP native bridge |
-| Ops | `doctor` layered diagnostics, `service install` per-OS plans with honest survival matrix, redacted exports |
+| Ops | `status` live connection overview, `logs --follow` persistent daemon logs, `doctor` layered diagnostics, `service install` per-OS plans with honest survival matrix, redacted exports |
 
 ## Quickstart
 
@@ -381,8 +381,10 @@ when unambiguous. Steering and interruption accept --expected-turn-id or
 Schema 12 retains runtime intents across restarts. Existing state migrates
 without implicit runtime authorization. Retention is currently bounded to
 32 intents and 3 MiB of state at resolution; archival/pruning remains pending.
-The complete R4 status/logs UI and final provider/platform
-acceptance remain part of the delivery plan.
+Use `status` and `logs --follow` to inspect R4 control connectivity and daemon errors.
+A connected control channel does not prove that a runtime turn was authorized or completed;
+check the operation result and the Nexus conversation for delivery confirmation.
+Final provider/platform acceptance remains part of the delivery plan.
 
 Operation queries use the retained canonical agent and current approved Server
 profile. They remain available after local workspace or binding mapping changes,
@@ -478,3 +480,22 @@ Before publishing another realization, the daemon compares current canonical
 identity authority with its administrative ticket. If the ticket is stale, it
 obtains a fresh derivative through the same persisted executor registration.
 This does not restart a native operation or replace control-channel ownership.
+
+## Connection troubleshooting
+
+Run these commands on the computer running the Connector:
+
+```console
+okto-nexus-connector status
+okto-nexus-connector status --agent claude-coder
+okto-nexus-connector logs --tail 100
+okto-nexus-connector logs --follow
+okto-nexus-connector logs --errors
+okto-nexus-connector doctor --probe
+```
+
+The overview separates daemon process health, R4 server control readiness, and live agent attachment. A saved binding alone is never reported as connected. It shows connection error codes, connection and last received frame timestamps, pending wizard request IDs, and next actions. Last received frame includes heartbeats; it does not mean an agent replied. Use --json before status for a structured snapshot. Use --json before logs for JSON Lines.
+
+Daemon logs are retained in the state directory under logs/daemon.log, including detached execution. Each file is limited to 2 MiB with three rotated backups. Credential patterns are redacted before writing. The errors filter includes warnings; tail limits the recent lines inspected. Follow continues across rotation. Stop following with Ctrl+C. Restart a daemon that predates this update to enable persistent logging and the expanded live status; earlier discarded logs cannot be recovered.
+
+For an individual runtime, use runtime status --alias ALIAS, runtime inspect SESSION_ID --alias ALIAS, and runtime logs SESSION_ID.
