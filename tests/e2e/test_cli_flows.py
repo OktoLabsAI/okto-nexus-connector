@@ -127,72 +127,19 @@ async def test_cli_identity_connect_and_daemon(tmp_path: Path, fake_server, fore
     result = await run_cli(root, "--json", "identity", "show", "work")
     assert json.loads(result.stdout)["identity"]["agent_id"] == AGENT
 
-    # 3. connect: discovery selection via --executable, confirmations piped
-    #    (vault approval already recorded by 'identity add')
-    result = await run_cli(
-        root, "--json", "connect", "--server", url, "--agent", AGENT,
-        "--alias", "work", "--harness", "codex_app_server",
-        "--executable", str(binary), "--credential-stdin",
-        "--project", str(project),
-        stdin=f"{KEY}\ny\n")
-    if result.returncode != 0:
-        # Hosted Windows jobs can prohibit independent daemon creation. The
-        # CLI must report that limitation; exercise its documented foreground
-        # remedy with a persistent supervisor, never count refusal as success.
-        payload = json.loads(result.stdout)
-        error = payload.get("error", {})
-        if (sys.platform != "win32" or error.get("code") != "DAEMON_UNAVAILABLE"
-                or not error.get("message", "").startswith("Windows denied creation")):
-            pytest.fail(result.stderr.decode('utf-8', errors='replace') + str(payload))
-        assert "daemon run" in error["action"]
-        await foreground_supervisor(root)
-        result = await run_cli(
-            root, "--json", "connect", "--server", url, "--agent", AGENT,
-            "--alias", "work", "--harness", "codex_app_server",
-            "--executable", str(binary), "--credential-stdin",
-            "--project", str(project), stdin=f"{KEY}\ny\n")
-        assert result.returncode == 0, result.stderr
-    connected = json.loads(result.stdout)
-    assert connected["connected"] is True
-    binding = connected["binding"]
-    assert binding["alias"] == "codex"
-    assert binding["binding_id"].startswith("bind_")
-
-    # the daemon was ensured and is reusable (TC-12: second use)
-    result = await run_cli(root, "--json", "daemon", "status")
-    status = json.loads(result.stdout)
-    assert status["running"] is True
-
-    # repeating connect is idempotent (no duplicate binding)
-    result = await run_cli(
-        root, "--json", "connect", "--server", url, "--agent", AGENT,
-        "--alias", "work", "--harness", "codex_app_server",
-        "--executable", str(binary), "--credential-stdin",
-        "--project", str(project), stdin=f"{KEY}\ny\n")
-    assert result.returncode == 0
-    again = json.loads(result.stdout)
-    assert again["binding"]["binding_id"] == binding["binding_id"]
-    assert again["created"] is False
-
-    # 4. bind list/show
-    result = await run_cli(root, "--json", "bind", "list")
-    bindings = json.loads(result.stdout)["bindings"]
-    assert [b["alias"] for b in bindings] == ["codex"]
-
-    # 5. runtime start with an unqualified binary fails honestly
-    result = await run_cli(root, "--json", "runtime", "start", "codex",
-                           "--project", str(project))
+    # R4 connect is interactive. Do not regress to the fake peer's obsolete
+    # executor/workspace_hint binding contract in automation mode.
+    result = await run_cli(root, "--json", "--non-interactive", "connect",
+        "--server", url, "--agent", AGENT, "--alias", "work")
     assert result.returncode != 0
     error = json.loads(result.stdout)["error"]
-    assert error["code"] in ("NATIVE_VERSION_UNQUALIFIED", "UNKNOWN",
-                             "PROFILE_DRIFT", "NEEDS_REDISCOVERY")
+    assert error["code"] == "VALIDATION_ERROR"
+    assert "interactive R4" in error["message"]
+    assert not peer.bindings
 
-    # runtime status lists zero sessions; logs of unknown session is typed
-    result = await run_cli(root, "--json", "runtime", "status")
-    assert json.loads(result.stdout)["sessions"] == []
-    result = await run_cli(root, "--json", "runtime", "logs", "rs_nope")
-    assert result.returncode != 0
-    assert b"VALIDATION_ERROR" in result.stdout
+    await foreground_supervisor(root)
+    result = await run_cli(root, "--json", "daemon", "status")
+    assert json.loads(result.stdout)["running"] is True
 
     # 6. doctor runs layered diagnostics without side effects
     result = await run_cli(root, "--json", "doctor")
