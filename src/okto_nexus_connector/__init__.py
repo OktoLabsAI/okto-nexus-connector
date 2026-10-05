@@ -2,7 +2,7 @@
 
 This package is an application: it imports canonical agent credentials, binds
 identity/harness/project, administers managed runtimes through
-``nexus-connector-core`` and maintains an outbound WSS control channel. It
+``okto-nexus-connector-core`` and maintains an outbound WSS control channel. It
 contains no MCP server, proxy or relay of any transport, no Nexus user login
 and no copy of the native adapters.
 """
