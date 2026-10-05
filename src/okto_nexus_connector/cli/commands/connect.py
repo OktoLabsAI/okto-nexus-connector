@@ -179,8 +179,10 @@ async def _choose_harness(args, output: Output):
         # adapter id that falls back to matches[0].
         options = []
         for entry in inventory:
+            name = {"codex_app_server": "Codex", "pi_rpc": "Pi",
+                    "claude_stream": "Claude Code"}.get(entry.adapter_id, entry.adapter_id)
             options.append((entry.executable,
-                            f"{entry.executable}"
+                            f"{name} - {entry.executable}"
                             f" [{entry.source}]"
                             f"{f' v{entry.version}' if entry.version else ''}"))
         if not options:

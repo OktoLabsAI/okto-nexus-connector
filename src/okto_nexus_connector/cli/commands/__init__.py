@@ -23,6 +23,9 @@ async def _dispatch(args, output: Output):
         return await run_reach(args)
     root = _state_dir(args)
     command = args.command
+    if command in ('status', 'logs'):
+        from .diagnostics import run_status, run_logs
+        return await (run_status if command == 'status' else run_logs)(args, output, root)
     if command == 'proxy':
         from .proxy import run_proxy
         return await run_proxy(args, output, root)

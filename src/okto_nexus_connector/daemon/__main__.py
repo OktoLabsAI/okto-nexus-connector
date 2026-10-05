@@ -14,6 +14,8 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s")
     root = paths.state_dir()
+    from .logging_setup import configure_logging
+    configure_logging(root)
     from .app import DaemonApp
     app = DaemonApp(root)
     try:

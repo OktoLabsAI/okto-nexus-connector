@@ -155,7 +155,11 @@ class R4DaemonControl:
             recovery_required=self._recovery_error is not None, cleanup_pending=self.cleanup_pending,
             publication_sequence=self.publication_sequence, inventory_revision=self.inventory_revision,
             connection_generation=connection.state.connection_generation if connection else None,
-            attempts=self.attempts)
+            attempts=self.attempts,
+            last_connected_at=getattr(self, 'last_connected_at', None),
+            last_error_at=getattr(self, 'last_error_at', None),
+            last_received_at=getattr(connection, 'last_received_at', None),
+            attached_bindings=sorted(self.execution.lanes) if self.execution else [])
 
     async def _wait(self, delay):
         try:
@@ -345,6 +349,9 @@ class R4DaemonControl:
             try:
                 await self.execution.sync()
                 self.phase, self.error_code = 'CONTROL_READY', None
+                self.last_connected_at = time.time()
+                logging.getLogger(__name__).info('Runtime connected: server=%s executor=%s',
+                                                 self.server_id, self.executor_id)
                 renew_at = self.clock() + max(0, bootstrap.deadline_monotonic - self.clock()) * 0.7
                 while not self._stopped.is_set() and self.connection.online:
                     await self._require(snapshot)
@@ -395,12 +402,13 @@ class R4DaemonControl:
                     else:
                         self.connection = None
         async def failed(error):
+            self.last_error_at = time.time()
             # Error text can contain credentials or remote payloads.
             code = self._recovery_error or getattr(error, 'code', None)
             self.error_code = code if type(code) is str and code in _STATUS_ERRORS else 'CONTROL_DISCONNECTED'
             logging.getLogger(__name__).warning(
-                'Runtime connection failed: phase=%s code=%s exception=%s stage=%s location=%s',
-                self.phase, self.error_code, type(error).__name__,
+                'Runtime connection failed: server=%s phase=%s code=%s exception=%s stage=%s location=%s',
+                self.server_id, self.phase, self.error_code, type(error).__name__,
                 getattr(error, 'stage', 'unknown') if isinstance(error, ConnectorError) else 'unknown',
                 ' > '.join(f'{frame.name}:{frame.lineno}' for frame in traceback.extract_tb(error.__traceback__)))
             recovering = self.error_code in ('RECONCILIATION_REQUIRED', 'JOURNAL_UNAVAILABLE')

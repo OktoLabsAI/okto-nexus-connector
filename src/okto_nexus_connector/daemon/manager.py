@@ -185,6 +185,8 @@ def stop(root: Path, *, timeout: float = 60.0) -> dict[str, object]:
 
 async def run_foreground(root: Path) -> int:
     """Run the daemon in the foreground until Ctrl+C/SIGTERM (TC-37)."""
+    from .logging_setup import configure_logging
+    configure_logging(root)
     from .app import DaemonApp
     app = DaemonApp(root)
     loop = asyncio.get_running_loop()

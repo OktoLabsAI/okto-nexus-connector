@@ -274,6 +274,13 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall.add_argument("--dry-run", action="store_true")
     service_sub.add_parser("status")
 
+    status = sub.add_parser('status', help='show live server and agent connection health')
+    status.add_argument('--agent', help='show one agent by canonical agent id')
+    logs = sub.add_parser('logs', help='inspect persistent daemon logs')
+    logs.add_argument('--follow', action='store_true', help='stream new log entries until Ctrl+C')
+    logs.add_argument('--errors', action='store_true', help='show warnings and errors only')
+    logs.add_argument('--tail', type=int, choices=range(1, 10001), default=50,
+                      metavar='1..10000', help='maximum recent lines (default: 50)')
     doctor = sub.add_parser("doctor", help="layered diagnostics")
     doctor.add_argument("--probe", action="store_true",
                         help="attempt live network probes")
