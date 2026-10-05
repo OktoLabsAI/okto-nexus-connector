@@ -276,6 +276,7 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall.add_argument("--dry-run", action="store_true")
     service_sub.add_parser("status")
 
+    sub.add_parser('reconnect', help='gracefully restart the daemon to reconnect all configured connections')
     status = sub.add_parser('status', help='show live server and agent connection health')
     status.add_argument('--agent', help='show one agent by canonical agent id')
     logs = sub.add_parser('logs', help='inspect persistent daemon logs')

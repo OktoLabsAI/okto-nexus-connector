@@ -408,6 +408,12 @@ class R4DaemonControl:
         from nexus_connector_core import RuntimeAutomation, RuntimeAutomationPolicy
         async def cycle():
             self.attempts += 1
+            if self.cleanup_pending and self.connection is not None:
+                await self.connection.close()
+                if getattr(self.connection, 'close_error', None) is not None:
+                    raise ConnectorError('CONTROL_DISCONNECTED', 'r4_cleanup', 'Connection cleanup is still pending.')
+                self.connection = None
+                self.cleanup_pending = False
             try:
                 await self._attempt()
             finally:
@@ -416,7 +422,7 @@ class R4DaemonControl:
                     if getattr(self.connection, 'close_error', None) is not None:
                         self.cleanup_pending = True
                         self.error_code = 'CONTROL_DISCONNECTED'
-                        self._stopped.set()
+                        raise ConnectorError('CONTROL_DISCONNECTED', 'r4_cleanup', 'Connection cleanup is still pending.')
                     else:
                         self.connection = None
         async def failed(error):
@@ -431,7 +437,7 @@ class R4DaemonControl:
                 ' > '.join(f'{frame.name}:{frame.lineno}' for frame in traceback.extract_tb(error.__traceback__)))
             recovering = self.error_code in ('RECONCILIATION_REQUIRED', 'JOURNAL_UNAVAILABLE')
             self._recovery_error = self.error_code if recovering else None
-            self.phase = 'RECOVERING' if recovering else 'RETRY_WAIT'
+            self.phase = 'CLEANUP_PENDING' if self.cleanup_pending else 'RECOVERING' if recovering else 'RETRY_WAIT'
             return recovering
         async def exhausted():
             self.phase = 'RECOVERY_ATTENTION_REQUIRED'

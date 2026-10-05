@@ -23,6 +23,9 @@ async def _dispatch(args, output: Output):
         return await run_reach(args)
     root = _state_dir(args)
     command = args.command
+    if command == 'reconnect':
+        from .reconnect import run_reconnect
+        return await run_reconnect(args, output, root)
     if command == 'clean':
         from .clean import run_clean
         return await run_clean(args, output, root)

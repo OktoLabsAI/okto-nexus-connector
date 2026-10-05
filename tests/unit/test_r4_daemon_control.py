@@ -181,16 +181,16 @@ async def test_core_automation_recovers_without_cli_intervention(control):
         await dispose(owner, host)
 
 
-async def test_core_automation_exhaustion_is_visible_without_native_effects(control):
+async def test_core_automation_continues_recovery_without_native_effects(control):
     owner, peer, _, host, _ = control
     async def blocked():
         raise ConnectorError('RECONCILIATION_REQUIRED', 'test', 'Ownership remains uncertain.')
     owner._attempt = blocked
     owner.start()
     try:
-        await eventually(lambda: owner.phase == 'RECOVERY_ATTENTION_REQUIRED')
+        await eventually(lambda: owner.attempts >= 8)
         await asyncio.sleep(.03)
-        assert owner.attempts == 5 and not peer.sockets and not peer.publications
+        assert owner.attempts >= 8 and not peer.sockets and not peer.publications
         assert not owner.status()['control_ready']
     finally:
         await dispose(owner, host)

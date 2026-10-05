@@ -52,6 +52,23 @@ async def test_unconfirmed_abort_keeps_cleanup_failure():
     assert not owner.online
 
 
+async def test_failed_socket_close_can_be_retried():
+    class RetrySocket:
+        transport = None
+        attempts = 0
+        async def close(self):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise OSError('temporary close failure')
+    socket = RetrySocket()
+    owner = R4Connection(socket, STATE, boot_id='boot', send_timeout=.01)
+    await owner.close()
+    assert isinstance(owner.close_error, OSError)
+    await owner.close()
+    assert socket.attempts == 2 and owner.close_error is None
+    assert not owner.online
+
+
 class Socket:
     def __init__(self):
         self.incoming, self.outgoing = asyncio.Queue(), asyncio.Queue()
