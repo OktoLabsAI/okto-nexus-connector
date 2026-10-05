@@ -4,8 +4,8 @@ PID alone is not identity (plan 4.1: PID file não basta). We record PID plus
 a process birth token: on Windows the process creation time from
 ``psutil``-free ``GetProcessTimes`` via ctypes; on Linux ``/proc/<pid>/stat``
 field 22 (starttime); on macOS the ``proc_pidinfo`` ``PROC_PIDTBSDINFO``
-start timestamp (the same private ABI Core's darwin backend uses, validated
-atively on macOS 26.4.1). A later comparison proves "same process" or
+start timestamp (the same ABI layout Core's darwin backend uses).
+A later comparison proves "same process" or
 exposes PID reuse. Observing identity never authorizes signaling.
 """
 
@@ -69,8 +69,8 @@ def _darwin_birth(pid: int) -> str | None:
     """Birth token from libproc's PROC_PIDTBSDINFO start timestamp.
 
     XNU bsd/sys/proc_info.h: the flavor-3 response carries ``start_sec``
-    and ``start_usec`` after the fixed header fields. The exact 176-byte
-    structure layout is validated by Core's native darwin backend; this
+    and ``start_usec`` after the fixed header fields. The structure
+    layout matches Core's native darwin backend; this
     reads only the immutable process start time and never signals.
     """
     class _BsdInfo(ctypes.Structure):
