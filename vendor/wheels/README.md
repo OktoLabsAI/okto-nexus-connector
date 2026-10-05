@@ -112,5 +112,7 @@ The HTTPS client publishes verified interrupt and close receipts as well.
 R4 remote execution remains disabled.
 
 Current pinned artifact: `nexus_connector_core-0.0.1-py3-none-any.whl`, built from the first-release Core source (version reset from `0.2.63.dev0` to `0.0.1`).
-SHA-256: `783c2858808a7c3302a1765527f20208886695e38beae82c3340252a36a23397`.
+SHA-256: `19a5bb4bf1e43bc2d523682a1aa4b1f14305e7ce21c8a5a5704b98efc5b8d600`.
 SHA-256 `6af120edf1279cc07c026ba86ce1a2bc856d6982e3acd82fa1b63c951a39c25c`. The same wheel is used by Nexus and Connector regression tests.
+
+The current 0.0.1 artifact includes the exact Okto Nexus LICENSE and SaaS/Branding Addendum.
