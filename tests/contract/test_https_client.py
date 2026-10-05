@@ -159,9 +159,11 @@ async def test_cross_origin_redirect_refused(peer):
     assert error.value.code == "PROFILE_DRIFT"
 
 
-async def test_loopback_http_allowed_non_loopback_tls_required():
+async def test_remote_http_allowed_and_https_verification_preserved():
     assert is_loopback_origin("http://127.0.0.1:8080") is True
     assert is_loopback_origin("https://nexus.example") is False
+    client = NexusHTTPClient("http://192.168.0.146:8202")
+    assert client.link_url("exe").startswith("ws://192.168.0.146:8202/")
     with pytest.raises(ConnectorError):
         NexusHTTPClient("https://nexus.example", verify=False)
 

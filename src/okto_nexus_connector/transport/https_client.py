@@ -1,9 +1,9 @@
-"""Outbound HTTPS client for the Nexus Server management API.
+"""Outbound HTTP/HTTPS client for the Nexus Server management API.
 
 This is the Connector-side client for the contract routes of plan A.5
 (`/v1/connections/*`, `/v1/runtime/*`). It never proxies MCP and never
-forwards provider secrets. TLS is required outside explicit loopback
-development; redirects to another origin are refused for credentialed
+forwards provider secrets. The configured URL selects HTTP or HTTPS;
+redirects to another origin are refused for credentialed
 requests (A.15).
 """
 
@@ -250,14 +250,12 @@ def is_loopback_origin(base_url: str) -> bool:
 
 
 class NexusHTTPClient:
-    """One Server profile's authenticated HTTPS client.
+    """One Server profile's authenticated HTTP/HTTPS client.
 
     CN1/A06: the origin tuple (scheme, host, port — defaults stripped)
     is validated BEFORE any credential is attached or request is sent.
-    Non-loopback origins MUST be https/wss; explicit userinfo, missing
-    hosts and ambiguous shapes are refused up front, so no canonical
-    key is ever transmitted over plaintext to a remote host (test_10:
-    zero authenticated requests reach the transport).
+    HTTP and HTTPS are supported for local and remote servers. Explicit
+    userinfo, missing hosts and unsupported schemes are refused up front.
     """
 
     def __init__(self, base_url: str, *, verify: bool = True,
@@ -284,14 +282,6 @@ class NexusHTTPClient:
                 "userinfo in the Server URL is refused",
                 action="Provide scheme://host[:port] without credentials "
                        "in the URL; keys enter through protected input.")
-        if not self._loopback and parts.scheme != "https":
-            raise ConnectorError(
-                "PROFILE_DRIFT", "origin",
-                f"non-loopback Server origin must be HTTPS, got "
-                f"{parts.scheme!r} for {self.origin}",
-                action="Use the Server's https:// address; the canonical "
-                       "key is never sent over plaintext. Loopback http "
-                       "is the documented laboratory exception.")
 
     async def __aenter__(self) -> "NexusHTTPClient":
         if self._client is None:
