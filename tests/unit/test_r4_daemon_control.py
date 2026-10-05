@@ -28,6 +28,22 @@ class Vault:
         return 'synthetic-canonical-secret'
 
 
+@pytest.mark.parametrize('native_failure', [False, True])
+async def test_inventory_discovery_preserves_connection_failure_before_publication(control, native_failure):
+    owner, peer, store, _, _ = control
+    failure = ConnectorError('PROFILE_DRIFT', 'prepare', 'Synthetic failure') if native_failure else None
+    owner.connection = SimpleNamespace(online=True)
+    owner.execution = SimpleNamespace(owner=SimpleNamespace(failure=failure))
+    peer.after_discovery = lambda: setattr(owner.connection, 'online', False)
+    with pytest.raises(ConnectorError) as caught:
+        await owner._publish(peer, SimpleNamespace(), owner._snapshot())
+    assert caught.value.code == ('PROFILE_DRIFT' if native_failure else 'CONTROL_DISCONNECTED')
+    if native_failure:
+        assert caught.value is failure
+    assert not peer.publications
+    assert store.load().execution_executors[0].inventory_publication_sequence == 0
+
+
 @pytest.fixture
 def control(tmp_path):
     store = StateStore(tmp_path / 'state.json')

@@ -24,7 +24,8 @@ def selection(tmp_path, request):
     binary = tmp_path / 'codex.exe'
     binary.write_bytes(b'Synthetic approved binary')
     adapter_id = {'pi': 'pi_rpc', 'claude': 'claude_stream', 'claude_no_refs': 'claude_stream'}.get(getattr(request, 'param', None), 'codex_app_server')
-    candidate = InstallationCandidate(adapter_id, str(binary), fingerprint(binary), 'explicit', 'selected',
+    candidate = InstallationCandidate(adapter_id, str(binary), fingerprint(binary), 'explicit',
+        'untrusted' if getattr(request, 'param', None) == 'discovered' else 'selected',
         installation_ref=installation_ref(adapter_id, str(binary)))
     revision = calculate_inventory_revision([candidate])
     store = StateStore(tmp_path / 'state.json')
@@ -203,6 +204,7 @@ async def test_host_revalidates_after_shared_store_wait_and_before_cache_reuse(s
         await host.shutdown_all()
 
 
+@pytest.mark.parametrize('selection', [None, 'discovered'], indirect=True)
 async def test_r4_host_defers_native_capture_to_installed_lease(selection, tmp_path, monkeypatch):
     from okto_nexus_connector.services import core_host
     store, candidate, binding, frame, *_ = selection
@@ -222,5 +224,7 @@ async def test_r4_host_defers_native_capture_to_installed_lease(selection, tmp_p
         assert len(composed) == 1
         assert composed[0]['native_approvals_from_lease'] is True
         assert not composed[0].get('native_approvals_enabled', False)
+        assert composed[0]['candidates'][candidate.adapter_id] == replace(candidate, trust='selected')
+        assert resolve_execution_selection(store, frame=frame, candidates=[candidate]).candidate == candidate
     finally:
         await host.shutdown_all()

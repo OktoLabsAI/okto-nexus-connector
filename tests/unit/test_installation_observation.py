@@ -44,6 +44,20 @@ def arguments(candidate):
         candidate_ref=candidate.installation_ref, inventory_revision=calculate_inventory_revision([candidate]))
 
 
+async def test_explicit_probe_selects_discovered_candidate_without_changing_inventory_trust(host, monkeypatch):
+    store, candidate, _, inventory = host
+    discovered = replace(candidate, trust='discovered')
+    inventory[:] = [discovered]
+    async def probe(selected, *, strict):
+        assert selected == replace(discovered, trust='selected') and strict
+        return replace(selected, version='0.159.0')
+    monkeypatch.setattr(service, 'probe_version', probe)
+    await service.observe_installation(store, **arguments(discovered))
+    observations = store.load().execution_executors[0].installation_observations
+    assert observations[0]['source'] == asdict(discovered)
+    assert service.apply_observations(inventory, observations)[0].trust == 'discovered'
+
+
 async def test_public_probe_persists_observation_and_passive_preview_reuses_it(host, tmp_path):
     store, candidate, calls, _ = host
     args = arguments(candidate)

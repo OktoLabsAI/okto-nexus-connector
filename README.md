@@ -6,6 +6,40 @@ Pi and Claude Code run, imports canonical agent credentials, binds
 identity/harness/project and administers managed runtimes through
 [`nexus-connector-core`](https://github.com/OktoLabsAI/okto-nexus-connector-core).
 
+### Configure an outbound proxy
+
+```sh
+okto-nexus-connector proxy set --url http://proxy.example.com:8080 --no-proxy ".internal.example.com"
+okto-nexus-connector proxy show
+okto-nexus-connector reach --server https://nexus.example.com
+```
+
+For an authenticated proxy, set a protected environment variable containing
+`http://user:password@proxy.example.com:8080` (URL-encode reserved characters),
+then run `okto-nexus-connector proxy set --url-env NEXUS_PROXY_URL`.
+Only the variable name is saved; its value is never included in `proxy show`.
+The variable must also be available to the daemon's OS account/service.
+
+Settings apply to all Nexus HTTP and WebSocket connections in the selected
+`--state-dir`, including `reach`, onboarding, and daemon reconnects. Restart
+the daemon to replace existing connections, or after changing environment
+variables: `daemon stop`, then `daemon start`. Proxy configuration is local
+and is not part of portable harness exports. Harness provider and native MCP
+network traffic use the harness's own network configuration.
+
+Without saved settings, the Connector uses environment/system proxies:
+`HTTPS_PROXY` for HTTPS/WSS, `HTTP_PROXY` for HTTP/WS, then `ALL_PROXY`.
+`NO_PROXY` and `--no-proxy` accept comma-separated hosts, domain suffixes,
+host:port entries, or `*`. Loopback destinations always connect directly.
+HTTP and HTTPS proxies with optional Basic authentication are supported;
+SOCKS and integrated NTLM authentication are not supported.
+TLS verification remains enabled; corporate trust roots can be provided
+through `SSL_CERT_FILE` or `SSL_CERT_DIR`.
+
+Use `proxy set --direct` to disable proxy use, or `proxy clear` to restore
+environment/system discovery. A missing configured secret variable fails
+the connection without silently falling back to a direct connection.
+
 ### Check Server reachability
 
 ```sh

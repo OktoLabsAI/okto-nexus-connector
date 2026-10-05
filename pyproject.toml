@@ -13,13 +13,13 @@ license = "Elastic-2.0"
 license-files = ["LICENSE"]
 dependencies = [
     "nexus-connector-core==0.2.63.dev0",
-    "websockets>=13,<18",
+  "websockets>=15,<18",
     "httpx>=0.27,<1",
 ]
 
 [project.optional-dependencies]
 keyring = ["keyring>=25,<26"]
-test = ["pytest>=8", "pytest-asyncio>=0.24", "build>=1", "pywin32; sys_platform == 'win32'"]
+test = ["pytest>=8", "pytest-asyncio>=0.24", "build>=1", "cryptography>=43", "pywin32; sys_platform == 'win32'"]
 
 [project.scripts]
 okto-nexus-connector = "okto_nexus_connector.cli.main:main"

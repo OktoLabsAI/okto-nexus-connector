@@ -13,6 +13,7 @@ import secrets
 import time
 import threading
 import logging
+import traceback
 from urllib.parse import urlsplit
 from nexus_connector_core import DEFAULT_RUNTIME_AUTOMATION
 
@@ -27,6 +28,7 @@ from ..transport.wss_r4 import connect_r4_connection
 
 _STATUS_ERRORS = frozenset({
     'VERSION_INCOMPATIBLE', 'PROFILE_DRIFT', 'STALE_GENERATION', 'AGENT_AUTH_REQUIRED',
+    'CREDENTIAL_REPLACEMENT_REQUIRED', 'CREDENTIAL_MATERIAL_UNAVAILABLE',
     'AGENT_ID_MISMATCH', 'SCOPE_MISMATCH', 'OPERATION_CONFLICT', 'CONTROL_DISCONNECTED',
     'RECONCILIATION_REQUIRED', 'JOURNAL_UNAVAILABLE', 'EXECUTOR_OFFLINE', 'OUTCOME_UNKNOWN',
     'VALIDATION_ERROR', 'CAPACITY_EXCEEDED', 'RUNTIME_DRAINING', 'BINDING_NOT_AUTHORIZED',
@@ -212,6 +214,13 @@ class R4DaemonControl:
                                observations=snapshot[0].installation_observations,
                                cancel_requested=self._discovery_stopped.is_set))
         await self._require(snapshot)
+        if self.connection is not None and not self.connection.online:
+            failure = (getattr(getattr(self.execution, 'owner', None), 'failure', None)
+                       or getattr(self.connection, 'failure', None))
+            if failure is not None:
+                raise failure
+            raise ConnectorError('CONTROL_DISCONNECTED', 'r4_inventory',
+                                 'The control link closed during inventory discovery.')
         sequence = await asyncio.to_thread(self._reserve_sequence, snapshot)
         self.publication_sequence = sequence
         value = await asyncio.to_thread(executor_inventory_snapshot, candidates,
@@ -352,8 +361,18 @@ class R4DaemonControl:
                         refresh_at = await self._publish(http, bootstrap, snapshot, delivery)
                     await self._wait(min(self.poll_seconds, max(0.001, renew_at - self.clock())))
                 if not self._stopped.is_set():
+                    failure = getattr(self.execution.owner, 'failure', None) or getattr(self.connection, 'failure', None)
+                    if failure is not None:
+                        raise failure
                     raise ConnectorError('CONTROL_DISCONNECTED', 'r4_startup', 'The R4 control link was lost.')
+            except Exception as error:
+                code = getattr(error, 'code', None)
+                self.error_code = code if type(code) is str and code in _STATUS_ERRORS else 'CONTROL_DISCONNECTED'
+                logging.getLogger(__name__).warning('Runtime execution interrupted: code=%s exception=%s',
+                    getattr(error, 'code', 'CONTROL_DISCONNECTED'), type(error).__name__)
+                raise
             finally:
+                self.phase = 'DRAINING'
                 self._retained_lanes.update(self.execution.lanes)
                 await self.execution.close(
                     preserve_leases=not self._stopped.is_set() and not self.connection.online,
@@ -380,8 +399,10 @@ class R4DaemonControl:
             code = self._recovery_error or getattr(error, 'code', None)
             self.error_code = code if type(code) is str and code in _STATUS_ERRORS else 'CONTROL_DISCONNECTED'
             logging.getLogger(__name__).warning(
-                'Runtime connection failed: phase=%s code=%s exception=%s',
-                self.phase, self.error_code, type(error).__name__)
+                'Runtime connection failed: phase=%s code=%s exception=%s stage=%s location=%s',
+                self.phase, self.error_code, type(error).__name__,
+                getattr(error, 'stage', 'unknown') if isinstance(error, ConnectorError) else 'unknown',
+                ' > '.join(f'{frame.name}:{frame.lineno}' for frame in traceback.extract_tb(error.__traceback__)))
             recovering = self.error_code in ('RECONCILIATION_REQUIRED', 'JOURNAL_UNAVAILABLE')
             self._recovery_error = self.error_code if recovering else None
             self.phase = 'RECOVERING' if recovering else 'RETRY_WAIT'

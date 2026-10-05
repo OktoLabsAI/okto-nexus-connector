@@ -271,6 +271,12 @@ async def test_startup_recovers_before_connect_and_pending_reservation_blocks_em
         raise ConnectorError('CONTROL_DISCONNECTED', 'test', 'The test ends before connecting.')
     peer.request_r4_binding_ticket = ticket
     peer.publish_operation_receipt = publish
+    async def binding_view(method, path, **kwargs):
+        from dataclasses import fields
+        from okto_nexus_connector.transport.https_client import R4BindingView
+        assert method == 'GET' and path.endswith('/' + binding.binding_id)
+        return {f.name: getattr(binding, f.name) for f in fields(R4BindingView)}
+    peer._request = binding_view
     owner.connect = connect
     try:
         with pytest.raises(ConnectorError, match='CONTROL_DISCONNECTED'):
@@ -296,6 +302,29 @@ async def test_recovery_republishes_same_fact_and_reuses_authority_for_attach(li
     await owner.sync()
     assert len(attached) == 1 and keys == ['agent-key']
     assert not native.opened
+
+
+@pytest.mark.parametrize('selection', [True], indirect=True)
+async def test_recovery_refreshes_cached_authority_after_policy_change(lifecycle):
+    from dataclasses import replace
+    owner, http, store, frame, native, attached, published, keys = lifecycle
+    await owner.sync()
+    authorities = dict(owner.lanes)
+    store.update(lambda s: setattr(s.execution_bindings[0], 'authorization_revision', 3))
+    original = http.request_r4_binding_ticket
+    async def ticket(*args, **kwargs):
+        return replace(await original(*args, **kwargs), authorization_revision=3)
+    http.request_r4_binding_ticket = ticket
+    journal = R4PublicationStore.for_state(store)
+    value = receipt(frame)
+    journal.reserve(frame)
+    journal.record(value)
+    async def current(): pass
+    await recover_publications(store, owner.vault, http, server_id='srv', executor_id='exe',
+        require_current=current, authorities=authorities)
+    assert published.get_nowait() == value
+    assert authorities[frame['binding_id']].binding.authorization_revision == 3
+    assert len(keys) == 2 and not native.opened and not journal.pending('srv', 'exe')
 
 
 @pytest.mark.parametrize('selection', [True], indirect=True)

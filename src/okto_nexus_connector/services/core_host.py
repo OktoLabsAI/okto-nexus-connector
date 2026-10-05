@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Mapping
 
@@ -339,7 +339,10 @@ class CoreRuntimeHost:
                 raise ConnectorError("BINDING_NOT_AUTHORIZED", "native_action_launch")
             return await native_owner.launch(prepared, session_id, context)
         runtime = create_runtime(journal=journal, environment=checked_environment,
-            candidates={selection.candidate.adapter_id: selection.candidate},
+            # The approved binding and local consent select this exact entry.
+            # Preserve passive inventory evidence; only this scoped runtime
+            # receives the selected candidate required by Core.prepare.
+            candidates={selection.candidate.adapter_id: replace(selection.candidate, trust='selected')},
             workspace_roots={selection.workspace_id: selection.workspace_root},
             native_factory=factory, owned_slot_ledger=ledger,
             native_approvals_from_lease=True,

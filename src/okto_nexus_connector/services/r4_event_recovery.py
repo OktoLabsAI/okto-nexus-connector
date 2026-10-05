@@ -5,7 +5,7 @@ from nexus_connector_core import EventCursor
 from ..errors import ConnectorError
 from .r4_tickets import acquire_ticket
 from .r4_events import R4EventPublisher,event_page
-from .r4_publications import PublicationAuthority,_binding
+from .r4_publications import PublicationAuthority,_binding,current_publication_authority
 
 
 async def recover_event_streams(store,vault,http,host,channel,*,require_current,authorities,clock=time.monotonic):
@@ -31,10 +31,7 @@ async def recover_event_streams(store,vault,http,host,channel,*,require_current,
                 if not await event_page(journal,scope,state["core_applied"]):
                     continue
                 binding,identity=await asyncio.to_thread(_binding,store,http,server_id,executor_id,scope)
-                authority=authorities.get(binding.binding_id)
-                if authority is not None and clock()>=authority.deadline:
-                    authorities.pop(binding.binding_id,None)
-                    authority=None
+                authority=current_publication_authority(authorities,binding,identity,clock())
                 if authority is None:
                     async def ticket_current():
                         await require_current()

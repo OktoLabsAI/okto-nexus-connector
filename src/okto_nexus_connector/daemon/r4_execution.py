@@ -9,6 +9,7 @@ from ..services.discovery_configuration import configured_candidates
 from ..services.executor_registration import _identity, _profile
 from ..services.r4_execution import R4ExecutionOwner
 from ..services.r4_tickets import acquire_ticket
+from ..services.r4_publications import current_publication_authority
 from ..services.session_capabilities import SessionCapabilityOwner, ApprovedToolLaunchProvider
 
 
@@ -148,10 +149,9 @@ class R4DaemonExecution:
         for binding_id, (binding, identity) in records.items():
             if binding_id in self.lanes:
                 continue
-            recovered = self.recovered_lanes.pop(binding_id, None)
+            recovered = current_publication_authority(self.recovered_lanes, binding, identity, self.clock())
+            self.recovered_lanes.pop(binding_id, None)
             if recovered is not None:
-                if (recovered.binding, recovered.identity) != (binding, identity):
-                    raise ConnectorError("STALE_GENERATION", "r4_lanes", "The recovered authority changed.")
                 ticket = recovered.ticket
                 deadline = recovered.deadline
             else:

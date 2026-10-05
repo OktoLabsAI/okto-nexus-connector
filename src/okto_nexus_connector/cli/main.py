@@ -36,6 +36,17 @@ def build_parser() -> argparse.ArgumentParser:
                         help="override the per-user state directory")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    proxy = sub.add_parser('proxy', help='configure the host-local HTTP and WebSocket proxy')
+    proxy_sub = proxy.add_subparsers(dest='subcommand', required=True)
+    proxy_set = proxy_sub.add_parser('set', help='save outbound proxy settings')
+    proxy_mode = proxy_set.add_mutually_exclusive_group(required=True)
+    proxy_mode.add_argument('--url', help='HTTP(S) proxy URL without credentials')
+    proxy_mode.add_argument('--url-env', help='environment variable containing the proxy URL (supports credentials)')
+    proxy_mode.add_argument('--direct', action='store_true', help='disable proxy use, including environment proxies')
+    proxy_set.add_argument('--no-proxy', help='comma-separated bypass hosts, domains, or host:port entries; * bypasses all')
+    proxy_sub.add_parser('show', help='show settings without resolving credentials')
+    proxy_sub.add_parser('clear', help='restore environment/system proxy discovery')
+
     reach = sub.add_parser('reach', help='test Server reachability and report supported versions (no credentials required)')
     reach.add_argument('--server', required=True, help='Nexus Server base URL')
 

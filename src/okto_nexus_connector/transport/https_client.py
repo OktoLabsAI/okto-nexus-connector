@@ -249,22 +249,6 @@ def is_loopback_origin(base_url: str) -> bool:
         return host == "localhost"
 
 
-def _no_proxy_for(base_url: str) -> bool:
-    """Honor NO_PROXY for explicitly excluded hosts."""
-    import os
-    parts = urlsplit(base_url)
-    host = (parts.hostname or "").lower()
-    excludes = os.environ.get("NO_PROXY", "") or os.environ.get(
-        "no_proxy", "")
-    if not excludes:
-        return False
-    for entry in excludes.split(","):
-        entry = entry.strip().lower().lstrip(".")
-        if entry and (host == entry or host.endswith("." + entry)):
-            return True
-    return False
-
-
 class NexusHTTPClient:
     """One Server profile's authenticated HTTPS client.
 
@@ -311,14 +295,21 @@ class NexusHTTPClient:
 
     async def __aenter__(self) -> "NexusHTTPClient":
         if self._client is None:
-            # Loopback targets never use environment proxies; remote
-            # origins keep normal proxy/trust_env behavior.
-            trust_env = not (self._loopback or
-                             _no_proxy_for(self.base_url))
+            # Share routing with the daemon's WebSocket transports.
+            from .proxy import resolve_proxy
+            import os
+            import ssl
+            verify = self._verify
+            # Disable HTTPX proxy discovery so both transports share policy,
+            # while preserving the operator's corporate CA configuration.
+            if verify is True and not self._loopback and (os.environ.get('SSL_CERT_FILE') or os.environ.get('SSL_CERT_DIR')):
+                verify = ssl.create_default_context(cafile=os.environ.get('SSL_CERT_FILE'),
+                                                    capath=os.environ.get('SSL_CERT_DIR'))
             self._client = httpx.AsyncClient(
-                verify=self._verify, timeout=self._timeout,
+                verify=verify, timeout=self._timeout,
                 headers={"User-Agent": _USER_AGENT},
-                follow_redirects=False, trust_env=trust_env)
+                follow_redirects=False, trust_env=False,
+                proxy=resolve_proxy(self.base_url))
         return self
 
     async def __aexit__(self, *_exc) -> None:

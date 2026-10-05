@@ -311,6 +311,11 @@ class DaemonApp:
     # -- lifecycle -----------------------------------------------------------
 
     async def run_forever(self) -> int:
+        from ..transport.proxy import proxy_scope
+        with proxy_scope(self.root):
+            return await self._run_forever()
+
+    async def _run_forever(self) -> int:
         if not self.lock.acquire():
             live = self.lock.live_owner()
             if live is not None:

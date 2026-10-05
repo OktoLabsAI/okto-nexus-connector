@@ -222,8 +222,10 @@ async def connect_r4_control(
     validate_link_url(link_url)
     if urlsplit(link_url).scheme not in ("wss", "ws"):
         raise ValueError("Invalid R4 link URL.")
+    from .proxy import resolve_proxy
     websocket = await websockets.connect(
         link_url, subprotocols=["nxl.v1"],
+        proxy=resolve_proxy(link_url),
         additional_headers=[("Authorization", f"Bearer {ticket}")],
         max_size=1024 * 1024, open_timeout=15, ping_interval=None,
     )

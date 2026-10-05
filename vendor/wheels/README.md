@@ -110,3 +110,6 @@ Current pinned artifact: `nexus_connector_core-0.2.21.dev0-py3-none-any.whl`,
 SHA-256 `6cf55425acc44b4ead9bfd1abd6e216d2c9ed00c7e137d76800b1a42f2f065ed`.
 The HTTPS client publishes verified interrupt and close receipts as well.
 R4 remote execution remains disabled.
+
+Current pinned artifact: `nexus_connector_core-0.2.63.dev0-py3-none-any.whl`, built from Core `de6c300`.
+SHA-256 `6af120edf1279cc07c026ba86ce1a2bc856d6982e3acd82fa1b63c951a39c25c`. The same wheel is used by Nexus and Connector regression tests.

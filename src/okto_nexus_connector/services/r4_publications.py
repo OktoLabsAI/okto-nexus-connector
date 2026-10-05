@@ -19,6 +19,20 @@ class PublicationAuthority:
     deadline: float
 
 
+def current_publication_authority(authorities, binding, identity, now):
+    """Discard derivative tickets after a reviewed policy transition.
+
+    Durable receipts/events retain their original dispatch scope. Only the
+    credential used to publish those facts is reacquired from the Server.
+    """
+    authority = authorities.get(binding.binding_id)
+    if authority is not None and (now >= authority.deadline or
+            (authority.binding, authority.identity) != (binding, identity)):
+        authorities.pop(binding.binding_id, None)
+        return None
+    return authority
+
+
 def _binding(store, http, server_id, executor_id, frame):
     state = store.load()
     profile = _profile(state, server_id)
@@ -100,10 +114,7 @@ async def recover_publications(store, vault, http, *, server_id, executor_id,
         for frame in page:
             await require_current()
             binding, identity = await asyncio.to_thread(_binding, store, http, server_id, executor_id, frame)
-            authority = authorities.get(binding.binding_id)
-            if authority is not None and clock() >= authority.deadline:
-                authorities.pop(binding.binding_id,None)
-                authority = None
+            authority = current_publication_authority(authorities, binding, identity, clock())
             if authority is None:
                 async def ticket_current():
                     await require_current()

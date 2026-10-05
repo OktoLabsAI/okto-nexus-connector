@@ -23,6 +23,24 @@ async def prepared(lifecycle):
 async def current(): pass
 
 
+@pytest.mark.parametrize('selection', [True], indirect=True)
+async def test_events_refresh_cached_authority_after_policy_change(lifecycle):
+    from dataclasses import replace
+    owner,http,scope,progress,journal,native,attached,keys=await prepared(lifecycle)
+    await owner.sync()
+    authorities=dict(owner.lanes)
+    owner.store.update(lambda s: setattr(s.execution_bindings[0], 'authorization_revision', 3))
+    original=http.request_r4_binding_ticket
+    async def ticket(*args, **kwargs):
+        return replace(await original(*args, **kwargs), authorization_revision=3)
+    http.request_r4_binding_ticket=ticket
+    await recover_event_streams(owner.store,owner.vault,http,owner.host,owner.connection,
+                               require_current=current,authorities=authorities)
+    assert progress.read(scope)['core_applied']==1
+    assert authorities[scope['binding_id']].binding.authorization_revision==3
+    assert len(keys)==2 and not native.opened
+
+
 @pytest.mark.parametrize("selection",[True],indirect=True)
 async def test_pending_stream_replays_once_and_reuses_its_authority(lifecycle):
     owner,http,scope,progress,journal,native,attached,keys=await prepared(lifecycle)

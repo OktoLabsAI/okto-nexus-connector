@@ -57,7 +57,10 @@ async def observe_installation(store, *, server_id, adapter_id, candidate_ref, i
         raise _error('The executor changed before the version probe.')
     # This is the explicit effect requested by the local operator. Core owns
     # containment, bounded observation, sealed environment and byte checks.
-    observed = await probe_version(selected, strict=True)
+    # The caller explicitly selected this inventory entry for a version probe.
+    # Grant selection only to that bounded observation, not to passive discovery.
+    observed = await probe_version(replace(selected, trust='selected'), strict=True)
+    observed = replace(observed, trust=selected.trust)
     if not observed.version or replace(observed, version=source.version) != source:
         raise _error('The selected installation could not be observed consistently.', 'NATIVE_VERSION_UNQUALIFIED')
     current = await configured_candidates(scope.discovery_configuration)
