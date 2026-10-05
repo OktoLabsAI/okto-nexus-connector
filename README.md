@@ -381,8 +381,10 @@ when unambiguous. Steering and interruption accept --expected-turn-id or
 Schema 12 retains runtime intents across restarts. Existing state migrates
 without implicit runtime authorization. Retention is currently bounded to
 32 intents and 3 MiB of state at resolution; archival/pruning remains pending.
-The complete R4 status/logs UI and final provider/platform
-acceptance remain part of the delivery plan.
+Use `status` and `logs --follow` to inspect R4 control connectivity and daemon errors.
+A connected control channel does not prove that a runtime turn was authorized or completed;
+check the operation result and the Nexus conversation for delivery confirmation.
+Final provider/platform acceptance remains part of the delivery plan.
 
 Operation queries use the retained canonical agent and current approved Server
 profile. They remain available after local workspace or binding mapping changes,
