@@ -152,9 +152,10 @@ evidence log live under [plans/implementation/](plans/implementation/).
 
 ## License
 
-Elastic License 2.0 with the *SaaS and Competing Service Definition*
-addendum — Copyright 2026 Okto Labs (same licensor decision as
-`okto-pulse-core` / `nexus-connector-core`). See [LICENSE](LICENSE).
+Elastic License 2.0 with the Okto Labs SaaS/Branding Addendum —
+Copyright 2026 Okto Labs. The full [LICENSE](LICENSE) is identical to
+the Okto Nexus license and is authoritative. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for branch and review rules.
 
 ## Persisted R4 executor discovery
 

@@ -9,7 +9,7 @@ description = "Remote harness connector application for Okto Nexus (CLI, daemon,
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{name = "Okto Labs"}]
-license = "Elastic-2.0"
+license = "LicenseRef-Okto-Labs-ELv2-SaaS-Branding"
 license-files = ["LICENSE"]
 dependencies = [
     "nexus-connector-core==0.0.1",

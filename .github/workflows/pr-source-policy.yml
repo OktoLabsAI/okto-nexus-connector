@@ -1,0 +1,34 @@
+name: PR source policy
+
+on:
+  pull_request_target:
+    branches: [main, develop]
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  source-policy:
+    name: PR source policy
+    runs-on: ubuntu-latest
+    steps:
+      # No checkout, dependencies, secrets, or execution of pull-request code.
+      - name: Validate promotion source
+        shell: python
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
+          pr = event['pull_request']
+          base = pr['base']['ref']
+          head_repo = pr['head'].get('repo') or {}
+          if base == 'main':
+              valid = (pr['head']['ref'] == 'develop'
+                       and head_repo.get('full_name') == event['repository']['full_name'])
+              if not valid:
+                  raise SystemExit('main accepts pull requests only from develop in this repository.')
+          elif base != 'develop':
+              raise SystemExit('Unexpected protected target branch.')
+          print('PR source policy passed.')
