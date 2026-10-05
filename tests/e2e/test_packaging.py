@@ -24,10 +24,10 @@ CORE_DIST = PROJECT / "vendor" / "wheels"
 
 def _core_wheel() -> Path:
     dependencies = tomllib.loads((PROJECT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["dependencies"]
-    pinned = [item.removeprefix("nexus-connector-core==") for item in dependencies
-              if item.startswith("nexus-connector-core==")]
+    pinned = [item.removeprefix("okto-nexus-connector-core==") for item in dependencies
+              if item.startswith("okto-nexus-connector-core==")]
     assert len(pinned) == 1, "Exactly one Core version must be pinned"
-    wheel = CORE_DIST / f"nexus_connector_core-{pinned[0]}-py3-none-any.whl"
+    wheel = CORE_DIST / f"okto_nexus_connector_core-{pinned[0]}-py3-none-any.whl"
     assert wheel.is_file(), f"The pinned Core wheel is missing: {wheel}"
     return wheel
 
@@ -70,7 +70,7 @@ mods_before = set(sys.modules)
 import okto_nexus_connector as connector
 import nexus_connector_core as core
 from importlib.metadata import requires
-assert f'nexus-connector-core=={core.__version__}' in requires('okto-nexus-connector')
+assert f'okto-nexus-connector-core=={core.__version__}' in requires('okto-nexus-connector')
 leaked = [m for m in sys.modules if m.split(".")[0] in
           ("okto_nexus",) and m != "okto_nexus_connector"]
 assert not leaked, leaked
@@ -112,6 +112,6 @@ def test_wheel_metadata_pins_core(built_wheel: Path):
         entry = next((name for name in names
                       if name.endswith("entry_points.txt")), None)
         entry_content = wheel.read(entry).decode("utf-8") if entry else ""
-    assert "Requires-Dist: nexus-connector-core" in text
+    assert "Requires-Dist: okto-nexus-connector-core" in text
     assert "okto-nexus==" not in text  # no Server dependency
     assert "mcp" not in entry_content.lower()

@@ -4,7 +4,7 @@ Remote harness connector application for [Okto Nexus](https://github.com/OktoLab
 the lightweight CLI + daemon that lives on the machines where Codex,
 Pi and Claude Code run, imports canonical agent credentials, binds
 identity/harness/project and administers managed runtimes through
-[`nexus-connector-core`](https://github.com/OktoLabsAI/okto-nexus-connector-core).
+[`okto-nexus-connector-core`](https://github.com/OktoLabsAI/okto-nexus-connector-core).
 
 ### Configure an outbound proxy
 
@@ -74,7 +74,7 @@ execution is unsupported; see [platform support](#platform-support-before-instal
 
 - Distribution `okto-nexus-connector`, import `okto_nexus_connector`,
   Python ≥ 3.11, entry point `okto-nexus-connector`, consuming
-  `nexus-connector-core==0.0.1` (public `create_runtime`
+  `okto-nexus-connector-core==0.0.1` (public `create_runtime`
   composition).
 - **No MCP implementation of any transport.** Harness MCP clients talk
   directly to the Nexus Server over HTTP; the connector only *configures*
