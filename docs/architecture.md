@@ -92,14 +92,14 @@ this restore port. Those remaining lifecycle requirements need their own evidenc
 | Vault/state | Credential material in protected storage; ordinary state carries references |
 | Nexus | Agent policy, consent/proposals, admission, grants and canonical work |
 
-Core 0.2.53.dev0 exports an executable R4 bundle. That fact does not qualify every
-provider/platform or prove independent-host operation. Windows and Linux have
-containment backends; macOS managed execution is unsupported. Attach is not
-advertised as qualified managed execution. The complete provider/fault/platform
-matrix, two-Server topology, independent hosts and final artifact freeze remain
-under acceptance.
+The pinned Core 0.0.1 exports the R4 execution bundle with Windows, Linux and
+macOS containment backends. Backend availability does not qualify every
+provider/platform combination. Native execution requires successful preflight,
+installation qualification, approved local configuration and server authority.
+HTTP/WS or HTTPS/WSS is selected through the server's transport policy;
+TLS-protected transport is required for network confidentiality.
 
 Operational commands are in the [runbook](runbook.md) and
-[R4 onboarding guide](../README.md#quickstart). Historical increment reports live
+[R4 onboarding guide](connection-configuration.md). Historical increment reports live
 under [implementation evidence](../plans/implementation/); their old disabled-gate
 statements describe their original commits, not the current executable bundle.
