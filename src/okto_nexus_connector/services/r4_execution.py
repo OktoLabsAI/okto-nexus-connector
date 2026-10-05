@@ -17,7 +17,7 @@ from nexus_connector_core import (
     project_r4_open_receipt, project_r4_turn_receipt, project_r4_steer_receipt,
     project_r4_interrupt_receipt, project_r4_close_receipt,
     project_r4_decision_receipt, r4_close_operation, r4_native_decision_operation,
-    prepare_r4_receipt_binding, SessionKey,
+    prepare_r4_receipt_binding, SessionKey, OperationKey,
 )
 
 from ..errors import ConnectorError
@@ -126,10 +126,23 @@ class R4ExecutionOwner:
         self._receipt_stop = asyncio.Event()
         self._receipt_monitor = None
         self.failure = None
+        self.execution_errors = {}
 
     @property
     def pending_count(self):
         return len(self._producers)
+
+    def _record_execution_outcome(self, receipt):
+        binding_id = receipt['binding_id']
+        if receipt['stage'] == 'FAILED':
+            import logging
+            code = receipt.get('error_code') or 'NATIVE_EXECUTION_FAILED'
+            self.execution_errors[binding_id] = code
+            logging.getLogger(__name__).warning(
+                'Harness operation failed: binding=%s action=%s code=%s; control connection retained',
+                binding_id, receipt.get('action'), code)
+        elif receipt['stage'] in ('SUBMITTED', 'SUCCEEDED'):
+            self.execution_errors.pop(binding_id, None)
 
     def start(self):
         if self._consumers or self._stopping:
@@ -172,6 +185,7 @@ class R4ExecutionOwner:
                     server_id=state.server_id, executor_id=state.executor_id, after=after,
                     connection=(state.connection_id, state.connection_generation))
                 for frame in frames:
+                    self._record_execution_outcome(frame)
                     await self.publish_receipt(frame)
                     await asyncio.to_thread(self.publications.acknowledge, frame)
                 try:
@@ -220,6 +234,7 @@ class R4ExecutionOwner:
         try:
             await asyncio.to_thread(self.publications.reserve, self.connection.require_current(item))
             receipt = await self._execute(item)
+            self._record_execution_outcome(receipt)
             # Once Core has produced a fact, loss of lane/link does not undo
             # it. Publish that same fact; never fabricate a second operation.
             await asyncio.to_thread(self.publications.record, receipt)
@@ -230,6 +245,9 @@ class R4ExecutionOwner:
             frame = item.frame
             key = ExecutionRuntimeKey(frame['server_id'],frame['executor_id'],frame['binding_id'],frame['session_id'])
             session = self._sessions.get(key)
+            if frame['action'] == 'runtime.open' and receipt['stage'] == 'FAILED':
+                self._sessions.pop(key, None)
+                session = None
             if session is not None and not self._stopping:
                 await self.events.ensure({**frame,'stream_epoch':session.stream_epoch})
                 if (frame['action'] == 'runtime.open' and self.require_authority is not None
@@ -370,8 +388,17 @@ class R4ExecutionOwner:
             context = self._context(item, runtime)
             context = await self._bind(item, runtime, context, prepared=prepared,
                                        stream_epoch=session.stream_epoch)
-            receipt = await runtime.open(OpenOperation(frame['operation_id'], frame['session_id'],
-                                                       session.stream_epoch, prepared), context)
+            try:
+                receipt = await runtime.open(OpenOperation(frame['operation_id'], frame['session_id'],
+                                                           session.stream_epoch, prepared), context)
+            except CoreError:
+                # Publish a durable failure fact rather than taking unrelated
+                # bindings offline. Unknown effects still require reconciliation.
+                journal = await self.host.ensure_journal()
+                receipt = await journal.get_receipt(OperationKey(
+                    frame['server_id'], frame['executor_id'], frame['operation_id']))
+                if receipt is None or receipt.stage != 'FAILED':
+                    raise
             return project_r4_open_receipt(frame, receipt, context, prepared,
                 stream_epoch=session.stream_epoch, receipt_revision=1)
         if session is None:

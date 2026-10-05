@@ -120,11 +120,14 @@ async def run_status(args, output, root):
                     actual = 'DAEMON_STOPPED'
                 elif control.get('error_code'):
                     actual = 'CONNECTION_ERROR'
+                elif binding_id in control.get('execution_errors', {}):
+                    actual = 'HARNESS_ERROR'
                 elif actual == 'CONNECTED' and (binding_id not in attached or not control.get('control_ready') or not control.get('execution_ready')):
                     actual = 'NOT_ATTACHED'
             item.update(binding_id=binding_id, agent=identity.agent_id, identity=identity.alias,
                 server=state.servers[identity.server_id].base_url if identity.server_id in state.servers else None,
-                status=actual, connected=actual=='CONNECTED', error=observed.get('error'),
+                status=actual, connected=actual=='CONNECTED',
+                error=control.get('execution_errors', {}).get(binding_id) or observed.get('error'),
                 adapter_id=item.get('adapter_id', getattr(binding,'adapter_id',None)),
                 executor_id=item.get('executor_id', getattr(binding,'executor_id',None)),
                 checked_at=observed.get('checked_at'))
@@ -136,6 +139,8 @@ async def run_status(args, output, root):
                 action = 'Cannot verify the Server state. Check reach, credentials and logs.'
             elif states <= {'CONNECTED'}:
                 action = ''
+            elif 'HARNESS_ERROR' in states:
+                action = 'Server connected; inspect logs --errors for the harness execution failure.'
         connections.extend(agent_connections)
         agents.append(dict(agent=identity.agent_id, identity=identity.alias,
             server_id=identity.server_id, status=status,

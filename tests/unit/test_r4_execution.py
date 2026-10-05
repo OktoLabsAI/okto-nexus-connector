@@ -176,6 +176,29 @@ async def failed(owner):
         raise
 
 
+@pytest.mark.parametrize('rejected', [False, True])
+async def test_failed_native_open_keeps_connection_and_next_session_working(execution, rejected):
+    from nexus_connector_core.models import CoreError, EffectRejected
+    owner, connection, factory, receipts, opening = execution
+    original = factory.open
+    async def fail(*args, **kwargs):
+        if rejected:
+            raise EffectRejected('Handshake rejected after confirmed stop.', failure_code='NATIVE_PROTOCOL_INCOMPATIBLE')
+        raise CoreError('NATIVE_VERSION_UNQUALIFIED', 'open', retry_safe=True)
+    factory.open = fail
+    await connection.emit(opening)
+    receipt = await observed(receipts, owner)
+    assert receipt['stage'] == 'FAILED'
+    assert owner.failure is None and connection.online
+    assert owner.execution_errors[opening['binding_id']] == receipt['error_code']
+    factory.open = original
+    second = {**opening, 'operation_id': 'second-open', 'session_id': 'second-session'}
+    await connection.emit(second)
+    receipt = await observed(receipts, owner)
+    assert receipt['stage'] in ('SUBMITTED', 'SUCCEEDED')
+    assert owner.failure is None and not owner.execution_errors
+
+
 async def test_control_and_cancelled_stop_do_not_abandon_receipt_producer(execution):
     owner, connection, factory, receipts, opening = execution
     await connection.emit(opening)

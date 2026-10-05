@@ -21,6 +21,8 @@ from tests.unit.test_r4_daemon_control import control, eventually, dispose
 
 @pytest.fixture
 def host(registered, tmp_path, monkeypatch):
+    import nexus_connector_core.protocol_probe as protocol
+    monkeypatch.setattr(protocol, 'probe_selected_protocol', lambda *args, **kwargs: {'protocol_verified': True})
     executable = tmp_path / 'codex.exe'
     executable.write_bytes(b'synthetic binary; never executed')
     candidate = InstallationCandidate('codex_app_server', str(executable), 'sha256:' + 'a' * 64,
@@ -42,6 +44,18 @@ def host(registered, tmp_path, monkeypatch):
 def arguments(candidate):
     return dict(server_id='first', adapter_id=candidate.adapter_id,
         candidate_ref=candidate.installation_ref, inventory_revision=calculate_inventory_revision([candidate]))
+
+
+async def test_failed_protocol_probe_does_not_save_observation(host, monkeypatch):
+    from nexus_connector_core import CoreError
+    import nexus_connector_core.protocol_probe as protocol
+    store, candidate, _, _ = host
+    def reject(*args, **kwargs):
+        raise CoreError('NATIVE_PROTOCOL_INCOMPATIBLE', 'protocol_probe')
+    monkeypatch.setattr(protocol, 'probe_selected_protocol', reject)
+    with pytest.raises(ConnectorError, match='NATIVE_PROTOCOL_INCOMPATIBLE'):
+        await service.observe_installation(store, **arguments(candidate))
+    assert not store.load().execution_executors[0].installation_observations
 
 
 async def test_explicit_probe_selects_discovered_candidate_without_changing_inventory_trust(host, monkeypatch):
@@ -160,7 +174,7 @@ async def test_default_daemon_publishes_retained_observation_without_probing(con
         evidence = peer.publications[-1]['evidence'][0]
         assert evidence['version'] == '0.159.0'
         assert str(tmp_path) not in str(peer.publications[-1])
-        assert evidence['state'] == 'UNQUALIFIED_BUILD'  # A version is not a qualification grant.
+        assert evidence['state'] == 'READY_FOR_RUNTIME'  # Eligible for a live handshake; not a recorded build grant.
         assert not store.load().execution_bindings
     finally:
         await dispose(owner, host)
