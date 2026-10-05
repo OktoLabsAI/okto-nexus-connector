@@ -92,3 +92,9 @@ No Nexus records or authorizations are deleted/revoked. Reconfiguring creates a 
 | Linux/macOS | `$XDG_STATE_HOME/okto-nexus-connector`, otherwise `~/.local/state/okto-nexus-connector` |
 
 `--state-dir PATH` overrides `OKTO_NEXUS_CONNECTOR_STATE` and the platform default. Use one consistent directory for CLI, daemon and service. Logs are `logs/daemon.log`, rotated at 2 MiB with three backups. `logs --errors` includes warnings. Review host paths/identifiers before sharing diagnostics.
+
+## Reconnect all connections
+
+Run okto-nexus-connector reconnect to gracefully stop and restart the daemon for the selected state directory. Configurations and credentials are preserved. Active harness executions may be interrupted during shutdown. The command returns when the daemon is ready; server connections complete asynchronously. Check okto-nexus-connector status and okto-nexus-connector logs --errors for progress. If shutdown cannot finish within 30 seconds, no second daemon is started.
+
+Automatic connection retries use delays of 2, 4, 8, 16 and 30 seconds, then continue every 30 seconds until the daemon is stopped, including reconciliation failures. Pending socket cleanup is retried before opening another connection. Retrying does not replay submitted work or bypass Nexus authorization.

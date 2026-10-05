@@ -9,12 +9,12 @@ Read the [usage guide](cli.md) for effects and prerequisites. Global options go 
 ```text
 usage: okto-nexus-connector [-h] [--version] [--json] [--non-interactive]
                             [--state-dir STATE_DIR]
-                            {clean,proxy,reach,configure,connect,identity,executor,discover,bind,runtime,daemon,service,status,logs,doctor,approvals,mcp-config,harness-config,connection-config} ...
+                            {clean,proxy,reach,configure,connect,identity,executor,discover,bind,runtime,daemon,service,reconnect,status,logs,doctor,approvals,mcp-config,harness-config,connection-config} ...
 
 Remote harness connector for Okto Nexus
 
 positional arguments:
-  {clean,proxy,reach,configure,connect,identity,executor,discover,bind,runtime,daemon,service,status,logs,doctor,approvals,mcp-config,harness-config,connection-config}
+  {clean,proxy,reach,configure,connect,identity,executor,discover,bind,runtime,daemon,service,reconnect,status,logs,doctor,approvals,mcp-config,harness-config,connection-config}
     clean               reset local Connector state, credentials and pending
                         configurations
     proxy               configure the host-local HTTP and WebSocket proxy
@@ -29,6 +29,8 @@ positional arguments:
     runtime             managed runtime operations
     daemon              local daemon lifecycle
     service             OS autostart management
+    reconnect           gracefully restart the daemon to reconnect all
+                        configured connections
     status              show live server and agent connection health
     logs                inspect persistent daemon logs
     doctor              layered diagnostics
@@ -830,6 +832,15 @@ options:
 
 ```text
 usage: okto-nexus-connector service status [-h]
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## okto-nexus-connector reconnect
+
+```text
+usage: okto-nexus-connector reconnect [-h]
 
 options:
   -h, --help  show this help message and exit

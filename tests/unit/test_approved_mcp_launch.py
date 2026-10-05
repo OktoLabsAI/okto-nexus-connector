@@ -18,7 +18,8 @@ from tests.unit.test_r4_execution import execution, observed, failed
 
 @pytest.mark.parametrize("selection", [True, "claude", "no_refs", "claude_no_refs"], indirect=True)
 @pytest.mark.parametrize("fault", [None, "scope", "origin", "expired"])
-async def test_default_owner_mcp_configuration_and_secret_environment(execution, selection, tmp_path, fault):
+@pytest.mark.parametrize("server_origin", ["https://nexus.test", "http://192.168.0.146:8202"])
+async def test_default_owner_mcp_configuration_and_secret_environment(execution, selection, tmp_path, fault, server_origin):
     owner, connection, factory, receipts, opening = execution
     store, candidate, *_ = selection
     vault = RestrictedFileVault(tmp_path, approved=True)
@@ -27,7 +28,7 @@ async def test_default_owner_mcp_configuration_and_secret_environment(execution,
     cap_owner = SessionCapabilityOwner(store, vault)
     issued = []
     class HTTP:
-        origin = "https://nexus.test"
+        origin = server_origin
         async def request_r4_session_capability(self, key, *, frame, **kwargs):
             assert kwargs["audience"] == "nexus-mcp-session"
             scope = {k: frame[k] for k in (
@@ -87,7 +88,7 @@ async def test_default_owner_mcp_configuration_and_secret_environment(execution,
             path = home / ".claude.json"
             entry = json.loads(path.read_text())["mcpServers"]["nexus"]
             bearer = entry["headers"]["Authorization"][9:-1]
-        assert entry["url"] == "https://nexus.test/mcp"
+        assert entry["url"] == server_origin + "/mcp"
         assert env[bearer] == issued[0].capability
         assert tuple(sorted(factory.opened[0].secret_refs)) == ("mcp-cap:mcp", "vault:provider-demo")
         for path_in_home in home.rglob("*"):

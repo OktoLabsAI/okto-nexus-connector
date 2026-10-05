@@ -139,6 +139,7 @@ class R4Connection:
     async def _close_socket(self):
         try:
             await asyncio.wait_for(self.websocket.close(), self.send_timeout)
+            self.close_error = None
         except Exception as error:
             self.close_error = error
             # A lost peer can fail the graceful close handshake. Fence the
@@ -160,6 +161,8 @@ class R4Connection:
 
     async def close(self):
         self._fence(ConnectorError('CONTROL_DISCONNECTED', 'r4_link', 'The control connection was closed.'))
+        if self._closer is not None and self._closer.done() and self.close_error is not None:
+            self._closer = asyncio.create_task(self._close_socket(), name='r4-socket-close-retry')
         # Cancel only observers. Request/install producers remain owned and
         # are shielded even when the caller waiting for close is cancelled.
         for task in (self._reader, self._heartbeat):
