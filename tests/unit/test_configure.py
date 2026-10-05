@@ -45,7 +45,7 @@ def local_wizard(tmp_path,monkeypatch):
         '--provider-home',str(tmp_path),'--workspace-label','Test','--request-id','wizard-test','--operator-identity','operator'])
     identity=NS(server_id='server',agent_id='agent',secret_handle='handle',alias='worker',revoked=False)
     operator=NS(server_id='server',agent_id='operator',secret_handle='operator-handle',alias='operator',revoked=False)
-    state=NS(preferences={},execution_executors=[],identities=[identity,operator],identity_by_alias=lambda a:operator if a=='operator' else identity)
+    state=NS(preferences={},execution_executors=[],binding_intents=[],bindings=[],execution_bindings=[],realizations=[],identities=[identity,operator],identity_by_alias=lambda a:operator if a=='operator' else identity)
     store=NS(load=lambda:state,update=lambda f:f(state))
     candidate=NS(adapter_id='pi_rpc',executable='node',launch_script='pi.js',version='1')
     calls=[]
@@ -131,3 +131,23 @@ async def test_cancel_does_not_register_or_save(local_wizard,monkeypatch):
     result=await local.configure_local(args,output,root,store,identity,'http://127.0.0.1:8202',portable)
     assert result['canceled']
     assert calls==[] and store.load().preferences=={}
+
+
+async def test_binding_conflict_aborts_before_installation_or_preferences(local_wizard,monkeypatch):
+    args,output,root,store,identity,portable,calls,_=local_wizard
+    monkeypatch.setattr(local,'resolve_conflict',lambda *a,**k:{'canceled':True})
+    async def unexpected(*a,**k):pytest.fail('discovery ran after abort')
+    monkeypatch.setattr(local,'configured_candidates',unexpected)
+    result=await local.configure_local(args,output,root,store,identity,'http://127.0.0.1:8202',portable)
+    assert result['canceled'] and calls==[] and store.load().preferences=={}
+
+
+async def test_replacement_choice_is_preserved_in_durable_request(local_wizard,monkeypatch):
+    args,output,root,store,identity,portable,calls,_=local_wizard
+    monkeypatch.setattr(local,'resolve_conflict',lambda *a,**k:{'binding_id':'old-binding',
+        'workspace_id':'old-workspace','workspace_root':str(root)})
+    await local.configure_local(args,output,root,store,identity,'http://127.0.0.1:8202',portable)
+    saved=store.load().preferences['configure.server.agent.wizard-test']
+    assert saved['replace_binding_id']=='old-binding'
+    assert saved['workspace_id']=='old-workspace'
+    assert saved['configuration']['workspace_root']==str(root)

@@ -23,6 +23,35 @@ SCOPE = dict(server_id='srv', executor_id='exe', binding_id='binding', agent_id=
     authorization_revision=1, configuration_revision=1, binding_revision=1, credential_epoch=1)
 
 
+@pytest.mark.parametrize('failure', ['timeout', 'error'])
+async def test_failed_graceful_close_aborts_and_confirms_transport(failure):
+    class LostSocket:
+        def __init__(self):
+            self.transport = self
+            self.aborted = asyncio.Event()
+        async def close(self):
+            if failure == 'error': raise OSError('peer lost')
+            await asyncio.Event().wait()
+        def abort(self): self.aborted.set()
+        async def wait_closed(self): await self.aborted.wait()
+    socket = LostSocket()
+    owner = R4Connection(socket, STATE, boot_id='boot', send_timeout=.01)
+    await owner.close()
+    assert socket.aborted.is_set()
+    assert not owner.online and owner.close_error is None
+    with pytest.raises(ConnectorError): owner._require_online()
+
+
+async def test_unconfirmed_abort_keeps_cleanup_failure():
+    class UnclosedSocket:
+        transport = None
+        async def close(self): raise OSError('cannot close')
+    owner = R4Connection(UnclosedSocket(), STATE, boot_id='boot', send_timeout=.01)
+    await owner.close()
+    assert isinstance(owner.close_error, OSError)
+    assert not owner.online
+
+
 class Socket:
     def __init__(self):
         self.incoming, self.outgoing = asyncio.Queue(), asyncio.Queue()
