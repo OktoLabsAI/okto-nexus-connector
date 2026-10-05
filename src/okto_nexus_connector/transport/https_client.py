@@ -602,7 +602,8 @@ class NexusHTTPClient:
             executor_id: str, adapter_id: str, candidate_ref: str,
             inventory_revision: str, realization_ref: str,
             workspace_id: str, alias: str,
-            agent_id_hint: str | None = None, replace_binding_id: str | None = None) -> R4BindingProposal:
+            agent_id_hint: str | None = None, replace_binding_id: str | None = None,
+            connection_configuration: dict | None = None) -> R4BindingProposal:
         """Request a reviewable Server proposal without starting a runtime."""
         body = {
             "client_intent_id": client_intent_id,
@@ -616,6 +617,8 @@ class NexusHTTPClient:
             body["agent_id_hint"] = agent_id_hint
         if replace_binding_id is not None:
             body["replace_binding_id"] = replace_binding_id
+        if connection_configuration is not None:
+            body["connection_configuration"] = connection_configuration
         payload = await self._request(
             "POST", "/v1/connections/bindings:prepare", key=key,
             json_body=body, require_revision=True,

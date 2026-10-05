@@ -11,6 +11,25 @@ from tests.unit.test_executor_onboarding import onboarding
 from tests.unit.test_executor_registration import registration
 
 
+async def test_background_replays_exact_intent_after_lost_apply_ack(binding):
+    from okto_nexus_connector.services.background_onboarding import continue_pending_bindings
+    service, peer, store, prepare_args, _ = binding
+    prepare_args['connection_configuration'] = {'version': 2}
+    prepared = await service.prepare(**prepare_args)
+    with pytest.raises(ConnectorError):
+        await service.apply(identity_alias='selected', prepare_intent_id=prepare_args['client_intent_id'],
+            client_intent_id='background-apply', approved_diff_hash=prepared['proposal']['approved_diff_hash'],
+            operator_proof_ref='apr_proof')
+    peer.approved = True
+    peer.lose_apply = True
+    for _ in range(2):
+        await continue_pending_bindings(store, service.vault, server_id='srv', executor_id='executor',
+                                       http_factory=service.http_factory)
+    assert store.load().binding_intents[0].status == 'APPLIED'
+    assert len(store.load().execution_bindings) == 1
+    assert peer.applies[-1] == peer.applies[-2]
+
+
 @pytest.fixture
 async def binding(onboarding):
     owner, peer, store, arguments, _ = onboarding

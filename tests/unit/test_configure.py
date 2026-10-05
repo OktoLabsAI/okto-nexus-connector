@@ -85,11 +85,15 @@ def local_wizard(tmp_path,monkeypatch):
     gate={'approved':False}
     class Bind:
         def __init__(self,*a):pass
-        async def prepare(self,**k):calls.append('prepare');return {'proposal':{'required_approvals':['apr_test'],'approved_diff_hash':'hash'}}
+        async def prepare(self,**k):
+            calls.append('prepare')
+            assert k['connection_configuration']['version'] == 2
+            assert 'provider_home' not in k['connection_configuration']
+            return {'proposal':{'required_approvals':['apr_test'],'approved_diff_hash':'hash'}}
         async def apply(self,**k):
             calls.append('apply')
             assert k['operator_proof_ref']=='apr_test'
-            if not gate['approved']:raise ConnectorError('PERMISSION_DENIED','apply','Operator approval required')
+            if not gate['approved']:raise ConnectorError('APPROVAL_REQUIRED','apply','Operator approval required')
             return {'binding':{'binding_id':'binding','workspace_id':'workspace'}}
     monkeypatch.setattr(local,'BindingOnboarding',Bind)
     async def finish(args,output,root,c):
@@ -108,10 +112,12 @@ async def test_local_wizard_resumes_approval_without_recreating_connection(local
     args,output,root,store,identity,portable,calls,gate=local_wizard
     result=await local.configure_local(args,output,root,store,identity,'http://127.0.0.1:8202',portable)
     assert result['status']=='awaiting_operator_approval'
+    assert result['background'] is True
     assert 'finish' not in calls
     gate['approved']=True
     result=await local.configure_local(args,output,root,store,identity,'http://127.0.0.1:8202',portable)
     assert result['saved'] and result['runtime_started'] is False
+    assert 'finish' not in calls  # No second operator identity or approval.
     assert calls.count('register')==calls.count('prepare')==calls.count('executor.realize')==1
     before=list(calls)
     assert await local.configure_local(args,output,root,store,identity,'http://127.0.0.1:8202',portable)==result

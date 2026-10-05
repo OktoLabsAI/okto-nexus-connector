@@ -76,10 +76,29 @@ and uses the same R4 onboarding as `configure`: host registration, installation
 inventory, local configuration, realization and a binding proposal. Select
 **Remote** for the agent in Nexus first. Approval and execution authorization
 remain on the Server; a pending approval is not a completed connection.
-The command prints a request ID. Resume with `connect --server URL --agent AGENT
---request-id ID` (using the same identity alias), or the printed `configure`
-command. `--operator-identity` selects an already imported operator identity
-when applying Nexus policies. `--start` starts only after setup succeeds.
+The command prints a request ID and returns immediately when approval is pending.
+The daemon persists the submitted intent, checks the decision in the background,
+and automatically applies the approved configuration and attaches the connection.
+You may close the terminal; a daemon restart resumes pending submitted intents.
+One Nexus approval covers the displayed preferences and execution limits. No
+operator key or second confirmation is required on the Connector machine.
+Use `status` and `logs` to inspect progress. Rejected, expired or changed proposals
+stop with a diagnostic; they never gain execution access. Network retries reuse
+the same intent, including when an acknowledgment was lost.
+`--start` starts a native session only when setup has already completed; pending
+connections attach in the background and open sessions when messages arrive.
+Nexus scopes approvals to the agent and registered Connector machine ID, not its
+hostname or IP address. Its global **Remote machine policy** defaults to manual
+approval when replacing another machine. Operators can instead deny replacements
+or accept them automatically while revoking the previous machine. Automatic
+replacement preserves existing harness permissions and the remaining execution
+budget and expiry; changed preferences or exhausted grants require manual review.
+
+`okto-nexus-connector status` checks the Server and daemon and lists each configured
+connection, host/machine ID, approval and actual connection state. `--json status`
+includes a `connections` array for automation. Unreachable servers, revoked
+bindings and missing execution authorization are shown explicitly; cached local
+approval is never presented as proof that a connection is online.
 `connect` is interactive; for automation use `connection-config apply` and the
 explicit R4 executor/binding commands.
 
