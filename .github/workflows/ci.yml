@@ -23,7 +23,8 @@ jobs:
         with:
           python-version: "3.13"
       - run: python -m pip install --find-links vendor/wheels ".[test]"
-      - run: python -m pytest tests/unit/test_sysinfo.py tests/integration/test_process_lifecycle.py -q --tb=short
+      # macOS temporary paths can exceed the Unix socket address limit.
+      - run: python -m pytest tests/unit/test_sysinfo.py tests/integration/test_process_lifecycle.py --basetemp=/tmp/nxc-tests -q --tb=short
         env:
           OKTO_NEXUS_CONNECTOR_VAULT: file
   test:
