@@ -108,7 +108,7 @@ async def configure_local(args,output,root,store,identity,server,portable):
             control_capabilities=existing.control_capabilities if existing else ())
         checkpoint('probe',executor_id=registered.executor_id)
     if saved['stage']=='probe':
-        output.line('Checking the selected installation version…')
+        output.line('Checking the selected installation version and protocol…')
         await observe_installation(store,server_id=identity.server_id,adapter_id=c['adapter_id'],
             candidate_ref=saved['candidate_ref'],inventory_revision=saved['inventory_revision'])
         record=next(r for r in store.load().execution_executors if r.server_id==identity.server_id)

@@ -60,6 +60,16 @@ async def observe_installation(store, *, server_id, adapter_id, candidate_ref, i
     # The caller explicitly selected this inventory entry for a version probe.
     # Grant selection only to that bounded observation, not to passive discovery.
     observed = await probe_version(replace(selected, trust='selected'), strict=True)
+    import os
+    from nexus_connector_core.protocol_probe import probe_selected_protocol
+    if _registration(await asyncio.to_thread(store.load), server_id) != scope:
+        raise _error('The executor changed before the protocol probe.')
+    from nexus_connector_core import CoreError
+    try:
+        await asyncio.to_thread(probe_selected_protocol, observed, env=dict(os.environ))
+    except CoreError as error:
+        raise ConnectorError(error.code, 'protocol_probe',
+            'The selected harness did not pass its startup protocol check. Inspect the installation and retry.') from error
     observed = replace(observed, trust=selected.trust)
     if not observed.version or replace(observed, version=source.version) != source:
         raise _error('The selected installation could not be observed consistently.', 'NATIVE_VERSION_UNQUALIFIED')
