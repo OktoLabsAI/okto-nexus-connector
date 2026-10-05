@@ -22,7 +22,7 @@ CN2 corrections layered over CN1 (audit N01–N08):
   transport OUT of ready and blocks productive admissions.
 * **N07 — live lanes:** adding a lane on a READY transport schedules a
   owned attach immediately; lane tickets carry scope/epoch/expiry.
-* **N08 — WSS origin:** the link URL is validated (wss off-loopback, no
+* **N08 — WebSocket origin:** the link URL is validated (ws/wss, no
   userinfo, approved origin) BEFORE any credential is obtained or sent.
 """
 
@@ -239,30 +239,28 @@ def validate_link_url(link_url: str, *, allow_loopback_plain: bool = True
                       ) -> str:
     """CN2/N08: WSS origin validation BEFORE any credential moves.
 
-    Non-loopback links must be ``wss://``; userinfo is refused; loopback
-    ``ws://`` is the documented laboratory exception. Returns the
-    normalized URL or raises.
+    Local and remote links support ``ws://`` and ``wss://``. Userinfo
+    and missing hosts are refused. Returns the validated URL or raises.
+    The legacy allow_loopback_plain flag still controls loopback ws links.
     """
     parts = urlsplit(link_url)
     if parts.username or parts.password or "@" in parts.netloc:
         raise ConnectorError(
             "PROFILE_DRIFT", "wss_link",
             "userinfo in the WSS link URL is refused",
-            action="Provide wss://host[:port]/path without credentials.")
+            action="Provide ws://host[:port]/path or wss://host[:port]/path without credentials.")
     host = (parts.hostname or "").lower()
     loopback = host in ("127.0.0.1", "::1", "localhost")
     scheme = parts.scheme.lower()
-    if scheme == "wss":
+    if host and scheme == "wss":
         return link_url
-    if scheme == "ws" and loopback and allow_loopback_plain:
+    if host and scheme == "ws" and (not loopback or allow_loopback_plain):
         return link_url
     raise ConnectorError(
         "PROFILE_DRIFT", "wss_link",
-        f"non-loopback control link must be wss://, got {scheme!r} for "
+        f"control link must have a host and use ws:// or wss://, got {scheme!r} for "
         f"{host!r}",
-        action="Use the Server's wss:// address; the canonical ticket is "
-               "never sent over a plaintext remote link. Loopback ws:// "
-               "is the documented laboratory exception.")
+        action="Use the Server's ws:// or wss:// address.")
 
 
 class PriorityQueues:

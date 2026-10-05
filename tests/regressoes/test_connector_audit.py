@@ -519,7 +519,7 @@ async def _wait_list(items, count):
 # A06 — TLS/origin before secrets; exact origin on MCP import
 # =====================================================================
 
-async def test_10_http_plaintext_nonloopback_rejected_before_secret_transmission():
+async def test_10_explicit_remote_http_dispatches_to_configured_origin():
     import httpx
     seen: list = []
 
@@ -530,14 +530,14 @@ async def test_10_http_plaintext_nonloopback_rejected_before_secret_transmission
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(handler), trust_env=False)
     try:
-        with pytest.raises(ConnectorError):
-            async with NexusHTTPClient("http://remote.example",
-                                       client=client) as http:
-                await http._request("POST", "/effect", key="nxs_canonical")
+        async with NexusHTTPClient("http://remote.example",
+                                   client=client) as http:
+            await http._request("POST", "/effect", key="nxs_canonical")
     finally:
         await client.aclose()
-    assert not seen, f"canonical credential was dispatched over " \
-                     f"non-loopback HTTP: {seen}"
+    assert len(seen) == 1
+    assert str(seen[0].url) == "http://remote.example/effect"
+    assert seen[0].headers["authorization"] == "Bearer nxs_canonical"
 
 
 async def test_11_read_timeout_after_mutating_request_is_not_safe_retry():

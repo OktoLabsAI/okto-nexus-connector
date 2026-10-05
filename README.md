@@ -379,6 +379,14 @@ subject to Server read authorization. Such queries do not reauthorize launch.
 Credential changes during a read discard the response; a later explicit query
 can use the newly imported current credential.
 
+### Server transport
+
+Server URLs accept both HTTP and HTTPS, including remote hosts. For example,
+`okto-nexus-connector reach --server http://192.168.0.146:8202` checks a LAN
+server. Runtime connections use WS for HTTP servers and WSS for HTTPS servers.
+HTTP/WS does not encrypt traffic; use HTTPS/WSS when encryption is required.
+HTTPS certificate verification and checks against cross-origin redirects remain enabled.
+
 ### Protected OS credential storage
 
 Install the keyring extra to use the operating system credential store:

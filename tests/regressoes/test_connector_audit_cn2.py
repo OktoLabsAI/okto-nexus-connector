@@ -1089,11 +1089,13 @@ async def test_b11b_lane_added_after_ready_is_actually_attached(cn2_peer):
 
 
 # =====================================================================
-# N08 — b12: ws:// override rejected before ticket send
+# N08 — b12: invalid URL rejected before ticket send
 # =====================================================================
 
-async def test_b12_plaintext_wss_override_rejected_before_ticket_send():
-    """A ws:// REMOTE link URL is refused at construction — before any
+@pytest.mark.parametrize("link_url", ["ftp://remote.example/link", "ws:///link",
+                                      "ws://user:password@remote.example/link"])
+async def test_b12_invalid_link_rejected_before_ticket_send(link_url):
+    """An invalid link URL is refused at construction — before any
     ticket fetch or credential reaches the websocket library."""
     from okto_nexus_connector.transport import wss_client as module
     sent: list = []
@@ -1119,17 +1121,22 @@ async def test_b12_plaintext_wss_override_rejected_before_ticket_send():
         with pytest.raises(ConnectorError) as error:
             NXLTransport(
                 server_id="srv_a", executor_id="exe_a",
-                link_url="ws://remote.example/link",
+                link_url=link_url,
                 ticket_provider=ticket, on_operation=on_operation,
                 on_approval=on_operation)
     finally:
         module.websockets.connect = original_connect
     assert error.value.code == "PROFILE_DRIFT"
     assert sent == [] and tickets_fetched == []
-    # Approved wss and loopback ws still construct.
+    # Approved wss and local/remote ws still construct.
     NXLTransport(
         server_id="srv", executor_id="exe",
         link_url="wss://remote.example/link",
+        ticket_provider=ticket, on_operation=on_operation,
+        on_approval=on_operation)
+    NXLTransport(
+        server_id="srv", executor_id="exe",
+        link_url="ws://remote.example/link",
         ticket_provider=ticket, on_operation=on_operation,
         on_approval=on_operation)
     NXLTransport(
