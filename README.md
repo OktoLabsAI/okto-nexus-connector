@@ -77,6 +77,14 @@ inventory, local configuration, realization and a binding proposal. Select
 **Remote** for the agent in Nexus first. Approval and execution authorization
 remain on the Server; a pending approval is not a completed connection.
 The command prints a request ID and returns immediately when approval is pending.
+The wizard checks the connection name before collecting installation and preference
+settings. If it already belongs to a compatible binding, choose **Replace existing
+binding** or **Abort setup** (the default). Replacement keeps the same identity,
+harness and workspace, requires Nexus approval, and leaves the current binding
+unchanged until successful application. Close active sessions before replacing.
+Pending requests and incompatible identities/scopes are reported without overwriting
+them; resume the original request or choose a different connection name.
+
 The daemon persists the submitted intent, checks the decision in the background,
 and automatically applies the approved configuration and attaches the connection.
 You may close the terminal; a daemon restart resumes pending submitted intents.
