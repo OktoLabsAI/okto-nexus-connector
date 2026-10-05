@@ -36,6 +36,41 @@ def build_parser() -> argparse.ArgumentParser:
                         help="override the per-user state directory")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    proxy = sub.add_parser('proxy', help='configure the host-local HTTP and WebSocket proxy')
+    proxy_sub = proxy.add_subparsers(dest='subcommand', required=True)
+    proxy_set = proxy_sub.add_parser('set', help='save outbound proxy settings')
+    proxy_mode = proxy_set.add_mutually_exclusive_group(required=True)
+    proxy_mode.add_argument('--url', help='HTTP(S) proxy URL without credentials')
+    proxy_mode.add_argument('--url-env', help='environment variable containing the proxy URL (supports credentials)')
+    proxy_mode.add_argument('--direct', action='store_true', help='disable proxy use, including environment proxies')
+    proxy_set.add_argument('--no-proxy', help='comma-separated bypass hosts, domains, or host:port entries; * bypasses all')
+    proxy_sub.add_parser('show', help='show settings without resolving credentials')
+    proxy_sub.add_parser('clear', help='restore environment/system proxy discovery')
+
+    reach = sub.add_parser('reach', help='test Server reachability and report supported versions (no credentials required)')
+    reach.add_argument('--server', required=True, help='Nexus Server base URL')
+
+    configure = sub.add_parser('configure', help='interactive connection wizard (JSON optional)')
+    configure.add_argument('--file', type=Path, help='portable connection template; destination paths are ignored')
+    configure.add_argument('--identity', help='existing identity alias, or alias to register with a hidden key prompt')
+    configure.add_argument('--server', help='Server URL when adding an identity')
+    configure.add_argument('--agent', help='identity hint, or target agent for Server-hosted configuration')
+    configure.add_argument('--credential-stdin', action='store_true')
+    configure.add_argument('--credential-env')
+    configure.add_argument('--host', choices=['connector','server'], default='connector', help='execution host (default: this Connector machine)')
+    configure.add_argument('--harness')
+    configure.add_argument('--project', help='workspace path on the execution host')
+    configure.add_argument('--workspace-label')
+    configure.add_argument('--provider-home', help='explicit login directory on the execution host')
+    configure.add_argument('--candidate-ref', default='')
+    configure.add_argument('--executor-id', default='')
+    configure.add_argument('--inventory-revision', default='')
+    configure.add_argument('--workspace-id')
+    configure.add_argument('--binding-id')
+    configure.add_argument('--request-id', help='stable ID to resume configuration after an uncertain response')
+    configure.add_argument('--operator-identity', help='imported operator identity to apply Nexus policies after binding approval')
+    configure.add_argument('--operator-proof-ref', help='operator approval reference from the binding proposal')
+
     connect = sub.add_parser("connect", help="guided first-use flow")
     connect.add_argument("--server", required=True,
                          help="Nexus Server base URL")
@@ -84,8 +119,56 @@ def build_parser() -> argparse.ArgumentParser:
     replace.add_argument("--credential-stdin", action="store_true")
     replace.add_argument("--credential-env", default=None)
 
+    executor = sub.add_parser("executor", help="R4 executor registration")
+    executor_sub = executor.add_subparsers(dest="subcommand", required=True)
+    register = executor_sub.add_parser("register", help="register this host using an imported identity")
+    register.add_argument("--identity", required=True, help="imported identity alias")
+    register.add_argument("--label", required=True, help="host label shown by the Server")
+    register.add_argument("--client-intent-id", default=None,
+                          help="explicit registration intent ID; otherwise persisted automatically")
+    executor_sub.add_parser("list", help="list local registration intents and executor IDs")
+    executor_show = executor_sub.add_parser("show", help="show one Server's executor registration")
+    executor_show.add_argument("server_id")
+
+    launch = executor_sub.add_parser("configure-launch", help="stage local launch consent without starting a runtime")
+    launch.add_argument("--identity", required=True)
+    launch.add_argument("--harness", required=True)
+    launch.add_argument("--local-consent-id", required=True)
+    launch.add_argument("--profile-revision", type=int, required=True)
+    launch.add_argument("--provider-home", type=Path, default=None,
+                        help="explicitly approved existing provider login directory")
+    launch.add_argument("--secret-ref", action="append", default=[], metavar="NAME=REFERENCE",
+                        help="protected vault/provider reference; never credential material")
+    realize = executor_sub.add_parser("realize", help="publish this executor workspace and selected installation")
+    realize.add_argument("--identity", required=True)
+    realize.add_argument("--client-intent-id", required=True, help="reuse this ID after a lost response")
+    realize.add_argument("--harness", required=True)
+    realize.add_argument("--candidate-ref", required=True)
+    realize.add_argument("--inventory-revision", required=True)
+    realize.add_argument("--configuration-digest", required=True)
+    realize.add_argument("--project", type=Path, required=True)
+    realize.add_argument("--workspace-id", default=None)
+    realize.add_argument("--label", required=True)
+    discovery = executor_sub.add_parser("configure-discovery",
+        help="replace the Server executor local passive discovery configuration")
+    discovery.add_argument("--server-id", required=True)
+    discovery.add_argument("--harness-root", action="append", default=[],
+                           help="approved absolute directory for PATH discovery; repeat as needed")
+    discovery.add_argument("--pi-install-root", default=None, help="approved Pi releases directory")
+    discovery.add_argument("--pi-node", default=None, help="Node executable for the Pi releases")
+
+    probe = executor_sub.add_parser("probe", help="explicitly run the selected installation's sealed version probe")
+    probe.add_argument("--server-id", required=True)
+    probe.add_argument("--harness", required=True)
+    probe.add_argument("--candidate-ref", required=True)
+    probe.add_argument("--inventory-revision", required=True)
+
     discover = sub.add_parser("discover",
                               help="local harness inventory (redacted)")
+    discover.add_argument("--verbose", action="store_true",
+                          help="show full installation paths, identities and technical diagnostics")
+    discover.add_argument("--server-id", default=None,
+                          help="preview persisted executor discovery configuration")
     discover.add_argument("--harness", default=None)
     discover.add_argument("--pi-releases-root", default=None,
                           help="passively enumerate Pi release layouts "
@@ -95,6 +178,19 @@ def build_parser() -> argparse.ArgumentParser:
                                "releases")
     bind = sub.add_parser("bind", help="advanced binding management")
     bind_sub = bind.add_subparsers(dest="subcommand", required=True)
+    bind_prepare = bind_sub.add_parser("prepare", help="prepare a reviewable R4 binding from a published realization")
+    bind_prepare.add_argument("--identity", required=True)
+    bind_prepare.add_argument("--realization-ref", required=True)
+    bind_prepare.add_argument("--replace-binding-id", help="Explicitly replace the reviewed binding realization.")
+    bind_prepare.add_argument("--alias", required=True)
+    bind_prepare.add_argument("--client-intent-id", required=True)
+    bind_apply = bind_sub.add_parser("apply", help="apply the exact reviewed R4 binding proposal")
+    bind_apply.add_argument("--identity", required=True)
+    bind_apply.add_argument("--prepare-intent-id", required=True)
+    bind_apply.add_argument("--client-intent-id", required=True)
+    bind_apply.add_argument("--approved-diff-hash", required=True)
+    bind_apply.add_argument("--operator-proof-ref", default=None,
+                            help="explicit Server operator proof reference, when required")
     bind_create = bind_sub.add_parser("create")
     bind_create.add_argument("--identity", required=True)
     bind_create.add_argument("--harness", required=True)
@@ -114,26 +210,50 @@ def build_parser() -> argparse.ArgumentParser:
     start = runtime_sub.add_parser("start",
                                    help="open or reuse an authorized session")
     start.add_argument("alias")
+    start.add_argument("--client-intent-id", default=None)
     start.add_argument("--project", type=Path, default=None)
     start.add_argument("--harness", default=None)
     start.add_argument("--new-session", action="store_true")
+    start.add_argument("--session-id", default=None, help="select an existing compatible R4 session")
     start.add_argument("--text", default=None,
                        help="initial turn text")
-    runtime_sub.add_parser("status")
+    status = runtime_sub.add_parser("status")
+    status.add_argument("--alias", default=None, help="read retained R4 sessions from the Server")
     inspect = runtime_sub.add_parser("inspect")
     inspect.add_argument("session_id")
+    inspect.add_argument("--alias", default=None, help="select the retained R4 binding alias")
     logs = runtime_sub.add_parser("logs")
     logs.add_argument("session_id")
     logs.add_argument("--follow", action="store_true")
     submit = runtime_sub.add_parser("submit")
     submit.add_argument("session_id")
     submit.add_argument("text")
+    submit.add_argument("--alias", default=None)
+    submit.add_argument("--client-intent-id", default=None)
+    steer = runtime_sub.add_parser("steer")
+    steer.add_argument("session_id")
+    steer.add_argument("text")
+    steer.add_argument("--alias", required=True)
+    steer.add_argument("--client-intent-id", required=True)
+    steer.add_argument("--expected-turn-id", default=None)
+    steer.add_argument("--current-run", action="store_true")
     interrupt = runtime_sub.add_parser("interrupt",
                                        help="cancel the active turn")
     interrupt.add_argument("session_id")
+    interrupt.add_argument("--alias", default=None)
+    interrupt.add_argument("--client-intent-id", default=None)
+    interrupt.add_argument("--expected-turn-id", default=None)
+    interrupt.add_argument("--current-run", action="store_true")
+    interrupt.add_argument("--reason", default=None)
     stop = runtime_sub.add_parser("stop",
                                   help="close owned session resources")
     stop.add_argument("session_id")
+    stop.add_argument("--alias", default=None)
+    stop.add_argument("--client-intent-id", default=None)
+    stop.add_argument("--reason", default=None)
+    operation = runtime_sub.add_parser("operation", help="query a retained canonical runtime intent")
+    operation.add_argument("--alias", required=True)
+    operation.add_argument("--client-intent-id", required=True)
 
     daemon = sub.add_parser("daemon", help="local daemon lifecycle")
     daemon_sub = daemon.add_subparsers(dest="subcommand", required=True)
@@ -187,6 +307,38 @@ def build_parser() -> argparse.ArgumentParser:
     mcp_remove.add_argument("--file", type=Path, required=True)
     mcp_remove.add_argument("--entry-name", default="nexus")
 
+    harness = sub.add_parser('harness-config', help='inspect, validate and apply Core harness parameters')
+    harness_sub = harness.add_subparsers(dest='subcommand', required=True)
+    describe = harness_sub.add_parser('describe', help='show portable Core parameters; native availability needs a live observation')
+    describe.add_argument('--harness', required=True, choices=['codex_app_server', 'claude_stream', 'pi_rpc'])
+    validate = harness_sub.add_parser('validate', help='validate a reusable JSON settings file without applying it')
+    validate.add_argument('--file', type=Path, required=True)
+    validate.add_argument('--harness', default=None)
+    for command in ('show', 'apply'):
+        item = harness_sub.add_parser(command, help='read or update canonical settings using an authorized imported identity')
+        item.add_argument('--identity', required=True)
+        item.add_argument('--endpoint-id', required=True)
+        if command == 'apply':
+            item.add_argument('--file', type=Path, required=True)
+            item.add_argument('--expected-revision', type=int, required=True, help='revision reviewed with harness-config show')
+    connection = sub.add_parser('connection-config', help='reuse a complete Nexus connection JSON')
+    connection_sub = connection.add_subparsers(dest='subcommand', required=True)
+    for command in ('validate', 'apply'):
+        item = connection_sub.add_parser(command)
+        item.add_argument('--file', type=Path, required=True)
+        if command == 'apply':
+            item.add_argument('--identity', required=True, help='imported operator identity')
+            item.add_argument('--agent', required=True)
+            item.add_argument('--request-id', required=True, help='stable ID for safe retries')
+            item.add_argument('--executor-id', default='')
+            item.add_argument('--candidate-ref', default='')
+            item.add_argument('--inventory-revision', default='')
+            item.add_argument('--workspace-id', default=None)
+            item.add_argument('--binding-id', default=None, help='existing connection to replace')
+            item.add_argument('--project', help='workspace folder on the destination host; never imported')
+            item.add_argument('--workspace-label', default=None)
+            item.add_argument('--provider-home', help='login directory on the destination host; never imported')
+            item.add_argument('--execution-location', choices=['local','remote','all'], default='local')
     return parser
 
 
@@ -199,6 +351,8 @@ def main(argv: list[str] | None = None) -> int:
         result = asyncio.run(dispatch(args, output))
     except ConnectorError as error:
         return output.error(error)
+    except EOFError:
+        return output.error(ConnectorError('VALIDATION_ERROR','cli','Terminal input ended. Configuration canceled.'))
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
         return EXIT_USAGE
@@ -206,7 +360,11 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OK
     if isinstance(result, int):
         return result
-    output.result(result)
+    if args.command == "discover" and not args.json and not args.verbose:
+        from .commands.discover import render_summary
+        render_summary(result, output, harness=args.harness)
+    else:
+        output.result(result)
     return EXIT_OK
 
 

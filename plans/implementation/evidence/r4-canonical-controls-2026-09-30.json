@@ -1,0 +1,59 @@
+{
+  "generated_at_utc": "2026-09-30T04:56:26.177916+00:00",
+  "scope": "Connector R4 control target request and response correlation; partial product integration",
+  "git_heads_at_recording": {
+    "nexus": "a127bf36e3292e88285a941146cc78d7eaba80d7",
+    "connector": "47454d21f2cae22eba14d1b9302f764be323739d",
+    "core": "ada37e30cfb8a09769e5cceb12fa3b34829095ba"
+  },
+  "shared_core_version": "0.2.26.dev0",
+  "shared_core_wheel_sha256": "d1fd93375b84f68f14c7a6a84b609bcee0d14876b8c75ec00a71a11d8ec71977",
+  "test_runs": [
+    {
+      "layer": "Connector full source regression with installed Core",
+      "command_argv": [
+        "rtk",
+        "proxy",
+        "C:/Users/jpamb/AppData/Local/Temp/okto-r4-delivery-audit-py313/Scripts/python.exe",
+        "-X",
+        "utf8",
+        "-c",
+        "import sys; sys.path.insert(0,'src'); import pytest; raise SystemExit(pytest.main(['tests','-q','--tb=short','--junitxml=plans/implementation/evidence/r4-canonical-controls.xml']))"
+      ],
+      "cwd": "D:\\Projetos\\Techridy\\okto-nexus-connector",
+      "exit_code": 0,
+      "tests": 243,
+      "passed": 241,
+      "skipped": 2,
+      "failures": 0,
+      "errors": 0,
+      "seconds": 293.495,
+      "junit_timestamp": "2026-09-30T01:45:24.015963-03:00",
+      "junit_path": "D:\\Projetos\\Techridy\\okto-nexus-connector\\plans\\implementation\\evidence\\r4-canonical-controls.xml",
+      "junit_sha256": "9d0ed7f53cc59cbf0eba50c28a0b605cab65c9e0c0f51bc915d30dc5f02254f0",
+      "skips": [
+        {
+          "test": "test_27_start_session_capability_is_referenced_in_effective_environment",
+          "reason": "lab peer lacks full contract surface: BINDING_NOT_AUTHORIZED"
+        },
+        {
+          "test": "test_shim_resolution_never_runs_outside_windows",
+          "reason": "covered above"
+        }
+      ]
+    }
+  ],
+  "source_sha256": {
+    "src/okto_nexus_connector/transport/https_client.py": "9e7e5b7470033399a2cb66a4ab848055cf6987b10b887426d3855c98312bbe05",
+    "tests/contract/test_https_client.py": "0e4ec8772c3219dfa4a8488778a82d120ebecd882540f2e62721d535659462b4"
+  },
+  "coordinated_evidence": "../okto_labs_okto_nexus/plans/r4_execution/test_runs_20260930_controls.json",
+  "limitations": [
+    "Approved selection metadata and executable qualification are fixtures.",
+    "Native peer is strict and synthetic; no provider, daemon, dispatcher loop or multi-host qualification.",
+    "Runtime close policy and complete interrupt reason conformance remain unimplemented in Core.",
+    "Containment during pending lease CAS remains open.",
+    "Nexus frontend assets contain prior user modifications and were packaged without rebuilding; no UI acceptance claimed.",
+    "No final milestone, executable flag or product gate was closed."
+  ]
+}

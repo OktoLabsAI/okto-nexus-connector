@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="6" time="4.566" timestamp="2026-09-30T05:43:29.451310-03:00" hostname="Alienware_m15"><testcase classname="tests.unit.test_r4_execution" name="test_control_and_cancelled_stop_do_not_abandon_receipt_producer" time="3.425"><failure message="TimeoutError">C:\Python313\Lib\asyncio\tasks.py:507: in wait_for
+    return await fut
+           ^^^^^^^^^
+C:\Python313\Lib\asyncio\locks.py:213: in wait
+    await fut
+E   asyncio.exceptions.CancelledError
+
+The above exception was the direct cause of the following exception:
+tests\unit\test_r4_execution.py:149: in test_control_and_cancelled_stop_do_not_abandon_receipt_producer
+    await asyncio.wait_for(entered.wait(), 3)
+C:\Python313\Lib\asyncio\tasks.py:506: in wait_for
+    async with timeouts.timeout(timeout):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Python313\Lib\asyncio\timeouts.py:116: in __aexit__
+    raise TimeoutError from exc_val
+E   TimeoutError</failure></testcase><testcase classname="tests.unit.test_r4_execution" name="test_lane_invalidated_during_launch_wait_never_opens" time="0.062" /><testcase classname="tests.unit.test_r4_execution" name="test_publication_failure_fences_without_repeating_native_open" time="0.157" /><testcase classname="tests.unit.test_r4_execution" name="test_frozen_open_selection_and_typed_control_projection" time="0.165"><failure message="KeyError: 'action'">tests\unit\test_r4_execution.py:211: in test_frozen_open_selection_and_typed_control_projection
+    assert (await observed(receipts))['action'] == 'runtime.open'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'action'</failure></testcase><testcase classname="tests.unit.test_r4_execution" name="test_duplicate_open_never_requests_a_second_lease" time="0.149" /><testcase classname="tests.unit.test_r4_execution" name="test_cross_binding_control_cannot_borrow_a_runtime" time="0.157" /></testsuite></testsuites>

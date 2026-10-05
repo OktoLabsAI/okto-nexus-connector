@@ -1,0 +1,177 @@
+{
+  "generated_at_utc": "2026-09-30T05:47:43.226889+00:00",
+  "scope": "Partial M01/M11 pending renewal containment; no full milestone or product gate closed",
+  "git_heads_at_recording": {
+    "nexus": "726d5e329e7dabdf5a8160d1ea8065236388a625",
+    "connector": "218f25a9a09a31e7e640bf4fa1c5295f950eefe2",
+    "core": "c6f8580143a7793d2fd13dc59e44a552c04f62ab"
+  },
+  "source_provenance": "Uncommitted implementation identified by source hashes and commits containing this report; recorded HEADs may be parents.",
+  "shared_core_version": "0.2.28.dev0",
+  "core_wheel_sha256_by_repository": {
+    "nexus": "27df75100dea033ca5456f2d571eb41b6311fa3ce530a723ecd6c606d257953c",
+    "connector": "27df75100dea033ca5456f2d571eb41b6311fa3ce530a723ecd6c606d257953c",
+    "core": "27df75100dea033ca5456f2d571eb41b6311fa3ce530a723ecd6c606d257953c"
+  },
+  "r4_frame_schema_sha256": "5682f068280dfb70ea127547d8b4f5b42f03a604672f5d579f8361d79eb731f2",
+  "r4_manifest_sha256": "f1a7dfa3133591be0d83bdfab9ee669036808275d52bce477474447babe325f1",
+  "installed_module_report": "D:\\Projetos\\Techridy\\okto_labs_okto_nexus\\plans\\r4_execution\\evidence\\pending-containment-installed-modules.json",
+  "installed_module_report_sha256": "84865f6dff5840ed4f07eec774da60c5e98f2432b622a010ee56163204c87942",
+  "campaign_counts_overlap": true,
+  "additional_checks": [
+    {
+      "command": [
+        "rtk",
+        "proxy",
+        "python",
+        "-X",
+        "utf8",
+        "tools/verify_wheel.py",
+        "--artifact-dir",
+        "C:/Users/jpamb/AppData/Local/Temp/okto-core-028-pending-containment"
+      ],
+      "cwd": "D:\\Projetos\\Techridy\\okto-nexus-connector-core",
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "rtk",
+        "proxy",
+        "uv",
+        "lock",
+        "--check",
+        "--find-links",
+        "vendor/wheels"
+      ],
+      "cwd": "D:\\Projetos\\Techridy\\okto_labs_okto_nexus",
+      "exit_code": 0
+    },
+    {
+      "scope": "Directed source pending containment, leases, close and C3/C7 regression",
+      "result": "67 passed",
+      "command": [
+        "rtk",
+        "proxy",
+        "C:/Users/jpamb/AppData/Local/Temp/okto-r4-close-installed-py313/Scripts/python.exe",
+        "-X",
+        "utf8",
+        "-c",
+        "import sys; sys.path.insert(0,'src'); import pytest; raise SystemExit(pytest.main(['tests/test_r4_pending_containment.py','tests/test_r4_runtime_leases.py','tests/test_close_policy.py','tests/regression/test_c3_regressions.py','tests/regression/test_c7_audit.py','-q','--tb=short','-x']))"
+      ],
+      "cwd": "D:\\Projetos\\Techridy\\okto-nexus-connector-core",
+      "exit_code": 0
+    }
+  ],
+  "earlier_attempts": [
+    {
+      "scope": "New retained-CAS containment test before fix",
+      "result": "1 failed at interrupt context resolution",
+      "cause": "All pending renewals were rejected as LEASE_UPDATE_PENDING; session locks also covered storage wait."
+    }
+  ],
+  "limitations": [
+    "Retained CAS port proves runtime lock independence; it does not prove concurrent admission through a blocked SQLite writer.",
+    "Only unchanged scope, grant and connection with an action retained in both grants permits pending containment; reconnect and authority changes remain fenced.",
+    "Public operations still require durable journal admission; owned shutdown remains the storage-independent containment route.",
+    "Qualification and native peers are synthetic; no product dispatcher loop, daemon, provider, UI or multi-host qualification.",
+    "Source/installed campaigns overlap and skips are not passes.",
+    "Existing user frontend assets were preserved and packaged; no UI acceptance claimed.",
+    "R4 executable and Server remote readiness remain false; G0-G3 remain open."
+  ],
+  "source_sha256": {
+    "src/okto_nexus_connector/__init__.py": "a742e2cbfd554872e69e19c4758b33234832e3605434ec4eae4c830b931c3828",
+    "src/okto_nexus_connector/cli/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/okto_nexus_connector/cli/commands/__init__.py": "fba6c6c4f0ed4ca1a419c35e3258fd4ea80366383b0972e3cd3697098805cc6a",
+    "src/okto_nexus_connector/cli/commands/approvals.py": "c6ceab0265826f307f71b067bf2fe442f41903e2d8dced186ed4fd8a9540edab",
+    "src/okto_nexus_connector/cli/commands/bind.py": "cccb7b1360074e2712839ab829c72fdafd62e33dd8ef83db77dde1c7b5462e50",
+    "src/okto_nexus_connector/cli/commands/connect.py": "afe47a5211fb6e3bdbd1e189885f06e3f91155356c147865e954b77d30ba17b2",
+    "src/okto_nexus_connector/cli/commands/daemon.py": "13259b404bd4b3bc4abb2351c996e38b6ce349bd9c1ba98ab73092167bc037a8",
+    "src/okto_nexus_connector/cli/commands/discover.py": "4b6498bd6adcc52729a25b4ac15758ab2de91ac699dcf4f4cf2dc9bd177aeca0",
+    "src/okto_nexus_connector/cli/commands/doctor.py": "5fb081e69326af1aa5f290cd2950c7980a6bd7f2cde8716cd1b15792a6c0ba77",
+    "src/okto_nexus_connector/cli/commands/identity.py": "d49e9aa7e1333b74471461abd6902545e291d2edf81a8456fe7f9ec615aab2c7",
+    "src/okto_nexus_connector/cli/commands/mcp_config.py": "cb88734bfd91fbbdf9f30b04dae88be5dccf3d6282da1b4323be7468652a160c",
+    "src/okto_nexus_connector/cli/commands/runtime.py": "423fc9c94c91740621ca3a46a762c85bbb15680a181ef8f316e783a0a0d25b00",
+    "src/okto_nexus_connector/cli/commands/service.py": "daa2c5a0e56e4dab530a41a4c1786c3539161700f775ec349c749a81eddbe30d",
+    "src/okto_nexus_connector/cli/main.py": "a361071c12870319f0ebb649883e4b11ad0d317b1feb4d93327a032b0a56797e",
+    "src/okto_nexus_connector/cli/output.py": "07b560f0acf6b45f68ed3fd9fb5d8d243e4c793c8ba2740c72b302a15b67e28d",
+    "src/okto_nexus_connector/cli/prompts.py": "60bc05bca114d9dcf6f17452ccb067efbb56c3d761f3226293f9e270ff1b1345",
+    "src/okto_nexus_connector/daemon/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/okto_nexus_connector/daemon/__main__.py": "166be5c1d2c503afd3028e6f13624e60a476d4f4caf5db3dd539723803d73940",
+    "src/okto_nexus_connector/daemon/app.py": "74a7195c20e94418a13ac3901f1b0256d1f5ec97225fd87dc1d70a6555ba6968",
+    "src/okto_nexus_connector/daemon/lock.py": "2decda6d19d2b22e8d4750590d018dc60daf065ae62d537bfce7267809ba549c",
+    "src/okto_nexus_connector/daemon/manager.py": "38609921aebb2708ee916e3b9c3c74167fa18c7cbbb955956bb87f864725ccbe",
+    "src/okto_nexus_connector/errors.py": "35101891536d301c22a0d7578a67a026b5ea95cd95936108b18be6a2d4182605",
+    "src/okto_nexus_connector/harness_config/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/okto_nexus_connector/identity/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/okto_nexus_connector/identity/import_flow.py": "6266c170211d84c9d410a2a9bf56429e0ad849a31b18a4b0e4d55034b1d6a9e7",
+    "src/okto_nexus_connector/identity/vault.py": "00c024c5a7aa5106982f44948e4c0d9381c770b25a3e925efeb42d8ac28e6084",
+    "src/okto_nexus_connector/ipc/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/okto_nexus_connector/ipc/client.py": "29c05b7ce0e924bc8ffe1f4f5e2c3c702d8e674294f02c74d2661267ea1d84b5",
+    "src/okto_nexus_connector/ipc/protocol.py": "913b8cf5922b82437b7a78a272174c1a319a5e52a24586255609b34c025a90f5",
+    "src/okto_nexus_connector/ipc/server.py": "92b42f256e519c90307f1cf7f918101ee0a83a0d916c4b9f570e3b844114feb6",
+    "src/okto_nexus_connector/platform/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/okto_nexus_connector/platform/paths.py": "52f4c3e69b33396d52fafc3797761c2d3f2e5a0b190fc483333ca013611f7ae5",
+    "src/okto_nexus_connector/platform/service_install.py": "5d9afc01d0e456d5c29cf78bb34b5fc8aacea19b784bfb10335c07f620155344",
+    "src/okto_nexus_connector/platform/sysinfo.py": "7dcbf7670ab9616b22bce0fb8c499afd16b2b6beab8f28875485ac091a22f960",
+    "src/okto_nexus_connector/py.typed": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/okto_nexus_connector/redaction.py": "ef9a87778feb215665ea642a6dd1e0e2b569f2480071d885ac9a8f4f546129d9",
+    "src/okto_nexus_connector/services/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/okto_nexus_connector/services/approval_state.py": "f77b7e77ea7588beb2c5758bd4add12934e0a3d587e575f78483eedf8efc47de",
+    "src/okto_nexus_connector/services/connect_service.py": "a3fa54b0fd9cfd97a55e31d9b3ed8eca0d8c09889bb3b40cfa87cd82f076d71b",
+    "src/okto_nexus_connector/services/core_host.py": "7042e7f7dd559a2b2bd7a7dbec51f2f683c125691c182999a68b6b4078108cf6",
+    "src/okto_nexus_connector/services/discovery_service.py": "69199e20a55671c880b64d045a10777a5427ca644c1b380a26d01bc16091c843",
+    "src/okto_nexus_connector/services/mcp_config_service.py": "00e6bc3348f7fb164c7cfc88c93bbcc1bd1e0022d93e9693d0ebcb86a2c9e97b",
+    "src/okto_nexus_connector/services/realization_service.py": "bf8de7ee9ab0a512876155d7116327f08f804fddc6b7c035a7c68987b3e062e2",
+    "src/okto_nexus_connector/services/runtime_service.py": "b1cfcef5c163c43e6c2a54a651542a9f2ca96ce4314c9d56b1de5b53ace1863c",
+    "src/okto_nexus_connector/storage/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/okto_nexus_connector/storage/state_store.py": "ddd1442039bd0b188a9e17537e7d18b93ccef07edaf083dee31504f9ab8e4eda",
+    "src/okto_nexus_connector/transport/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/okto_nexus_connector/transport/_batches.py": "4bbbd6325b11678076b405caafdb619107f6546f19edff84828180cfa9fc6438",
+    "src/okto_nexus_connector/transport/https_client.py": "9e7e5b7470033399a2cb66a4ab848055cf6987b10b887426d3855c98312bbe05",
+    "src/okto_nexus_connector/transport/wss_client.py": "b0d439f5ddcc7a4dd1a4f2424b9d3dc4ce49fc5e4b3dd7e4e05d8e99c1cfc2cf",
+    "src/okto_nexus_connector/transport/wss_r4.py": "9fecf68be8d0acb96ea97e632fa5b43a0adc96b5a21d5b4d7e0acd44b4b4fddc",
+    "src/okto_nexus_connector.egg-info/dependency_links.txt": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+    "src/okto_nexus_connector.egg-info/entry_points.txt": "b5996dd1978876681eea2bd93634340013fe85ef8664eafef4c3fa2edbcdc10c",
+    "src/okto_nexus_connector.egg-info/PKG-INFO": "78d6cf7fe6b79828733d18d5c30fc8b2205e76a6ca0e7c03b2814bba6658568d",
+    "src/okto_nexus_connector.egg-info/requires.txt": "e38e142b381c2763380ad6a3c9c1397829233555d024e3e6e0ae1f470230d605",
+    "src/okto_nexus_connector.egg-info/SOURCES.txt": "b44ca558b436760ac06003866a901229138a1eb34aab71643f981c6e48de7060",
+    "src/okto_nexus_connector.egg-info/top_level.txt": "cae88a036293452642a2bd4fea24940770175e1f82ad2fd2ff5e4ef085e2d3c0"
+  },
+  "test_runs": [
+    {
+      "repository": "connector",
+      "layer": "Full Connector source regression with installed Core",
+      "command_argv": [
+        "rtk",
+        "proxy",
+        "C:/Users/jpamb/AppData/Local/Temp/okto-r4-pending-installed-py313/Scripts/python.exe",
+        "-X",
+        "utf8",
+        "-c",
+        "import sys; sys.path.insert(0,'src'); import pytest; raise SystemExit(pytest.main(['tests','-q','--tb=short','--junitxml=plans/implementation/evidence/r4-pending-containment-source.xml']))"
+      ],
+      "cwd": "D:\\Projetos\\Techridy\\okto-nexus-connector",
+      "junit": "D:\\Projetos\\Techridy\\okto-nexus-connector\\plans\\implementation\\evidence\\r4-pending-containment-source.xml",
+      "junit_sha256": "db105b4ef2c94876557f850d12da0bf4501e8565d7ac1d0f22cfe56e03024b83",
+      "timestamp": "2026-09-30T02:42:26.197416-03:00",
+      "seconds": 288.45,
+      "tests": 243,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "passed": 241,
+      "skips": [
+        {
+          "test": "tests.regressoes.test_connector_audit::test_27_start_session_capability_is_referenced_in_effective_environment",
+          "reason": "lab peer lacks full contract surface: BINDING_NOT_AUTHORIZED"
+        },
+        {
+          "test": "tests.unit.test_core02_integration::test_shim_resolution_never_runs_outside_windows",
+          "reason": "covered above"
+        }
+      ]
+    }
+  ],
+  "joint_report": "D:\\Projetos\\Techridy\\okto_labs_okto_nexus\\plans\\r4_execution\\test_runs_20260930_pending_containment.json",
+  "published_core_head": "368c50d9b8496809a4865e32a774492db3e3549f"
+}

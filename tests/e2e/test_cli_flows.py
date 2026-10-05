@@ -20,7 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from okto_nexus_connector.daemon.lock import InstanceLock
+from okto_nexus_connector.daemon import manager
+from okto_nexus_connector.daemon.lock import InstanceLock, wait_for_readiness
 from okto_nexus_connector.platform import paths
 
 from tests.fakes.http_peer import FakeAgent, FakeBinding, FakeNexusHTTPPeer
@@ -29,25 +30,22 @@ KEY = "nxs_e2e_key"
 SERVER_ID = "srv_fake"
 AGENT = "ag_e2e"
 
-SRC = Path(__file__).parents[2] / "src"
-
-
 def _env(root: Path) -> dict[str, str]:
-    env = dict(os.environ)
+    env = {key: value for key, value in os.environ.items()
+           if key not in {"PYTHONPATH", "PYTHONHOME"}}
     env["OKTO_NEXUS_CONNECTOR_STATE"] = str(root)
     env["OKTO_NEXUS_CONNECTOR_VAULT"] = "file"
-    env["PYTHONPATH"] = str(SRC) + os.pathsep + env.get("PYTHONPATH", "")
     return env
 
 
 async def run_cli(root: Path, *args: str, stdin: str = "") -> subprocess.CompletedProcess:
     """Run the real CLI process without blocking the test event loop
     (the fake peers serve on that loop)."""
-    command = [sys.executable, "-m", "okto_nexus_connector.cli.main",
+    command = [sys.executable, "-I", "-m", "okto_nexus_connector.cli.main",
                "--state-dir", str(root), *args]
     process = await asyncio.create_subprocess_exec(
         *command,
-        env=_env(root), stdin=asyncio.subprocess.PIPE,
+        cwd=root, env=_env(root), stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
     stdout, stderr = await asyncio.wait_for(
         process.communicate(stdin.encode()), timeout=120)
@@ -65,13 +63,37 @@ async def fake_server():
     await peer.stop()
 
 
-async def test_cli_identity_connect_and_daemon(tmp_path: Path, fake_server):
+@pytest.fixture
+async def foreground_supervisor():
+    processes = []
+
+    async def start(root):
+        process = subprocess.Popen(
+            [sys.executable, "-I", "-m", "okto_nexus_connector.cli.main",
+             "--state-dir", str(root), "daemon", "run"], cwd=root, env=_env(root),
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+        processes.append((root, process))
+        await asyncio.to_thread(wait_for_readiness, InstanceLock(paths.pid_dir(root)), timeout=45)
+
+    try:
+        yield start
+    finally:
+        for root, process in processes:
+            await asyncio.to_thread(manager.stop, root, timeout=10)
+            if process.poll() is None:
+                process.kill()
+            await asyncio.to_thread(process.wait, timeout=10)
+
+
+async def test_cli_identity_connect_and_daemon(tmp_path: Path, fake_server, foreground_supervisor):
     peer, url = fake_server
     root = paths.state_dir(tmp_path)
     project = root / "project"
     project.mkdir(parents=True, exist_ok=True)
     binary = root / "fake-codex.exe"
     binary.write_bytes(b"e2e synthetic binary")
+    binary.chmod(binary.stat().st_mode | 0o100)
 
     # 1. identity add via protected stdin entry (with vault approval)
     result = await run_cli(root, "--json", "identity", "add", "--server", url,
@@ -113,7 +135,23 @@ async def test_cli_identity_connect_and_daemon(tmp_path: Path, fake_server):
         "--executable", str(binary), "--credential-stdin",
         "--project", str(project),
         stdin=f"{KEY}\ny\n")
-    assert result.returncode == 0, result.stderr
+    if result.returncode != 0:
+        # Hosted Windows jobs can prohibit independent daemon creation. The
+        # CLI must report that limitation; exercise its documented foreground
+        # remedy with a persistent supervisor, never count refusal as success.
+        payload = json.loads(result.stdout)
+        error = payload.get("error", {})
+        if (sys.platform != "win32" or error.get("code") != "DAEMON_UNAVAILABLE"
+                or not error.get("message", "").startswith("Windows denied creation")):
+            pytest.fail(result.stderr.decode('utf-8', errors='replace') + str(payload))
+        assert "daemon run" in error["action"]
+        await foreground_supervisor(root)
+        result = await run_cli(
+            root, "--json", "connect", "--server", url, "--agent", AGENT,
+            "--alias", "work", "--harness", "codex_app_server",
+            "--executable", str(binary), "--credential-stdin",
+            "--project", str(project), stdin=f"{KEY}\ny\n")
+        assert result.returncode == 0, result.stderr
     connected = json.loads(result.stdout)
     assert connected["connected"] is True
     binding = connected["binding"]

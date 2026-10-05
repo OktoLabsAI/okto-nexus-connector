@@ -1,0 +1,52 @@
+{
+  "scope": "Partial CON-R4-03 / NS03.04 consumer: strict session capability DTO and non-secret recovery metadata; no automatic daemon launch composition.",
+  "parent_commit": "9e1a96a9e24e643861974b5ede6e987b941908e7",
+  "core_version": "0.2.28.dev0",
+  "core_wheel_sha256": "27df75100dea033ca5456f2d571eb41b6311fa3ce530a723ecd6c606d257953c",
+  "source_sha256": {
+    "src/okto_nexus_connector/errors.py": "4c1a0596c05acea648fd9842d974092bfa2a73363a6d827e25c5b96bbdb076d0",
+    "src/okto_nexus_connector/redaction.py": "694fca985fb758de428037725d708cde34cd53eda69312f040c0f00406ee4b07",
+    "src/okto_nexus_connector/transport/https_client.py": "23171e1e20d5cec38ac1868322cb4f7ae58dffc8a4e520d1613a639a13ae9010",
+    "tests/unit/test_r4_session_capability.py": "a1ad6bbbb5284c58d7650451024e1f8ab67244835712ee165ec80ca11000c198"
+  },
+  "runs": [
+    {
+      "path": "plans/implementation/evidence/r4-session-capability.xml",
+      "sha256": "b98f4047c1d49f69c8e2d0f257d5c5ee855e52f6046f9b270d1b35be429fcfc0",
+      "tests": 1,
+      "errors": 1,
+      "failures": 0,
+      "skipped": 0,
+      "passed": 0,
+      "scope": "Initial collection failure: helper import path; corrected without changing product behavior."
+    },
+    {
+      "path": "plans/implementation/evidence/r4-session-capability-final.xml",
+      "sha256": "70e91efef32543ae1fba5725f4dee18b3dd58217802afce6c330c291f0d4cd9b",
+      "tests": 17,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "passed": 17,
+      "scope": "17 initial response validation cases; later recovery metadata and redaction are covered by the complete regression."
+    },
+    {
+      "path": "plans/implementation/evidence/r4-session-capability-regression.xml",
+      "sha256": "f38c81483c690623c90bda1d85fe145fe9b7de7c0e6a10be6ec93cff9635352c",
+      "tests": 345,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 2,
+      "passed": 343,
+      "scope": "Final source regression; two preexisting skips are not acceptance."
+    }
+  ],
+  "counts_overlap": true,
+  "closed_product_gates": [],
+  "remaining": [
+    "Persist capability issuance request identities and vault material in the approved host launch lifecycle.",
+    "Wire approved launch configuration, automatic lanes and consumers, lease renewal and nonempty recovery.",
+    "Integrate MCP/native use-case guards and complete provider/host qualification."
+  ],
+  "regression_command": "rtk proxy C:/Users/jpamb/AppData/Local/Temp/okto-r4-connection-source-unf1oud0/Scripts/python.exe -m pytest tests -q --tb=short --junitxml=plans/implementation/evidence/r4-session-capability-regression.xml"
+}

@@ -54,6 +54,9 @@ from okto_nexus_connector.transport.wss_client import (
 from tests.fakes.http_peer import FakeAgent, FakeNexusHTTPPeer
 from tests.fakes.wss_peer import FakeNXLPeer
 from tests.integration.conftest import RecordingFactory
+from tests.unit.test_execution_selection import selection
+from tests.unit.test_r4_daemon_execution import lifecycle
+from tests.unit.test_r4_execution import observed
 
 
 def _MINIMAL_BINARY() -> bytes:
@@ -735,16 +738,7 @@ async def test_15_shutdown_does_not_discard_core_ownership_on_unknown(
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
     from nexus_connector_core import ShutdownReport
-    host = CoreRuntimeHost.__new__(CoreRuntimeHost)
-    host.root = tmp_path
-    host._vault = None
-    host._journal_path = paths.journal_path(tmp_path)
-    host._ledger_path = paths.owned_slot_ledger_path(tmp_path)
-    host._runtimes = {}
-    host._journal = None
-    host._ledger = None
-    host._journal_gate = None
-    host._ledger_gate = None
+    host = CoreRuntimeHost(tmp_path, None)
     binary = _exe(tmp_path / "codex.exe")
     binding = BindingRecord(
         binding_id="bind_a", alias="local-srv_a", server_id="srv_a",
@@ -1173,75 +1167,42 @@ async def test_control_core_rejects_ungranted_new_action(tmp_path):
 # A10 — managed MCP wiring (effective environment)
 # =====================================================================
 
+@pytest.mark.parametrize("selection", [True], indirect=True)
 async def test_27_start_session_capability_is_referenced_in_effective_environment(
-        tmp_path):
-    peer = FakeNexusHTTPPeer()
-    peer.add_agent(FakeAgent(agent_id="ag_1", key="nxs_k27"))
-    url = await peer.start()
-    root = paths.state_dir(tmp_path)
-    store = StateStore(paths.state_file(root))
-    vault = RestrictedFileVault(paths.vault_dir(root), approved=True)
-    vault.store("srv_fake/ag_1", "nxs_k27")
-    binary = _exe(root / "codex.exe")
+        lifecycle, monkeypatch):
+    """R4 positive control with real Core preparation and environment rendering.
 
-    def mutate(state):
-        state.connector_id = "conn_audit"
-        state.preferences["vault.fallback_file.approved"] = True
-        from okto_nexus_connector.storage.state_store import             ServerProfileRecord
-        state.servers["srv_fake"] = ServerProfileRecord(
-            server_id="srv_fake", base_url=url, origin=url,
-            added_at="now")
-        from okto_nexus_connector.storage.state_store import IdentityRecord
-        state.identities.append(IdentityRecord(
-            "work", "srv_fake", "ag_1", "vault:srv_fake/ag_1", 1, "now"))
-        state.bindings.append(BindingRecord(
-            binding_id="bind_a", alias="codex", server_id="srv_fake",
-            agent_id="ag_1", adapter_id="codex_app_server",
-            executor_id="conn_audit", workspace_id="ws_a",
-            workspace_root=str(root),
-            candidate_executable=str(binary),
-            candidate_fingerprint=fingerprint(binary),
-            candidate_version="0.157.0",
-            candidate_architecture=binary_architecture(binary)
-            or "x86_64"))
+    The native peer is synthetic; this proves composition, not OS spawning.
+    Contract refusals must fail this test rather than skip its positive control.
+    """
+    owner, _, store, frame, native, _, published, _ = lifecycle
+    captured = {}
+    original_build = owner.host.build_r4
 
-    store.update(mutate)
-    project = Path(root)
-    manager = RuntimeManager(store, vault, CoreRuntimeHost(root, vault))
-    captured: dict = {}
-
-    original_build = manager._host.build
-
-    async def spy_build(binding, *, environment, factory=None,
-                        session_id=None):
+    async def capture_environment(*args, environment, **kwargs):
         captured["environment"] = environment
-        runtime = await original_build(binding, environment=environment,
-                                       factory=RecordingFactory(),
-                                       session_id=session_id)
-        return runtime
+        return await original_build(*args, environment=environment, **kwargs)
 
-    manager._host.build = spy_build
-    try:
-        started = await manager.start(alias="codex", project=project,
-                                      harness=None, new_session=True,
-                                      text=None)
-    except ConnectorError as error:
-        pytest.skip(f"lab peer lacks full contract surface: {error.code}")
-    else:
-        environment = captured.get("environment")
-        assert environment is not None
-        # REAL Core environment construction: the session capability
-        # must surface as the template's env-bound token reference.
-        from nexus_connector_core.environment import child_environment
-        from nexus_connector_core import LaunchIntent, ExecutionContext
-        import time as _time
-        runtime = manager._host.get("bind_a", "srv_fake")
-        prepared = await runtime.prepare(
-            LaunchIntent("ag_1", "ws_a", "codex_app_server",
-                         auth_refs=tuple()),  # auth refs via intent below
-            ExecutionContext("srv_fake", "conn_audit", "bind_a", "ag_1",
-                             "ws_a", 1, 1, 1, _time.monotonic() + 60,
-                             frozenset({"runtime.open"})))
-        env = await environment(prepared)
-        assert any(key.startswith("NEXUS_MCP_TOKEN") for key in env), env
-    await peer.stop()
+    monkeypatch.setattr(owner.host, "build_r4", capture_environment)
+    await owner.sync()
+    await owner.connection.emit(frame)
+    receipt = await observed(published, owner.owner)
+    assert receipt["operation_id"] == frame["operation_id"]
+    assert len(native.opened) == 1
+    prepared = native.opened[0]
+    assert "mcp-cap:cap" in prepared.intent.auth_refs
+    environment = await captured["environment"](prepared)
+    tokens = {key: value for key, value in environment.items()
+              if key.startswith("NEXUS_MCP_TOKEN")}
+    assert len(tokens) == 1
+    token_name, token = next(iter(tokens.items()))
+    assert token == "nxc4_" + "x" * 40
+    assert environment["OPENAI_API_KEY"] == "provider-secret"
+    assert "agent-key" not in environment.values()
+    configs = list((owner.host.root / "runtime" / "r4-mcp").rglob("config.toml"))
+    assert len(configs) == 1
+    config = configs[0].read_text()
+    assert token_name in config and "https://nexus.test/mcp" in config
+    for text in (config, store.path.read_text()):
+        assert token not in text
+        assert "agent-key" not in text and "provider-secret" not in text

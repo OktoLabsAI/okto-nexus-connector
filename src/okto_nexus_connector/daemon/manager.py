@@ -128,8 +128,22 @@ def start(root: Path, *, timeout: float = START_TIMEOUT) -> dict[str, object]:
             getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000))
     else:
         kwargs["start_new_session"] = True
-    process = subprocess.Popen(
-        [sys.executable, "-m", "okto_nexus_connector.daemon"], **kwargs)
+    command = [sys.executable, "-m", "okto_nexus_connector.daemon"]
+    try:
+        process = subprocess.Popen(command, **kwargs)
+    except OSError as exc:
+        if sys.platform != "win32" or getattr(exc, "winerror", None) != 5:
+            raise
+        # Retrying inside a restrictive job can report readiness and then
+        # lose the daemon when the CLI's supervisor exits. Do not weaken the
+        # promised independent lifetime or bypass the supervisor's policy.
+        raise ConnectorError(
+            "DAEMON_UNAVAILABLE", "start",
+            "Windows denied creation of an independent daemon process. "
+            "The current supervisor may prohibit Job Object breakaway.",
+            action="Run 'okto-nexus-connector daemon run' under a persistent "
+                   "supervisor, or start from a terminal that permits an "
+                   "independent daemon.") from exc
     readiness = wait_for_readiness(lock, timeout=timeout)
     token = lock.load_token()
     if not ping(readiness, token):

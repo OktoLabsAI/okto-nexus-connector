@@ -293,6 +293,8 @@ class DaemonApp:
             event_publisher=self.bridge.publisher_for,
             connection_generation=self._generation_for)
         self.transports: dict[str, NXLTransport] = {}
+        self.r4_controls = {}
+        self.r4_executions = {}
         self.ipc = IPCServer(self.dispatch)
         self.lock = InstanceLock(paths.pid_dir(root))
         self.started_at = time.time()
@@ -309,6 +311,11 @@ class DaemonApp:
     # -- lifecycle -----------------------------------------------------------
 
     async def run_forever(self) -> int:
+        from ..transport.proxy import proxy_scope
+        with proxy_scope(self.root):
+            return await self._run_forever()
+
+    async def _run_forever(self) -> int:
         if not self.lock.acquire():
             live = self.lock.live_owner()
             if live is not None:
@@ -343,8 +350,24 @@ class DaemonApp:
         self._draining = True
         self.runtimes.begin_drain()
         reports: list[dict[str, object]] = []
+        # Startup owns HTTP/state producers. Join them before closing the
+        # shared stores; cancellation of an IPC waiter cannot abandon them.
+        for control in tuple(self.r4_controls.values()):
+            await control.stop()
+            if control.status()['recovery_required'] or control.cleanup_pending:
+                reports.append({"outcome": "unknown", "source": "r4-startup",
+                                "error": "The R4 executor requires recovery or connection cleanup."})
+        self.r4_controls.clear()
+        # R4 producers finish before the shared Core host/journal shuts down.
+        # They must never be cancelled as if they were UI observers.
+        for owner in self.r4_executions.values():
+            await owner.stop()
+            await owner.connection.close()
+            if owner.failure is not None:
+                reports.append({"outcome": "unknown", "source": "r4-execution",
+                                "error": "The R4 connection requires reconciliation."})
         try:
-            reports = await self.runtimes.shutdown()
+            reports.extend(await self.runtimes.shutdown())
         except Exception as exc:  # honest reporting, never silent loss
             reports.append({"outcome": "unknown", "error": str(exc)})
         await self.bridge.drain()
@@ -368,6 +391,35 @@ class DaemonApp:
 
     # -- transports ------------------------------------------------------------
 
+    def own_r4_connection(self, connection, *, candidate_provider, launch_provider=None,
+                          publish_receipt, native_factory=None, response_resolver=None, native_tools=None):
+        """Adopt a negotiated authenticated connection into daemon ownership.
+
+        The startup/credential owner supplies host-local composition ports.
+        This method never imports a legacy binding or grants R3 authority.
+        """
+        from ..services.r4_execution import R4ExecutionOwner
+        key = (connection.state.server_id, connection.state.executor_id)
+        control = self.r4_controls.get(connection.state.server_id)
+        if (self._draining or key in self.r4_executions or
+                connection.state.server_id in self.transports or
+                (control is not None and control.connection is not connection)):
+            raise ConnectorError('RUNTIME_DRAINING' if self._draining else 'OPERATION_CONFLICT',
+                                 'r4_execution', 'The daemon cannot adopt this connection.')
+        if not connection.online or not connection.state.control_ready:
+            raise ConnectorError('CONTROL_DISCONNECTED', 'r4_execution',
+                                 'The control connection is not ready.')
+        if len(self.r4_executions) >= 32:
+            raise ConnectorError('CAPACITY_EXCEEDED', 'r4_execution',
+                                 'The daemon execution connection capacity is exhausted.')
+        owner = R4ExecutionOwner(connection, self.store, self.host,
+            candidate_provider=candidate_provider, launch_provider=launch_provider,
+            publish_receipt=publish_receipt, native_factory=native_factory,
+            response_resolver=response_resolver, native_tools=native_tools)
+        self.r4_executions[key] = owner
+        owner.start()
+        return owner
+
     def _wake_streams_when_online(self, server_id: str) -> None:
         """CN2/N03.2: when the transport becomes READY again, pending
         streams resume from their ACKed cursors without new events."""
@@ -385,8 +437,30 @@ class DaemonApp:
         asyncio.create_task(_watch(), name=f"wake-{server_id}")
 
     def _start_transports(self) -> None:
+        if self._draining:
+            return
         state = self.store.load()
+        registered = {record.server_id for record in state.execution_executors}
         for server_id, profile in state.servers.items():
+            if server_id in registered:
+                if server_id in self.transports:
+                    # A running legacy transport must drain explicitly. A
+                    # reload never silently transfers live resource owners.
+                    raise ConnectorError('OPERATION_CONFLICT', 'r4_startup',
+                        'Stop the legacy daemon before activating this R4 registration.')
+                if server_id not in self.r4_controls:
+                    if len(self.r4_controls) >= 32:
+                        raise ConnectorError('CAPACITY_EXCEEDED', 'r4_startup',
+                                             'The R4 control connection capacity is exhausted.')
+                    from .r4_control import R4DaemonControl
+                    control = R4DaemonControl(self.store, self.vault, self.host, server_id)
+                    self.r4_controls[server_id] = control
+                    control.start()
+                continue
+            if server_id in self.r4_controls:
+                # reload_state stops removed registrations before any
+                # alternative transport can use this Server.
+                continue
             if server_id in self.transports:
                 continue
             from ..transport.wss_client import validate_link_url
@@ -429,6 +503,11 @@ class DaemonApp:
         ACN4-31) and other servers' lanes stay stable.
         """
         state = self.store.load()
+        registered = {record.server_id for record in state.execution_executors}
+        for server_id, control in tuple(self.r4_controls.items()):
+            if server_id not in registered or server_id not in state.servers:
+                await control.stop()
+                del self.r4_controls[server_id]
         self._start_transports()
         for server_id, transport in list(self.transports.items()):
             if server_id not in state.servers:
@@ -726,12 +805,28 @@ class DaemonApp:
                 "transports": {
                     server_id: transport.stats.to_json()
                     for server_id, transport in self.transports.items()},
+                "r4_controls": {server_id: control.status()
+                                for server_id, control in self.r4_controls.items()},
                 "runtimes": self.runtimes.status(),
                 "servers": [_profile_json(profile) for profile
                             in state.servers.values()],
                 "bindings": len(state.bindings),
                 "identities": len(state.identities),
             })
+        elif op == "executor.realize":
+            required = {"identity_alias", "client_intent_id", "adapter_id", "candidate_ref",
+                        "inventory_revision", "configuration_digest", "workspace_root",
+                        "workspace_id", "workspace_label"}
+            if self._draining or set(params) != required:
+                raise ConnectorError("VALIDATION_ERROR", "executor_onboarding",
+                                     "The realization request is invalid or the daemon is draining.")
+            state = await asyncio.to_thread(self.store.load)
+            identities = [r for r in state.identities if r.alias == params["identity_alias"] and not r.revoked]
+            control = self.r4_controls.get(identities[0].server_id) if len(identities) == 1 else None
+            if control is None:
+                raise ConnectorError("EXECUTOR_OFFLINE", "executor_onboarding",
+                                     "Start the registered executor daemon before publishing a realization.")
+            yield response_ok(request.seq, await control.realize(**params))
         elif op == "runtime.start":
             yield response_ok(request.seq, await self.runtimes.start(
                 alias=str(params.get("alias", "")),

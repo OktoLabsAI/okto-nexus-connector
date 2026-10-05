@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="9" time="0.776" timestamp="2026-10-02T09:52:46.516922-03:00" hostname="Alienware_m15"><testcase classname="tests.unit.test_discover_summary" name="test_default_table_counts_copies_without_leaking_details" time="0.311" /><testcase classname="tests.unit.test_discover_summary" name="test_verbose_preserves_full_diagnostic_payload" time="0.021" /><testcase classname="tests.unit.test_discover_summary" name="test_json_is_complete_and_unchanged[False]" time="0.017" /><testcase classname="tests.unit.test_discover_summary" name="test_json_is_complete_and_unchanged[True]" time="0.019" /><testcase classname="tests.unit.test_discover_summary" name="test_filter_and_unsupported_host_are_explicit" time="0.021"><failure message="AssertionError: assert 'Host containment unavailable; untrusted' in 'Harness             Found  Status\n------------------  -----  ----------------------\nCodex (app-server)  2      Unsu...ery starts nothing; runtime approval is separate.\nUse --verbose for installation details, or --json for automation.\n'">inventory = {'candidates': [{'adapter_id': 'codex_app_server', 'executable': '/private/codex', 'fingerprint': 'sha256:private-fing...ode RPC)', 'state': 'NOT_INSTALLED', 'reasons': ['no_installed_candidate'], ...}]}, 'note': 'Detailed diagnostic note'}
+capsys = &lt;_pytest.capture.CaptureFixture object at 0x0000018D21F63490&gt;
+
+    def test_filter_and_unsupported_host_are_explicit(inventory, capsys):
+        row = inventory['availability']['rows'][0]
+        row['reasons'].append('containment_unavailable:platform')
+        row['containment'] = 'unavailable'
+        inventory['availability']['rows'].pop(1)
+        assert main(['discover', '--harness', 'codex_app_server', '--server-id', 'first']) == 0
+        text = capsys.readouterr().out
+&gt;       assert 'Host containment unavailable; untrusted' in text
+E       AssertionError: assert 'Host containment unavailable; untrusted' in 'Harness             Found  Status\n------------------  -----  ----------------------\nCodex (app-server)  2      Unsu...ery starts nothing; runtime approval is separate.\nUse --verbose for installation details, or --json for automation.\n'
+
+tests\unit\test_discover_summary.py:65: AssertionError</failure></testcase><testcase classname="tests.unit.test_discover_summary" name="test_found_untrusted_host_unsupported_keeps_json_facts[False]" time="0.031"><failure message="AssertionError: assert ('1' in 'Codex (app-server)  1      Unsupported on this OS' and 'Host containment unavailable; untrusted' in 'Codex (app-server)  1      Unsupported on this OS')">inventory = {'candidates': [{'adapter_id': 'codex_app_server', 'executable': '/private/codex', 'fingerprint': 'sha256:private-fing...ode RPC)', 'state': 'NOT_INSTALLED', 'reasons': ['no_installed_candidate'], ...}]}, 'note': 'Detailed diagnostic note'}
+capsys = &lt;_pytest.capture.CaptureFixture object at 0x0000018D21BB1910&gt;
+verbose = False
+
+    @pytest.mark.parametrize('verbose', [False, True])
+    def test_found_untrusted_host_unsupported_keeps_json_facts(inventory, capsys, verbose):
+        row = inventory['availability']['rows'][0]
+        row.update(containment='unavailable')
+        row['reasons'].append('containment_unavailable:platform')
+        inventory['availability']['rows'].pop(1)
+        inventory['candidates'] = [dict(inventory['candidates'][0], trust='untrusted')]
+        assert main(['--json', 'discover', *(['--verbose'] if verbose else [])]) == 0
+        assert json.loads(capsys.readouterr().out) == inventory
+        assert main(['discover']) == 0
+        text = capsys.readouterr().out
+        line = next(line for line in text.splitlines() if 'Codex (app-server)' in line)
+&gt;       assert '1' in line and 'Host containment unavailable; untrusted' in line
+E       AssertionError: assert ('1' in 'Codex (app-server)  1      Unsupported on this OS' and 'Host containment unavailable; untrusted' in 'Codex (app-server)  1      Unsupported on this OS')
+
+tests\unit\test_discover_summary.py:83: AssertionError</failure></testcase><testcase classname="tests.unit.test_discover_summary" name="test_found_untrusted_host_unsupported_keeps_json_facts[True]" time="0.042"><failure message="AssertionError: assert ('1' in 'Codex (app-server)  1      Unsupported on this OS' and 'Host containment unavailable; untrusted' in 'Codex (app-server)  1      Unsupported on this OS')">inventory = {'candidates': [{'adapter_id': 'codex_app_server', 'executable': '/private/codex', 'fingerprint': 'sha256:private-fing...ode RPC)', 'state': 'NOT_INSTALLED', 'reasons': ['no_installed_candidate'], ...}]}, 'note': 'Detailed diagnostic note'}
+capsys = &lt;_pytest.capture.CaptureFixture object at 0x0000018D2212D590&gt;
+verbose = True
+
+    @pytest.mark.parametrize('verbose', [False, True])
+    def test_found_untrusted_host_unsupported_keeps_json_facts(inventory, capsys, verbose):
+        row = inventory['availability']['rows'][0]
+        row.update(containment='unavailable')
+        row['reasons'].append('containment_unavailable:platform')
+        inventory['availability']['rows'].pop(1)
+        inventory['candidates'] = [dict(inventory['candidates'][0], trust='untrusted')]
+        assert main(['--json', 'discover', *(['--verbose'] if verbose else [])]) == 0
+        assert json.loads(capsys.readouterr().out) == inventory
+        assert main(['discover']) == 0
+        text = capsys.readouterr().out
+        line = next(line for line in text.splitlines() if 'Codex (app-server)' in line)
+&gt;       assert '1' in line and 'Host containment unavailable; untrusted' in line
+E       AssertionError: assert ('1' in 'Codex (app-server)  1      Unsupported on this OS' and 'Host containment unavailable; untrusted' in 'Codex (app-server)  1      Unsupported on this OS')
+
+tests\unit\test_discover_summary.py:83: AssertionError</failure></testcase><testcase classname="tests.unit.test_discover_summary" name="test_adapter_os_support_is_distinct_from_host_containment" time="0.024"><failure message="AssertionError: assert 'Harness unsupported on this OS' in 'Harness             Found  Status\n------------------  -----  ----------------------\nCodex (app-server)  2      Unsu...ery starts nothing; runtime approval is separate.\nUse --verbose for installation details, or --json for automation.\n'">inventory = {'candidates': [{'adapter_id': 'codex_app_server', 'executable': '/private/codex', 'fingerprint': 'sha256:private-fing...ode RPC)', 'state': 'NOT_INSTALLED', 'reasons': ['no_installed_candidate'], ...}]}, 'note': 'Detailed diagnostic note'}
+capsys = &lt;_pytest.capture.CaptureFixture object at 0x0000018D22165040&gt;
+
+    def test_adapter_os_support_is_distinct_from_host_containment(inventory, capsys):
+        row = inventory['availability']['rows'][0]
+        row['reasons'] = ['platform_not_implemented:darwin']
+        row['state'] = 'UNSUPPORTED_PLATFORM'
+        inventory['availability']['rows'].pop(1)
+        assert main(['discover']) == 0
+        text = capsys.readouterr().out
+&gt;       assert 'Harness unsupported on this OS' in text
+E       AssertionError: assert 'Harness unsupported on this OS' in 'Harness             Found  Status\n------------------  -----  ----------------------\nCodex (app-server)  2      Unsu...ery starts nothing; runtime approval is separate.\nUse --verbose for installation details, or --json for automation.\n'
+
+tests\unit\test_discover_summary.py:94: AssertionError</failure></testcase><testcase classname="tests.unit.test_discover_summary" name="test_missing_installation_and_filtered_host_do_not_claim_harness_unsupported" time="0.027" /></testsuite></testsuites>

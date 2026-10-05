@@ -1,0 +1,17 @@
+{
+  "scope": "Core 0.2.52 consumer integration; not final release qualification",
+  "core_sha256": "470eb23b28d917a3a154c2ef7cd9fdddf972ca6402c0668961b4c01909f1b732",
+  "connector_wheel_sha256": "332f5aa8c683f7732a56925598968a3bba61a9d6fb5dcc3909762b016a0340ae",
+  "python": "3.13",
+  "platform": "Windows",
+  "installed_environment": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-core-lease-052-env",
+  "results": {
+    "integration": 5,
+    "cli": 3
+  },
+  "test_reports": {
+    "connector-core052.xml": "6cf8bbdde70e396dde41f2eb60e91c811562fafa3341d8a2134b0a7a9622e9ee",
+    "connector-core052-cli.xml": "4906215438bdbee1d8240476d449407b87a7520ae95d36cc5d8205127ba98490"
+  },
+  "remaining": "Hosted Windows CLI PermissionError needs full diagnostic output and successful rerun; platform/provider/host gates remain open"
+}

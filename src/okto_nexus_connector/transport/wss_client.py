@@ -685,8 +685,10 @@ class NXLTransport:
                 ticket = _fetched[0] if isinstance(
                     _fetched, tuple) else _fetched
                 headers = [("Authorization", f"Bearer {ticket}")]
+                from .proxy import resolve_proxy
                 async with websockets.connect(
                         self.link_url, subprotocols=["nxl.v1"],
+                        proxy=resolve_proxy(self.link_url),
                         additional_headers=headers,
                         max_size=1024 * 1024, open_timeout=15,
                         ping_interval=None) as websocket:

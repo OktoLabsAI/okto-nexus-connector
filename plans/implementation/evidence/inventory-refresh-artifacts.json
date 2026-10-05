@@ -1,0 +1,8 @@
+{
+  "artifacts": {
+    "okto_nexus_connector-0.5.0.dev0-py3-none-any.whl": "46991823a500fef326917edeb6063fb6e570126731e35d8c9c349104a1740b8f",
+    "okto_nexus_connector-0.5.0.dev0.tar.gz": "dcc79f39d709a6510babe44564a7461d15a531ff581eb54a9bab72be67350be2"
+  },
+  "source_package_bytes_match": true,
+  "scope": "development build; final freeze pending"
+}

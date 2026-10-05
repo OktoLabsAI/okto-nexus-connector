@@ -50,7 +50,21 @@ async def run_doctor(args, output: Output, root: Path):
     try:
         import nexus_connector_core as core
         check("core", "version", "ok", core.__version__)
-        check("core", "contract", "ok", core.CONTRACT_REVISION)
+        check("core", "legacy_contract", "ok", core.CONTRACT_REVISION)
+        revision = getattr(core, 'R4_CONTRACT_REVISION', None)
+        executable = getattr(core, 'R4_BUNDLE_EXECUTABLE', False) is True
+        verify = getattr(core, 'verify_r4_bundle', None)
+        try:
+            if not revision or not executable or not callable(verify):
+                raise ValueError('No executable R4 contract')
+            verify()
+        except Exception:
+            check('core', 'contract', 'fail', 'R4 bundle unavailable or invalid',
+                  'Install the approved Connector and its exact pinned Core artifact.')
+        else:
+            check('core', 'contract', 'ok', revision)
+            check('core', 'execution_scope', 'ok',
+                  'R4 bundle verified; provider qualification, binding, authorization and applied lease are separate.')
     except Exception as exc:
         check("core", "import", "fail", str(exc),
               "reinstall the okto-nexus-connector distribution")
@@ -97,7 +111,7 @@ async def run_doctor(args, output: Output, root: Path):
             detail = f"{record.base_url} ({record.server_id})"
             if args.probe:
                 status, message, action = await _probe_server(record, state,
-                                                              store)
+                                                  root)
                 check("server", record.server_id, status,
                       f"{detail} — {message}", action)
             else:
@@ -145,14 +159,17 @@ async def run_doctor(args, output: Output, root: Path):
         preflight = containment_status()
         missing = [f"{name}: {detail}" for name, detail in
                    preflight.items() if detail != "ok"]
+        unsupported = "platform" in preflight and preflight["platform"] != "ok"
         check("containment", "preflight",
-              "ok" if not missing else "fail",
+              "unsupported" if unsupported else "ok" if not missing else "fail",
+              "UNSUPPORTED_PLATFORM: " + "; ".join(missing) if unsupported else
               "; ".join(missing) if missing else
               ", ".join(f"{k}=ok" for k in preflight),
               "" if not missing else
               "managed launches will be refused "
               "(PROCESS_CONTAINMENT_UNAVAILABLE); run the daemon on a "
-              "platform with a qualified containment backend")
+              "Windows/Linux executor with successful containment preflight. "
+              "See https://github.com/OktoLabsAI/okto-nexus-connector/blob/feature/v0.2.0/docs/runbook.md#unsupported-executor-platform")
     except Exception as exc:
         check("containment", "preflight", "unknown", str(exc))
 
@@ -204,14 +221,15 @@ async def run_doctor(args, output: Output, root: Path):
     passed = sum(1 for c in checks if c["status"] == "ok")
     failed = sum(1 for c in checks if c["status"] == "fail")
     warned = sum(1 for c in checks if c["status"] == "warn")
+    unsupported = sum(1 for c in checks if c["status"] == "unsupported")
     summary = {"checks": checks, "summary": {
-        "ok": passed, "warn": warned, "fail": failed,
+        "ok": passed, "warn": warned, "fail": failed, "unsupported": unsupported,
         "version": __version__}}
-    output.line(f"doctor: {passed} ok, {warned} warn, {failed} fail")
+    output.line(f"doctor: {passed} ok, {warned} warn, {failed} fail, {unsupported} unsupported")
     return summary
 
 
-async def _probe_server(record, state, store):
+async def _probe_server(record, state, root):
     identity = next((i for i in state.identities
                      if i.server_id == record.server_id), None)
     if identity is None:

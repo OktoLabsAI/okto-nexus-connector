@@ -140,24 +140,9 @@ async def inventory_candidates(adapter_ids=None, *, extra=()) -> list:
         adapter_ids = tuple(
             descriptor.adapter_id for descriptor in
             catalog_runtimes(discoverable_only=True))
-    found: list = []
-    for adapter_id in adapter_ids:
-        try:
-            candidates = await asyncio.to_thread(
-                discover_path, adapter_id)
-        except CoreError:
-            continue
-        found.extend(candidates)
-    # Passive npm-shim resolution on Windows (Core 0.2.0): .cmd wrappers
-    # are parsed, never executed; only the two documented shim shapes
-    # yield candidates, everything else is refused honestly.
-    if os.name == "nt":
-        for adapter_id in adapter_ids:
-            for candidate in await asyncio.to_thread(
-                    shim_candidates, adapter_id):
-                if all(entry.executable != candidate.executable
-                       for entry in found):
-                    found.append(candidate)
+    from nexus_connector_core import discover_installations
+    inventory = await asyncio.to_thread(discover_installations, adapter_ids=tuple(adapter_ids))
+    found = list(inventory.candidates)
     for candidate in extra:
         if all(entry.executable != candidate.executable
                or entry.launch_script != candidate.launch_script
@@ -226,7 +211,7 @@ def select_explicit(adapter_id: str, executable: str | Path):
                              str(error), retry_safe=error.retry_safe) from None
 
 
-async def probe_version(selected):
+async def probe_version(selected, *, strict=False):
     """Sealed, secret-free ``--version`` probe for one selected candidate.
 
     Returns the Core's updated candidate, carrying the observed version
@@ -258,6 +243,9 @@ async def probe_version(selected):
     except CoreError as error:
         raise ConnectorError(error.code, "probe", str(error)) from None
     except Exception:
+        if strict:
+            raise ConnectorError('NATIVE_VERSION_UNQUALIFIED', 'probe',
+                                 'The selected installation version could not be observed.') from None
         # A probe that cannot run or parse simply yields no version;
         # selection and qualification happen through the Core anyway.
         return selected
@@ -286,64 +274,53 @@ def evaluate_availability(candidates):
 
 
 def availability_snapshot(candidates) -> dict[str, object]:
-    """CN4-04.02/G01: versioned, path-free executor projection.
+    """Local IPC/CLI preview with the Core's complete R4 evidence revision.
 
-    The revision derives from ALL relevant evidence of the WHOLE
-    candidate set — installation identity (adapter, executable
-    basename, launch_script, installation_ref), fingerprint/build,
-    version/architecture, trust/source AND the Core's readiness
-    state/reasons — in a canonical, ORDER-INDEPENDENT serialization
-    (reordering discovery or touching a publication timestamp does
-    not rotate the revision; changing the CLI's bytes, version,
-    trust or qualification does). Only the executing host's
-    assessment is published; the Server applies policy, never its
-    own OS view.
+    This legacy preview is not the authenticated publication envelope. The
+    producing host supplies its real IDs and sequence when publishing R4.
     """
-    import hashlib as _hashlib
-    import json as _json
-    import nexus_connector_core as _core
+    from nexus_connector_core import calculate_inventory_revision
     report = evaluate_availability(candidates)
     projection = report.to_dict()
     rows = projection["availability"]
-    state_by_ref: dict[str, dict] = {
-        str(row.get("candidate_ref")): row for row in rows}
-    evidence = []
-    for candidate in sorted(
-            candidates,
-            key=lambda c: (c.adapter_id, c.executable,
-                           c.launch_script or "", c.fingerprint)):
-        ref = getattr(candidate, "installation_ref", None) or \
-            str(candidate.executable)
-        row = state_by_ref.get(ref, {})
-        evidence.append({
-            "adapter_id": candidate.adapter_id,
-            "executable": str(candidate.executable),
-            "launch_script": (None if candidate.launch_script is None
-                              else str(candidate.launch_script)),
-            "installation_ref": ref,
-            "fingerprint": candidate.fingerprint,
-            "build_identity": candidate.build_identity,
-            "version": candidate.version,
-            "architecture": candidate.architecture,
-            "trust": candidate.trust,
-            "source": candidate.source,
-            "state": row.get("state"),
-            "reasons": sorted(str(r) for r in (row.get("reasons") or ())),
-        })
-    canonical = _json.dumps(
-        {"core": getattr(_core, "__version__", ""),
-         "format": projection["format_version"],
-         "platform": projection["platform"],
-         "candidates": evidence},
-        sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    revision = "inv2:" + _hashlib.sha256(
-        canonical.encode("utf-8")).hexdigest()[:24]
+    revision = calculate_inventory_revision(candidates, availability=report)
     return {
         "format_version": projection["format_version"],
         "platform": projection["platform"],
         "executor_revision": revision,
         "rows": rows,
     }
+
+
+def executor_inventory_snapshot(candidates, *, server_id: str, executor_id: str,
+                                producer_instance_id: str,
+                                publication_sequence: int,
+                                observation_age_ms: int = 0) -> dict[str, object]:
+    """R4 HTTP publication shape; the caller retains the full candidates."""
+    from nexus_connector_core import build_executor_inventory_snapshot
+    return build_executor_inventory_snapshot(
+        candidates, server_id=server_id, executor_id=executor_id,
+        producer_instance_id=producer_instance_id,
+        publication_sequence=publication_sequence,
+        observation_age_ms=observation_age_ms,
+    )
+
+
+def resolve_executor_installation(candidates, *, adapter_id: str,
+                                  candidate_ref: str,
+                                  expected_inventory_revision: str):
+    """Select only within this executor's current, full Core inventory."""
+    from nexus_connector_core import calculate_inventory_revision, resolve_installation
+
+    items = tuple(candidates)
+    if calculate_inventory_revision(items) != expected_inventory_revision:
+        raise ConnectorError("STALE_GENERATION", "inventory_selection",
+                             "The selected inventory revision is stale")
+    try:
+        return resolve_installation(items, adapter_id, candidate_ref)
+    except CoreError as error:
+        raise ConnectorError(error.code, "inventory_selection", str(error),
+                             retry_safe=error.retry_safe) from None
 
 
 def resolve_selection(candidates, adapter_id: str, candidate_ref: str):

@@ -1,5 +1,108 @@
 # Implementation status — 2026-09-29 (CN5 corrected, 0.5.0.dev0)
 
+## Core .56 POSIX discovery adoption
+
+The updated open issues are reconciled in [the October 2 report](ISSUES_20261002.md).
+Issue #2's human summary now distinguishes host containment from adapter OS
+support and retains found/untrusted facts; 52 installed checks passed per OS.
+Issue #1 now links Core #1 and user-operated Intel Mac scenario evidence. The
+parent tracker failed 24/24 fast escaped-orphan cases; a dedicated launchd job
+coalition found and stopped 10/10. The revised backend remains unimplemented and
+unqualified; see the October 2 report for remaining validation. IPC/state documentation is aligned
+with current code. Hosted CI is deferred by explicit user direction.
+
+The Connector now pins Core .56 (7a964db) and its exact reviewed wheel.
+Installed discovery/inventory/diagnostic checks passed 48 cases on each of
+Windows and WSL Linux. Compact human output and full JSON are preserved.
+See [artifacts and scope](POSIX_DISCOVERY_056.md). Native macOS containment,
+full integrated acceptance and release gates remain open.
+
+## Current discovery display and macOS issue follow-up — 2026-10-02
+
+The default `discover` display is a compact harness/count/status table.
+`--verbose` exposes full diagnostics; JSON retains the complete inventory.
+Twenty-eight installed checks passed on each of Windows and WSL Linux, and the
+real local CLI found all three providers without running them. The README now
+highlights Windows/Linux execution and pins Core .55 correctly. Updated issue #1
+confirms clearer macOS diagnosis but leaves native containment and missing
+Codex/Pi discovery unresolved. See [evidence and scope](DISCOVER_SUMMARY.md).
+No native macOS support, full provider acceptance or release gate is claimed.
+
+## Current CI recheck — 2026-10-02
+
+The installed Windows/Python 3.13.1 full suite passed 699 tests with two skips.
+Two recent hosted Windows discovery waits timed out in different cells and were
+not reproduced locally. Their test diagnostics now retain public daemon status;
+54 affected checks passed without changing timeout or product behavior. See
+[evidence and limits](CI_DISCOVERY_RECHECK.md). The CLI E2E fixture also no longer
+injects the checkout; all three scenarios passed with isolated installed CLI and
+daemon processes. Hosted diagnosis and release gates
+remain open; the dated increment sections below are historical records.
+
+## R4 session capability consumer — 2026-09-30
+
+[The capability client](R4_SESSION_CAPABILITIES.md) validates exact opening
+scope, audience, actions, origin and deadline, keeps secrets out of its DTO
+representation, and retains safe replay recovery metadata. Final source
+regression: 343 passes and two existing skips. The daemon's durable launch
+configuration and MCP/native handler integration remain pending; no gate closed.
+
+## R4 automatic control startup — 2026-09-30
+
+[Daemon startup](R4_DAEMON_STARTUP.md) connects explicit registrations to the
+real daemon lifecycle, fresh bootstrap, durable inventory sequence and control
+negotiation. Empty recovery reads the Core journal/ledgers; nonempty history
+stays pending. The Server now fences inventory producer handoff by the
+current reconciled channel. Results: 325 regression passes (two existing
+skips), 65 directed, 107 Nexus R4 and 109 installed, with overlap. Evidence:
+[evidence/r4-startup-report.json](evidence/r4-startup-report.json). Automatic
+lanes/runtime composition and nonempty recovery remain incomplete; no product
+gate is closed.
+
+
+## R4 durable executor registration — 2026-09-30
+
+[Executor registration](R4_EXECUTOR_REGISTRATION.md) adds schema 5 persisted
+registration intent/result, CAS against the selected identity/profile and a
+process-local bootstrap ticket API. The CLI registers, lists and queries the
+same executor; response loss reuses the original intent. `identity add` now
+persists its authenticated Server profile. Evidence is recorded in
+`evidence/r4-registration-report.json`. Automatic R4 daemon startup and live
+credential/lease renewal remain pending; no gate is closed.
+
+## R4 daemon operation consumers — 2026-09-30
+
+[Execution ownership](R4_EXECUTION_OWNER.md) moves canonical operation
+translation into daemon-owned producers with independent productive/control
+consumers. It installs the initial Core lease before opening, translates seven
+actions through public Core APIs and publishes the same operation's receipt.
+Cancelled observers retain producers; failure fences the channel without a
+second native attempt. Tests and limitations are recorded in
+`evidence/r4-execution-report.json`. Automatic startup, credentials/renewal,
+production environment composition and reconciliation remain incomplete.
+
+## R4 physical selection — 2026-09-30
+
+[Approved physical selection](R4_PHYSICAL_SELECTION.md) adds schema 4 binding
+mappings, replay without downgrade, strict opaque-reference resolution and
+Core host composition from revalidated local evidence. The public loopback
+journey now uses the persisted resolver through the five-action cycle.
+Results are in `evidence/r4-selection-report.json`; daemon composition,
+approved-revision refresh and final product acceptance remain open.
+
+
+## R4 connection ownership — 2026-09-30
+
+The [R4 connection owner](R4_CONNECTION_OWNER.md) now correlates lease/attach
+replies through one reader, bounds operation reservations and preserves lease
+installation producers under cancellation. An ordered replay of the same lease
+request confirms the Server ACK commit before execution can publish receipts
+on another channel. Contracts and the real loopback WSS journey are recorded
+in `evidence/r4-connection-report.json` and the Nexus coordinated report.
+The daemon composition, physical resolver and nonempty reconciliation remain
+pending. No R4 product gate is closed. Sections below are historical baselines.
+
+
 Connector `0.1.0.dev0`. Baseline: this repository, consuming the Core
 development wheel `nexus_connector_core-0.2.8.dev0` (SHA-256
 `6f4823f348732801cbe93318efbb2efd339e066f268dfd617d378adc9de0e23a`,

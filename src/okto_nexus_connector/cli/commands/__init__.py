@@ -10,14 +10,40 @@ from ..output import Output
 
 
 async def dispatch(args, output: Output):
+    from ...transport.proxy import proxy_scope
+    from ...platform.paths import default_state_dir
+    root = Path(args.state_dir).expanduser().absolute() if getattr(args, 'state_dir', None) else default_state_dir()
+    with proxy_scope(root):
+        return await _dispatch(args, output)
+
+
+async def _dispatch(args, output: Output):
+    if args.command == 'reach':
+        from .reach import run_reach
+        return await run_reach(args)
     root = _state_dir(args)
     command = args.command
+    if command == 'proxy':
+        from .proxy import run_proxy
+        return await run_proxy(args, output, root)
+    if command == 'configure':
+        from .configure import run_configure
+        return await run_configure(args, output, root)
+    if command == 'connection-config':
+        from .connection_config import run_connection_config
+        return await run_connection_config(args, output, root)
+    if command == 'harness-config':
+        from .harness_config import run_harness_config
+        return await run_harness_config(args, output, root)
     if command == "connect":
         from .connect import run_connect
         return await run_connect(args, output, root)
     if command == "identity":
         from .identity import run_identity
         return await run_identity(args, output, root)
+    if command == "executor":
+        from .executor import run_executor
+        return await run_executor(args, output, root)
     if command == "discover":
         from .discover import run_discover
         return await run_discover(args, output, root)

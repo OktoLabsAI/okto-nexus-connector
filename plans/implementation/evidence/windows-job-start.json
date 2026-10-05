@@ -1,0 +1,10 @@
+{
+  "wheel_sha256": "31f7c55beb1c457ddd2626b5841a5f7b28f6c92a2f6c4902f9cbf079e7a2e380",
+  "package_files_verified": 75,
+  "scope": "Windows restricted Job Object daemon startup and explicit foreground remedy",
+  "reproduced": "Real job with no breakaway permission reproduces hosted WinError 5 on previous installed artifact",
+  "rejected_approach": "Retry without breakaway can die on starter exit; not shipped",
+  "behavior": "Typed DAEMON_UNAVAILABLE with foreground/supervisor corrective action; no job policy change or false detached readiness",
+  "validation": "5 tests passed: two installed restrictive-job modes and three CLI flows; CLI flows still use checkout subprocesses",
+  "remaining": "Hosted matrix and unrelated R4 observation/lease timeout failures; final three-product tuple and provider/host acceptance"
+}

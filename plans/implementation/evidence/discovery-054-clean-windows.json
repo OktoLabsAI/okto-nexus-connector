@@ -1,0 +1,78 @@
+{
+  "python": "3.13.1 (tags/v3.13.1:0671451, Dec  3 2024, 19:06:28) [MSC v.1942 64 bit (AMD64)]",
+  "core": "0.2.54.dev0",
+  "connector": "0.5.0.dev0",
+  "elapsed_seconds": 13.504866700037383,
+  "exit_code": 0,
+  "candidate_count": 3,
+  "installed_package_bytes_match": true,
+  "independent_cwd": true,
+  "availability": {
+    "executor_revision": "sha256:4c33a3dc4c16e3cb24b8f909ab6c76bef6874882cb3aed158257d5c77ed262fe",
+    "format_version": 2,
+    "platform": "win32",
+    "rows": [
+      {
+        "adapter_id": "codex_app_server",
+        "architecture": "x86_64",
+        "build_identity": "sha256:a94116c305ec373cdd9eebf99f1db9d6bb353d49f9a962c44f1910ef9983479b",
+        "candidate_ref": "nexus-install-v1:24d6773e4cffb30762d80c87461061629bd2937636ab099786d74dc00e0bee48",
+        "connection_mode": "managed",
+        "containment": "available",
+        "display_name": "Codex (app-server)",
+        "label": "codex.exe \u00b7 0e0bee48",
+        "qualification": "not_probed",
+        "reasons": [
+          "no_build_observation",
+          "selection_required"
+        ],
+        "source": "path",
+        "state": "NOT_PROBED",
+        "trust": "untrusted",
+        "version": null
+      },
+      {
+        "adapter_id": "pi_rpc",
+        "architecture": "x86_64",
+        "build_identity": "sha256:caf8bfad84ea26a7c8eaee06e0cde3dd7e34ef05e00dbebc348dfb3f22de487b",
+        "candidate_ref": "nexus-install-v1:b64f7d489758234ac44fa9004bec00163e29efe01b8772ace8836ffc6001b3d5",
+        "connection_mode": "managed",
+        "containment": "available",
+        "display_name": "Pi (Node RPC)",
+        "label": "node.exe \u00b7 6001b3d5",
+        "qualification": "qualified",
+        "reasons": [
+          "selection_required"
+        ],
+        "source": "path",
+        "state": "PREPARATION_REQUIRED",
+        "trust": "untrusted",
+        "version": "0.87.1"
+      },
+      {
+        "adapter_id": "claude_stream",
+        "architecture": "x86_64",
+        "build_identity": "sha256:14369971cf394418edc2d29fe53d78b0e8dde500cc2db7746a743110ee394862",
+        "candidate_ref": "nexus-install-v1:cf87799010465f0cc6012cf0dec649059684bb5d87e716aa18c0326f7e79e2fa",
+        "connection_mode": "managed",
+        "containment": "available",
+        "display_name": "Claude Code (stream)",
+        "label": "claude.exe \u00b7 7e79e2fa",
+        "qualification": "not_probed",
+        "reasons": [
+          "no_build_observation",
+          "selection_required"
+        ],
+        "source": "path",
+        "state": "NOT_PROBED",
+        "trust": "untrusted",
+        "version": null
+      }
+    ]
+  },
+  "wheel_sha256": {
+    "nexus_connector_core-0.2.54.dev0-py3-none-any.whl": "e79c4b9ccc5205bd2cfd05f750dbef543d771355e85c6853975f22367d36b9ff",
+    "okto_nexus_connector-0.5.0.dev0-py3-none-any.whl": "f5a5df5e38f52857f0ffa415b524507d86ceae3cde96ea7b6121d1ab09f43696"
+  },
+  "scope": "Passive real Windows installation discovery. No provider execution or independent-host acceptance."
+}

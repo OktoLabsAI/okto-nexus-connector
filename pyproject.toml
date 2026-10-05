@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "okto-nexus-connector"
-version = "0.5.0.dev0"
+version = "0.0.1"
 description = "Remote harness connector application for Okto Nexus (CLI, daemon, outbound WSS control)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,13 +12,14 @@ authors = [{name = "Okto Labs"}]
 license = "Elastic-2.0"
 license-files = ["LICENSE"]
 dependencies = [
-    "nexus-connector-core==0.2.10.dev0",
-    "websockets>=13,<18",
+    "nexus-connector-core==0.0.1",
+  "websockets>=15,<18",
     "httpx>=0.27,<1",
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8", "pytest-asyncio>=0.24", "build>=1"]
+keyring = ["keyring>=25,<26"]
+test = ["pytest>=8", "pytest-asyncio>=0.24", "build>=1", "cryptography>=43", "pywin32; sys_platform == 'win32'"]
 
 [project.scripts]
 okto-nexus-connector = "okto_nexus_connector.cli.main:main"

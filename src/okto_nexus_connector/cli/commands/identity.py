@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict
 from pathlib import Path
 
@@ -80,6 +81,10 @@ async def run_identity(args, output: Output, root: Path):
             result = await import_identity(
                 http, vault, store, key=key, alias=args.alias,
                 agent_hint=args.agent)
+        # Preserve the explicitly selected and authenticated Server for
+        # subsequent executor registration and credential replacement.
+        from .connect import _remember_server
+        await asyncio.to_thread(_remember_server, store, args.server, result.server_id)
         output.line(f"identity {result.identity.alias}: agent "
                     f"{result.identity.agent_id} on {result.server_id} "
                     f"({'imported' if result.created else 're-validated'})")

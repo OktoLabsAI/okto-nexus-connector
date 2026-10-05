@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="2" time="7.121" timestamp="2026-10-02T06:10:11.005985-03:00" hostname="Alienware_m15"><testcase classname="tests.unit.test_r4_lease_renewal" name="test_cancelled_cleanup_observer_does_not_abandon_pending_renewal[normal-True]" time="1.276" /><testcase classname="tests.unit.test_r4_lease_renewal" name="test_cancelled_cleanup_observer_does_not_abandon_pending_renewal[delayed-loop-True]" time="5.214"><failure message="TimeoutError">fut = &lt;coroutine object Event.wait at 0x000001C718F5EEA0&gt;, timeout = 3
+
+    async def wait_for(fut, timeout):
+        """Wait for the single Future or coroutine to complete, with timeout.
+    
+        Coroutine will be wrapped in Task.
+    
+        Returns result of the Future or coroutine.  When a timeout occurs,
+        it cancels the task and raises TimeoutError.  To avoid the task
+        cancellation, wrap it in shield().
+    
+        If the wait is cancelled, the task is also cancelled.
+    
+        If the task suppresses the cancellation and returns a value instead,
+        that value is returned.
+    
+        This function is a coroutine.
+        """
+        # The special case for timeout &lt;= 0 is for the following case:
+        #
+        # async def test_waitfor():
+        #     func_started = False
+        #
+        #     async def func():
+        #         nonlocal func_started
+        #         func_started = True
+        #
+        #     try:
+        #         await asyncio.wait_for(func(), 0)
+        #     except asyncio.TimeoutError:
+        #         assert not func_started
+        #     else:
+        #         assert False
+        #
+        # asyncio.run(test_waitfor())
+    
+    
+        if timeout is not None and timeout &lt;= 0:
+            fut = ensure_future(fut)
+    
+            if fut.done():
+                return fut.result()
+    
+            await _cancel_and_wait(fut)
+            try:
+                return fut.result()
+            except exceptions.CancelledError as exc:
+                raise TimeoutError from exc
+    
+        async with timeouts.timeout(timeout):
+&gt;           return await fut
+                   ^^^^^^^^^
+
+C:\Python313\Lib\asyncio\tasks.py:507: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;asyncio.locks.Event object at 0x000001C718F74100 [unset]&gt;
+
+    async def wait(self):
+        """Block until the internal flag is true.
+    
+        If the internal flag is true on entry, return True
+        immediately.  Otherwise, block until another task calls
+        set() to set the flag to true, then return True.
+        """
+        if self._value:
+            return True
+    
+        fut = self._get_loop().create_future()
+        self._waiters.append(fut)
+        try:
+&gt;           await fut
+E           asyncio.exceptions.CancelledError
+
+C:\Python313\Lib\asyncio\locks.py:213: CancelledError
+
+The above exception was the direct cause of the following exception:
+
+lifecycle = (&lt;okto_nexus_connector.daemon.r4_execution.R4DaemonExecution object at 0x000001C718F6C7D0&gt;, &lt;tests.unit.test_r4_daemon...1C718F6D090&gt;, [{'ticket': 'nxt4_lane', 'binding_id': 'binding', 'agent_id': 'agent', 'credential_epoch': 1, ...}], ...)
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x000001C718E62140&gt;
+scheduling_delay = 1.7
+
+    @pytest.mark.parametrize("selection",[True],indirect=True)
+    @pytest.mark.parametrize("scheduling_delay", [0, 1.7], ids=["normal", "delayed-loop"])
+    async def test_cancelled_cleanup_observer_does_not_abandon_pending_renewal(lifecycle,monkeypatch,scheduling_delay):
+        owner,_,_,native,_,session,entered,release,_=await setup(lifecycle,monkeypatch,hold=True)
+        try:
+            # Deliberate scheduling fault: the renewal task cannot run during this
+            # pause. The cleanup ordering assertion must not depend on host speed.
+            time.sleep(scheduling_delay)
+&gt;           await asyncio.wait_for(entered.wait(),3)
+
+tests\unit\test_r4_lease_renewal.py:144: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Python313\Lib\asyncio\tasks.py:506: in wait_for
+    async with timeouts.timeout(timeout):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = &lt;Timeout [expired]&gt;
+exc_type = &lt;class 'asyncio.exceptions.CancelledError'&gt;
+exc_val = CancelledError(), exc_tb = &lt;traceback object at 0x000001C718E9FC00&gt;
+
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -&gt; Optional[bool]:
+        assert self._state in (_State.ENTERED, _State.EXPIRING)
+    
+        if self._timeout_handler is not None:
+            self._timeout_handler.cancel()
+            self._timeout_handler = None
+    
+        if self._state is _State.EXPIRING:
+            self._state = _State.EXPIRED
+    
+            if self._task.uncancel() &lt;= self._cancelling and exc_type is not None:
+                # Since there are no new cancel requests, we're
+                # handling this.
+                if issubclass(exc_type, exceptions.CancelledError):
+&gt;                   raise TimeoutError from exc_val
+E                   TimeoutError
+
+C:\Python313\Lib\asyncio\timeouts.py:116: TimeoutError</failure></testcase></testsuite></testsuites>

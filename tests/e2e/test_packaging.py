@@ -9,22 +9,27 @@ socket), and no Nexus Server / MCP dependencies sneak in.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import tomllib
 import venv
 from pathlib import Path
 
 import pytest
 
 PROJECT = Path(__file__).parents[2]
-CORE_DIST = Path(__file__).parents[3] / "okto-nexus-connector-core" / \
-    "dist"
+CORE_DIST = PROJECT / "vendor" / "wheels"
 
 
 def _core_wheel() -> Path:
-    wheels = sorted(CORE_DIST.glob("nexus_connector_core-*-py3-none-any.whl"))
-    assert wheels, f"no core wheel under {CORE_DIST}"
-    return wheels[-1]
+    dependencies = tomllib.loads((PROJECT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["dependencies"]
+    pinned = [item.removeprefix("nexus-connector-core==") for item in dependencies
+              if item.startswith("nexus-connector-core==")]
+    assert len(pinned) == 1, "Exactly one Core version must be pinned"
+    wheel = CORE_DIST / f"nexus_connector_core-{pinned[0]}-py3-none-any.whl"
+    assert wheel.is_file(), f"The pinned Core wheel is missing: {wheel}"
+    return wheel
 
 
 @pytest.fixture(scope="module")
@@ -45,12 +50,16 @@ def test_clean_venv_install(built_wheel: Path, tmp_path: Path):
     venv.create(venv_root, with_pip=True)
     python = venv_root / ("Scripts/python.exe" if sys.platform == "win32"
                           else "bin/python")
+    # A source-level runner may set PYTHONPATH. Neither pip's installed
+    # distribution discovery nor the CLI probe may inherit that source tree.
+    isolated_env = {key: value for key, value in os.environ.items()
+                    if key not in {"PYTHONPATH", "PYTHONHOME"}}
     # install the built connector wheel (pulls websockets/httpx) and the
     # pinned Core development wheel
     install = subprocess.run(
-        [str(python), "-m", "pip", "install", "--quiet", str(built_wheel),
+        [str(python), "-I", "-m", "pip", "install", "--quiet", str(built_wheel),
          str(_core_wheel())],
-        capture_output=True, timeout=600)
+        cwd=tmp_path, env=isolated_env, capture_output=True, timeout=600)
     assert install.returncode == 0, install.stderr.decode()
 
     # version + import side-effect audit (isolated interpreter)
@@ -59,11 +68,14 @@ def test_clean_venv_install(built_wheel: Path, tmp_path: Path):
 import sys
 mods_before = set(sys.modules)
 import okto_nexus_connector as connector
+import nexus_connector_core as core
+from importlib.metadata import requires
+assert f'nexus-connector-core=={core.__version__}' in requires('okto-nexus-connector')
 leaked = [m for m in sys.modules if m.split(".")[0] in
           ("okto_nexus",) and m != "okto_nexus_connector"]
 assert not leaked, leaked
 print(connector.__version__)
-"""], capture_output=True, text=True, timeout=120)
+"""], cwd=tmp_path, env=isolated_env, capture_output=True, text=True, timeout=120)
     assert probe.returncode == 0, probe.stderr
     assert probe.stdout.strip()
 
@@ -73,13 +85,15 @@ print(connector.__version__)
                        else "bin/okto-nexus-connector")
     assert cli.exists()
     version = subprocess.run([str(cli), "--version"], capture_output=True,
-                             text=True, timeout=60)
+                             cwd=tmp_path, env=isolated_env, text=True, timeout=60)
     assert version.returncode == 0
     assert "okto-nexus-connector" in version.stdout
 
     # dependency audit: no MCP SDK, no Nexus Server package
-    freeze = subprocess.run([str(python), "-m", "pip", "freeze"],
+    freeze = subprocess.run([str(python), "-I", "-m", "pip", "freeze"],
+                            cwd=tmp_path, env=isolated_env,
                             capture_output=True, text=True, timeout=120)
+    assert freeze.returncode == 0, freeze.stderr
     packages = freeze.stdout.lower()
     assert "mcp" not in [line.split("==")[0] for line in
                          freeze.stdout.splitlines()]

@@ -17,6 +17,7 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 _MAX_BODY = 1024 * 1024
+_MANAGEMENT_REVISION = "nexus-connections-2026-09-29-r4"
 
 
 @dataclass
@@ -28,6 +29,7 @@ class FakeAgent:
     permissions: tuple[str, ...] = ("connect", "runtime")
     authorization_revision: int = 1
     configuration_revision: int = 1
+    credential_epoch: int = 1
     revoked: bool = False
 
 
@@ -149,6 +151,7 @@ class FakeNexusHTTPPeer:
                     status, payload = self._route(method, target, headers,
                                                   body)
                     headers_out = ("Content-Type: application/json\r\n"
+                                   f"X-Nexus-Connections-Revision: {_MANAGEMENT_REVISION}\r\n"
                                    f"Content-Length: {len(json.dumps(payload))}"
                                    "\r\nConnection: keep-alive\r\n")
                     blob = json.dumps(payload).encode("utf-8")
@@ -165,6 +168,7 @@ class FakeNexusHTTPPeer:
                                   "retry_safe": error.retry_safe}}
                     blob = json.dumps(payload).encode("utf-8")
                     headers_out = ("Content-Type: application/json\r\n"
+                                   f"X-Nexus-Connections-Revision: {_MANAGEMENT_REVISION}\r\n"
                                    f"Content-Length: {len(blob)}"
                                    "\r\nConnection: keep-alive\r\n")
                 writer.write(
@@ -221,7 +225,8 @@ class FakeNexusHTTPPeer:
             "display_name": agent.display_name,
             "permissions": list(agent.permissions),
             "revisions": {"authorization": agent.authorization_revision,
-                          "configuration": agent.configuration_revision},
+                          "configuration": agent.configuration_revision,
+                          "credential_epoch": agent.credential_epoch},
         }
 
     def _prepare(self, headers, body) -> tuple[int, dict]:

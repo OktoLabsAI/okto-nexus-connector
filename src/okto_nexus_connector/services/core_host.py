@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Mapping
 
@@ -48,6 +48,14 @@ class BindingKey:
     binding_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class ExecutionRuntimeKey:
+    server_id: str
+    executor_id: str
+    binding_id: str
+    session_id: str
+
+
 class LaunchSecretResolver:
     """Resolves vault handles and per-launch ephemeral capability refs."""
 
@@ -63,9 +71,9 @@ class LaunchSecretResolver:
         if reference in self._capabilities:
             return self._capabilities[reference]
         if reference.startswith("vault:"):
-            return self._vault.resolve(reference)
+            return await asyncio.to_thread(self._vault.resolve, reference)
         if reference.startswith("provider:"):
-            return self._vault.resolve(f"vault:{reference}")
+            return await asyncio.to_thread(self._vault.resolve, f"vault:{reference}")
         raise ConnectorError("PROVIDER_AUTH_REQUIRED", "secret_resolver",
                              f"unknown secret reference kind",
                              action="Import the provider credential or use "
@@ -78,6 +86,7 @@ class LaunchOverlay:
 
     secret_bindings: dict[str, str] = field(default_factory=dict)
     http_templates: tuple[HarnessHTTPTemplate, ...] = ()
+    process_http: bool = False
     provider_home: str | None = None
     trusted_home: bool = False
     public_overrides: dict[str, str] = field(default_factory=dict)
@@ -91,7 +100,8 @@ def make_environment(resolver: LaunchSecretResolver, overlay: LaunchOverlay):
             http_templates=overlay.http_templates,
             provider_home=overlay.provider_home,
             trusted_home=overlay.trusted_home,
-            public_overrides=overlay.public_overrides)
+            public_overrides=overlay.public_overrides,
+            process_http=overlay.process_http)
     return environment
 
 
@@ -105,7 +115,10 @@ class CoreRuntimeHost:
         self._ledger_path = paths.owned_slot_ledger_path(root)
         # CN1/A03: keyed by the typed BindingKey — two Servers with the
         # same textual binding id never share an instance.
-        self._runtimes: dict[BindingKey, LocalRuntimeCore] = {}
+        self._runtimes: dict[BindingKey | ExecutionRuntimeKey, LocalRuntimeCore] = {}
+        self._execution_selections = {}
+        self._native_action_owners = {}
+        self._native_action_factories = {}
         self._journal: SQLiteJournal | None = None
         self._ledger: SQLiteOwnedSlotLedger | None = None
         # CN1/CN-05.05: single-flight initialization for the shared
@@ -272,6 +285,79 @@ class CoreRuntimeHost:
 
     # -- runtime composition ------------------------------------------------
 
+    async def approved_launch(self, store, *, frame, candidates, capability=None, http=None,
+                              capability_metadata=None):
+        from .launch_configuration import approved_launch_setup
+        return await approved_launch_setup(store, self._vault, frame=frame, candidates=candidates,
+                                           capability=capability, http=http, capability_metadata=capability_metadata,
+                                           tool_root=self.root / 'runtime' / 'r4-mcp')
+
+    async def build_r4(self, store, *, frame, candidates, environment, factory=None, native_action_factory=None):
+        """Compose an R4 runtime only from the approved host realization.
+
+        Composition is effect-free and does not install execution authority.
+        The connection owner must install the canonical lease before prepare.
+        Revalidate after shared-store waits and around the environment callback.
+        """
+        from .execution_selection import resolve_execution_selection
+        from nexus_connector_core.native_action_socket import PiNativeActionOwner
+        from nexus_connector_core import decode_r4_frame, encode_r4_frame
+        # Freeze caller-owned input before yielding; no mutable wire dict or
+        # candidate generator may retarget a build that is already waiting.
+        encoded = encode_r4_frame(frame)
+        candidates = tuple(candidates)
+        async def resolve():
+            return await asyncio.to_thread(resolve_execution_selection, store,
+                frame=decode_r4_frame(encoded), candidates=candidates)
+        selection = await resolve()
+        if native_action_factory is not None and (
+                not callable(native_action_factory) or selection.candidate.adapter_id != "pi_rpc"):
+            raise ConnectorError("VALIDATION_ERROR", "native_action_launch",
+                                 "A native action factory is only valid for an approved Pi installation.")
+        key = ExecutionRuntimeKey(selection.server_id, selection.executor_id,
+                                  selection.binding_id, selection.session_id)
+        journal = await self.ensure_journal()
+        ledger = await self.ensure_ledger()
+        if await resolve() != selection:
+            raise ConnectorError('PROFILE_DRIFT', 'runtime_composition', 'The approved execution selection changed.')
+        existing = self._runtimes.get(key)
+        if existing is not None:
+            if (self._execution_selections.get(key) != selection
+                    or self._native_action_factories.get(key) is not native_action_factory):
+                raise ConnectorError('OPERATION_CONFLICT', 'runtime_composition', 'The runtime has a different opening selection.')
+            return existing
+        async def checked_environment(prepared):
+            if await resolve() != selection:
+                raise ConnectorError('PROFILE_DRIFT', 'runtime_environment', 'The approved execution selection changed.')
+            value = await environment(prepared)
+            if await resolve() != selection:
+                raise ConnectorError('PROFILE_DRIFT', 'runtime_environment', 'The approved execution selection changed.')
+            return value
+        native_owner = None
+        async def native_launch(prepared, session_id, context):
+            if native_owner is None:
+                raise ConnectorError("BINDING_NOT_AUTHORIZED", "native_action_launch")
+            return await native_owner.launch(prepared, session_id, context)
+        runtime = create_runtime(journal=journal, environment=checked_environment,
+            # The approved binding and local consent select this exact entry.
+            # Preserve passive inventory evidence; only this scoped runtime
+            # receives the selected candidate required by Core.prepare.
+            candidates={selection.candidate.adapter_id: replace(selection.candidate, trust='selected')},
+            workspace_roots={selection.workspace_id: selection.workspace_root},
+            native_factory=factory, owned_slot_ledger=ledger,
+            native_approvals_from_lease=True,
+            pi_native_action=native_launch if native_action_factory is not None else None)
+        if native_action_factory is not None:
+            native_owner = native_action_factory(runtime)
+            if not isinstance(native_owner, PiNativeActionOwner):
+                raise ConnectorError("VALIDATION_ERROR", "native_action_launch",
+                                     "The native action factory must return an owned Pi ingress.")
+            self._native_action_owners[key] = native_owner
+            self._native_action_factories[key] = native_action_factory
+        self._runtimes[key] = runtime
+        self._execution_selections[key] = selection
+        return runtime
+
     async def build(self, binding: BindingRecord, *, environment,
                     factory=None, session_id: str | None = None
                     ) -> LocalRuntimeCore:
@@ -319,7 +405,7 @@ class CoreRuntimeHost:
         if server_id is not None:
             return self._runtimes.get(BindingKey(server_id, binding_id))
         matches = [runtime for key, runtime in self._runtimes.items()
-                   if key.binding_id == binding_id]
+                   if isinstance(key, BindingKey) and key.binding_id == binding_id]
         return matches[0] if len(matches) == 1 else None
 
     @property
@@ -327,7 +413,58 @@ class CoreRuntimeHost:
         # Compatibility view for diagnostics that still close stores.
         return [self._journal] if self._journal is not None else []
 
-    async def shutdown_all(self) -> list[tuple[str, str]]:
+    async def close_native_actions(self, key: ExecutionRuntimeKey, *, timeout_seconds=0):
+        owner = self._native_action_owners.get(key)
+        return owner is None or await owner.close(timeout_seconds=timeout_seconds)
+
+    async def binding_sessions_closed(self, *, server_id, executor_id, binding_id):
+        """Observe only the replacement target; unknown ownership refuses adoption."""
+        from nexus_connector_core import SessionKey
+        selected = [(key, runtime) for key, runtime in self._runtimes.items()
+                    if isinstance(key, ExecutionRuntimeKey) and
+                    (key.server_id, key.executor_id, key.binding_id) ==
+                    (server_id, executor_id, binding_id)]
+        snapshots = await asyncio.gather(*[
+            runtime.inspect(SessionKey(key.server_id, key.executor_id, key.session_id))
+            for key, runtime in selected], return_exceptions=True)
+        return all(not isinstance(snapshot, BaseException)
+                   and snapshot.lease_state == "CLOSED" and snapshot.ownership == "released"
+                   for snapshot in snapshots)
+
+    async def wait_executor_leases(self, *, server_id, executor_id, stop_event):
+        """Retain disconnected runtimes until Core observes lease expiry.
+
+        This is observation only: no lease is renewed and no runtime is
+        recreated. An explicit daemon stop can proceed to normal shutdown.
+        Storage/inspection failures propagate while ownership stays retained.
+        """
+        from nexus_connector_core import SessionKey
+
+        while not stop_event.is_set():
+            selected = [(key, runtime) for key, runtime in self._runtimes.items()
+                        if isinstance(key, ExecutionRuntimeKey) and
+                        (key.server_id, key.executor_id) == (server_id, executor_id)]
+            if not selected:
+                return
+            snapshots = await asyncio.gather(*[
+                runtime.inspect(SessionKey(key.server_id, key.executor_id, key.session_id))
+                for key, runtime in selected], return_exceptions=True)
+            for snapshot in snapshots:
+                if isinstance(snapshot, BaseException):
+                    raise snapshot
+            if not any(snapshot.lease_state not in ("EXPIRED", "REVOKED", "CLOSED")
+                       and snapshot.ownership != "released"
+                       for snapshot in snapshots):
+                return
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=0.1)
+            except TimeoutError:
+                pass
+
+    async def shutdown_executor(self, *, server_id, executor_id):
+        return await self.shutdown_all(_scope=(server_id, executor_id))
+
+    async def shutdown_all(self, *, _scope=None) -> list[tuple[str, str]]:
         """Bounded shutdown; unknown outcomes are never discarded.
 
         CN1/A08+CN-05.03: an instance whose report leaves any session
@@ -343,18 +480,32 @@ class CoreRuntimeHost:
         outcomes: list[tuple[str, str]] = []
         any_pending = False
         for key, runtime in list(self._runtimes.items()):
+            if _scope is not None and (not isinstance(key, ExecutionRuntimeKey) or
+                    (key.server_id, key.executor_id) != _scope):
+                continue
+            owner = self._native_action_owners.get(key)
+            if owner is not None:
+                await owner.close(timeout_seconds=0)
             report = await runtime.shutdown(ShutdownPolicy(30.0, 15.0))
-            resolved = True
+            native_pending = owner is not None and not await owner.close(timeout_seconds=0)
+            resolved = not native_pending
             for session_key, outcome in report.session_outcomes.items():
                 sid = getattr(session_key, "session_id", None)
                 if sid is None and isinstance(session_key, tuple)                         and session_key:
                     sid = session_key[-1]
+                if native_pending and session_key == owner.session_key:
+                    outcome = "unknown"
                 outcomes.append((sid, str(outcome)))
                 if str(outcome) not in ("graceful", "already_closed",
                                         "forced"):
                     resolved = False
+            if native_pending and owner.session_key not in report.session_outcomes:
+                outcomes.append((key.session_id, "unknown"))
             if resolved:
                 del self._runtimes[key]
+                self._execution_selections.pop(key, None)
+                self._native_action_owners.pop(key, None)
+                self._native_action_factories.pop(key, None)
             else:
                 any_pending = True
         if self._runtimes or not any_pending:

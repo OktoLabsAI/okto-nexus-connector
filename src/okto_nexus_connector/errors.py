@@ -49,6 +49,28 @@ class ConnectorError(Exception):
         )
 
 
+@dataclass(slots=True)
+class CapabilityMaterialUnavailable(ConnectorError):
+    """Non-secret recovery metadata; permission is rechecked on replacement."""
+
+    capability_id: str = ""
+    recovery_allowed: bool = False
+
+    def to_json(self) -> dict[str, object]:
+        return ConnectorError.to_json(self) | {
+            'capability_id': self.capability_id, 'recovery_allowed': self.recovery_allowed}
+
+
+@dataclass(slots=True)
+class TicketMaterialUnavailable(ConnectorError):
+    """The Server retained the request but cannot return its secret again."""
+
+    ticket_id: str = ""
+
+    def to_json(self) -> dict[str, object]:
+        return ConnectorError.to_json(self) | {"ticket_id": self.ticket_id}
+
+
 def auth_required(stage: str, message: str = "") -> ConnectorError:
     return ConnectorError("AGENT_AUTH_REQUIRED", stage, message,
                           action="Import a valid canonical agent key with "

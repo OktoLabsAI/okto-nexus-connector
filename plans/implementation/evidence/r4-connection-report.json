@@ -1,0 +1,149 @@
+{
+  "recorded_at": "2026-09-30T08:07:36.267767+00:00",
+  "status": "PARTIAL_M06_CONNECTION_OWNER_VERIFIED_NOT_DAEMON_ACCEPTANCE",
+  "parent_commit": "40a8cb07c183e000813afc63138270d77647a3a0",
+  "final_source_sha256": {
+    "src/okto_nexus_connector/transport/r4_connection.py": "f8dec9d4cbd72f8ab3626d3e8e958d04b1859f6710c8105c81c40064d69e5071",
+    "src/okto_nexus_connector/transport/wss_r4.py": "e71f9461638201dc6ab36d1bacb02eccf549e5e79e779fcf9f88c6aa62d5cdba",
+    "tests/contract/test_r4_connection.py": "645be6a51931728464090206bada3ce2a92bccbfd1e3ec0918a87d04753246f8"
+  },
+  "runs": [
+    {
+      "file": "plans/implementation/evidence/r4-connection-commit-barrier.xml",
+      "sha256": "29a3ce786d76d5142a80be1abb7eabeffe5482ee7b619cbf4628bf2b7d9a05cd",
+      "tests": 13,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "skip_reasons": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-connection-contracts-final.xml",
+      "sha256": "7b9cd7163b819547bc4fec93fc0a04fb0ea9d51b1238f45bf2a84bcb35c691f7",
+      "tests": 11,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "skip_reasons": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-connection-contracts-lifecycle.xml",
+      "sha256": "922812b66828c7c16302b673a5e5e4851bd6ea61279fa3ff4073a0d6888e0881",
+      "tests": 12,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "skip_reasons": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-connection-contracts.xml",
+      "sha256": "5bb6e28766c59018918846985ead88426fdf453e44e3aeaa45bf50a8efc57a6b",
+      "tests": 10,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 0,
+      "skip_reasons": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-connection-initial.xml",
+      "sha256": "fc6f2deb49aae40ea4e538cf2e3201f940c35aabc396159499b5c418b2d79057",
+      "tests": 2,
+      "errors": 2,
+      "failures": 0,
+      "skipped": 0,
+      "skip_reasons": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-connection-regression-final.xml",
+      "sha256": "88f9e1c65b9234aa4d194b020462ce3b48c7fe72ebe7cfc9bd1371eaed31368c",
+      "tests": 258,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 2,
+      "skip_reasons": [
+        {
+          "nodeid": "tests.regressoes.test_connector_audit::test_27_start_session_capability_is_referenced_in_effective_environment",
+          "reason": "lab peer lacks full contract surface: BINDING_NOT_AUTHORIZED"
+        },
+        {
+          "nodeid": "tests.unit.test_core02_integration::test_shim_resolution_never_runs_outside_windows",
+          "reason": "covered above"
+        }
+      ]
+    },
+    {
+      "file": "plans/implementation/evidence/r4-connection-regression.xml",
+      "sha256": "74e8b83e5e9d821d74b19cbafcf47a0e40d44161235d0ffa70bb43baab5e2390",
+      "tests": 255,
+      "errors": 0,
+      "failures": 0,
+      "skipped": 2,
+      "skip_reasons": [
+        {
+          "nodeid": "tests.regressoes.test_connector_audit::test_27_start_session_capability_is_referenced_in_effective_environment",
+          "reason": "lab peer lacks full contract surface: BINDING_NOT_AUTHORIZED"
+        },
+        {
+          "nodeid": "tests.unit.test_core02_integration::test_shim_resolution_never_runs_outside_windows",
+          "reason": "covered above"
+        }
+      ]
+    },
+    {
+      "file": "plans/implementation/evidence/r4-connection-targeted-final.xml",
+      "sha256": "c2e106297f3fe785d63335a6895d65a0b69daeef414f339b5e377a856b4e891d",
+      "tests": 10,
+      "errors": 0,
+      "failures": 1,
+      "skipped": 0,
+      "skip_reasons": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-connection-targeted-rerun.xml",
+      "sha256": "2dc2c087d2b6e8ebe582d0dd4dfa49243a2d6d08485ed2481a1b09714e87aa5d",
+      "tests": 10,
+      "errors": 0,
+      "failures": 3,
+      "skipped": 0,
+      "skip_reasons": []
+    },
+    {
+      "file": "plans/implementation/evidence/r4-connection-targeted.xml",
+      "sha256": "5eec75a6d2070829375dcfacf3aa19049e5c93b1d78fc4dbf9e12fb22e0bbb3a",
+      "tests": 1,
+      "errors": 1,
+      "failures": 0,
+      "skipped": 0,
+      "skip_reasons": []
+    }
+  ],
+  "source_python": "C:/Users/jpamb/AppData/Local/Temp/okto-r4-connection-source-unf1oud0/Scripts/python.exe",
+  "final_regression_command": "rtk proxy C:/Users/jpamb/AppData/Local/Temp/okto-r4-connection-source-unf1oud0/Scripts/python.exe -X utf8 -m pytest tests -q --tb=line --junitxml=plans/implementation/evidence/r4-connection-regression-final.xml",
+  "final_contract_command": "rtk proxy C:/Users/jpamb/AppData/Local/Temp/okto-r4-connection-source-unf1oud0/Scripts/python.exe -X utf8 -m pytest tests/contract/test_r4_connection.py tests/contract/test_wss_r4.py -q --tb=line --junitxml=plans/implementation/evidence/r4-connection-commit-barrier.xml",
+  "wheel": {
+    "stage": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-connection-final-build-mtj5kvqg",
+    "wheel": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\okto-r4-connection-final-wheel-6u9l_o5y\\okto_nexus_connector-0.5.0.dev0-py3-none-any.whl",
+    "sha256": "8366c22298f582b38b6c2e24f24f6bb1c12e020ec63db859e8a2df2218f78981"
+  },
+  "core_wheel_sha256": "27df75100dea033ca5456f2d571eb41b6311fa3ce530a723ecd6c606d257953c",
+  "coordinated_evidence": {
+    "repository": "nexus",
+    "file": "plans/r4_execution/test_runs_20260930_connection_owner.json",
+    "final_installed_tests": 28,
+    "failures": 0,
+    "skipped": 0
+  },
+  "history": [
+    "Global Python had an old Core package; collection failed before test execution. A new source venv installed the pinned wheel.",
+    "Test helper import, strict lease grant shape, and Core context field assertions were corrected with failures preserved.",
+    "Initial whole-suite run passed 253 cases with two skips. Two lifecycle/capacity cases and the commit-barrier case were subsequently added.",
+    "The real installed WSS integration exposed an HTTP receipt overtaking lease.applied. The connection owner now confirms Server processing with an identical same-request replay before returning.",
+    "Final source suite passed 256 cases with two explicitly recorded skips; 13 directed contracts and 28 installed coordinated cases passed. Campaigns overlap."
+  ],
+  "remaining": [
+    "Daemon/StateStore composition and physical realization resolver.",
+    "Nonempty reconciliation, durable receipt/event replay, governance and all notification frames.",
+    "Embedded owner, UI/CLI, global limits/shutdown and provider/multi-host qualification."
+  ],
+  "product_gates_closed": []
+}

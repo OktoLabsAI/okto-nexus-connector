@@ -9,6 +9,7 @@ adapter protocols owned by the Core.
 from __future__ import annotations
 
 import ast
+import pytest
 from pathlib import Path
 
 import okto_nexus_connector
@@ -22,12 +23,34 @@ def _python_files():
     return [p for p in PACKAGE.rglob("*.py")]
 
 
+def _mcp_imports(source):
+    modules = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0:
+            modules.append(node.module or "")
+    return [name for name in modules if name == "mcp" or name.startswith("mcp.")]
+
+
+@pytest.mark.parametrize("source, forbidden", [
+    ("import mcp", True),
+    ("import json, mcp as sdk", True),
+    ("import mcp.server", True),
+    ("from mcp.server import Server", True),
+    ("from mcp import ClientSession", True),
+    ("from .mcp_launch import mcp_template", False),
+    ("from nexus_connector_core.harness_config import harness_http_template", False),
+])
+def test_mcp_import_boundary_checks_modules(source, forbidden):
+    assert bool(_mcp_imports(source)) is forbidden
+
+
 def test_no_mcp_imports_or_entrypoints():
     """No MCP SDK dependency, no mcp entrypoints, no envelope handling."""
     for path in _python_files():
         source = path.read_text(encoding="utf-8")
-        assert "import mcp" not in source, path
-        assert "from mcp" not in source, path
+        assert not _mcp_imports(source), path
         assert "ModelContextProtocol" not in source, path
     pyproject = SRC / "pyproject.toml"
     if pyproject.exists():

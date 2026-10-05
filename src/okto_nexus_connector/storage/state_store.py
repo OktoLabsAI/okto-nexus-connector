@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 13
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -91,12 +91,167 @@ class BindingRecord:
 
 
 @dataclass(slots=True)
+class LocalRealizationRecord:
+    """Executor-only root and candidate mapping; never sent as a whole."""
+
+    client_intent_id: str
+    server_id: str
+    executor_id: str
+    agent_id: str
+    local_realization_ref: str
+    realization_revision: int
+    workspace_id: str | None
+    workspace_label: str
+    workspace_root: str
+    adapter_id: str
+    candidate_ref: str
+    candidate_executable: str
+    candidate_fingerprint: str
+    candidate_source: str
+    candidate_trust: str
+    candidate_launch_script: str | None
+    candidate_build_identity: str | None
+    candidate_version: str | None
+    candidate_architecture: str | None
+    inventory_revision: str
+    local_root_proof_digest: str
+    root_proof_nonce: str
+    configuration_digest: str
+    local_consent_id: str
+    canonical_workspace_id: str = ""
+    realization_ref: str = ""
+    workspace_binding_id: str = ""
+    status: str = "LOCAL_VALIDATED"
+
+
+@dataclass(slots=True)
+class ExecutionBindingRecord:
+    """Approved R4 mapping, separate from legacy bindings and runtime grants."""
+
+    binding_id: str
+    server_id: str
+    executor_id: str
+    agent_id: str
+    endpoint_id: str
+    workspace_id: str
+    workspace_binding_id: str
+    adapter_id: str
+    candidate_ref: str
+    inventory_revision: str
+    realization_ref: str
+    realization_revision: int
+    binding_revision: int
+    authorization_revision: int
+    configuration_revision: int
+    state: str
+    realization_snapshot_digest: str
+
+
+@dataclass(slots=True)
+class ExecutionExecutorRecord:
+    """Durable R4 registration intent and result; never a stored ticket."""
+
+    server_id: str
+    connector_id: str
+    registration_agent_id: str
+    client_intent_id: str
+    label: str
+    control_capabilities: tuple[str, ...] = ()
+    executor_id: str = ""
+    state: str = "REGISTRATION_PENDING"
+    # Reserved before publishing; gaps after failure are valid, reuse is not.
+    inventory_publication_sequence: int = 0
+    # Local discovery scope only; never runtime or binding authority.
+    discovery_configuration: dict[str, Any] = field(default_factory=dict)
+    # Explicit, byte-bound version observations; never execution authority.
+    installation_observations: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class SessionCapabilityRecord:
+    """Durable issuance intent and vault reference; never credential material."""
+
+    reservation_id: str
+    request_id: str
+    request_digest: str
+    server_id: str
+    executor_id: str
+    session_id: str
+    audience: str
+    secret_handle: str
+    status: str = "REQUESTED"
+    capability_id: str = ""
+    capability_ref: str = ""
+    recovery_allowed: bool = False
+
+
+@dataclass(slots=True)
+class LaunchConfigurationRecord:
+    """Executor-local approved configuration; the Server receives only its digest."""
+
+    server_id: str
+    executor_id: str
+    agent_id: str
+    local_consent_id: str
+    adapter_id: str
+    profile_revision: int
+    secret_bindings: dict[str, str]
+    provider_home: str | None
+    home_device: str | None
+    home_inode: str | None
+    configuration_digest: str
+
+
+@dataclass(slots=True)
+class BindingIntentRecord:
+    server_id: str
+    executor_id: str
+    agent_id: str
+    identity_alias: str
+    client_intent_id: str
+    alias: str
+    realization_ref: str
+    scope_digest: str
+    status: str = "PREPARE_PENDING"
+    proposal: dict[str, Any] | None = None
+    proposal_digest: str = ""
+    apply_client_intent_id: str = ""
+    approved_diff_hash: str = ""
+    operator_proof_ref: str | None = None
+    binding_id: str = ""
+    replace_binding_id: str | None = None
+    replacement_snapshot: dict[str, Any] | None = None
+    applied_binding: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
+class RuntimeIntentRecord:
+    server_id: str
+    agent_id: str
+    alias: str
+    client_intent_id: str
+    request_digest: str
+    scope_digest: str
+    status: str = "RESOLVE_PENDING"
+    resolution: dict[str, Any] | None = None
+    resolution_digest: str = ""
+    operation: dict[str, Any] | None = None
+
+
+@dataclass(slots=True)
 class ConnectorState:
     schema_version: int = SCHEMA_VERSION
     connector_id: str = ""
     servers: dict[str, ServerProfileRecord] = field(default_factory=dict)
     identities: list[IdentityRecord] = field(default_factory=list)
     bindings: list[BindingRecord] = field(default_factory=list)
+    realizations: list[LocalRealizationRecord] = field(default_factory=list)
+    execution_bindings: list[ExecutionBindingRecord] = field(default_factory=list)
+    execution_executors: list[ExecutionExecutorRecord] = field(default_factory=list)
+    session_capabilities: list[SessionCapabilityRecord] = field(default_factory=list)
+    launch_configurations: list[LaunchConfigurationRecord] = field(default_factory=list)
+    binding_intents: list[BindingIntentRecord] = field(default_factory=list)
+    runtime_intents: list[RuntimeIntentRecord] = field(default_factory=list)
     preferences: dict[str, Any] = field(default_factory=dict)
 
     # -- lookups ---------------------------------------------------------
@@ -130,14 +285,11 @@ class StateStore:
         self.lock_path = path.with_suffix(".lock")
 
     def load(self) -> ConnectorState:
-        try:
-            raw = self.path.read_bytes()
-        except FileNotFoundError:
-            return ConnectorState()
-        if len(raw) > 4 * 1024 * 1024:
-            raise ConnectorError("CAPACITY_EXCEEDED", "state_load")
-        payload = json.loads(raw.decode("utf-8"))
-        return state_from_json(payload)
+        # Windows readers must not open the snapshot during os.replace.
+        # Use the same cross-process lock as writers, including across
+        # separate StateStore instances used by CLI and daemon IPC.
+        with self.locked():
+            return _load_unlocked(self.path)
 
     def save(self, state: ConnectorState) -> None:
         """Replace the whole state snapshot atomically under the lock.
@@ -221,6 +373,22 @@ def state_from_json(payload: dict[str, Any]) -> ConnectorState:
         if not record.candidate_architecture:
             record.needs_rediscovery = True
         state.bindings.append(record)
+    for item in payload.get("realizations", []):
+        state.realizations.append(LocalRealizationRecord(**item))
+    for item in payload.get("execution_bindings", []):
+        state.execution_bindings.append(ExecutionBindingRecord(**item))
+    for item in payload.get("execution_executors", []):
+        record = dict(item)
+        record["control_capabilities"] = tuple(record.get("control_capabilities", ()))
+        state.execution_executors.append(ExecutionExecutorRecord(**record))
+    for item in payload.get("session_capabilities", []):
+        state.session_capabilities.append(SessionCapabilityRecord(**item))
+    for item in payload.get("launch_configurations", []):
+        state.launch_configurations.append(LaunchConfigurationRecord(**item))
+    for item in payload.get("binding_intents", []):
+        state.binding_intents.append(BindingIntentRecord(**item))
+    for item in payload.get("runtime_intents", []):
+        state.runtime_intents.append(RuntimeIntentRecord(**item))
     preferences = payload.get("preferences", {})
     if isinstance(preferences, dict):
         state.preferences = preferences
@@ -235,6 +403,13 @@ def state_to_json(state: ConnectorState) -> dict[str, Any]:
                     for key, value in state.servers.items()},
         "identities": [asdict(value) for value in state.identities],
         "bindings": [asdict(value) for value in state.bindings],
+        "realizations": [asdict(value) for value in state.realizations],
+        "execution_bindings": [asdict(value) for value in state.execution_bindings],
+        "execution_executors": [asdict(value) for value in state.execution_executors],
+        "session_capabilities": [asdict(value) for value in state.session_capabilities],
+        "launch_configurations": [asdict(value) for value in state.launch_configurations],
+        "binding_intents": [asdict(value) for value in state.binding_intents],
+        "runtime_intents": [asdict(value) for value in state.runtime_intents],
         "preferences": state.preferences,
     }
 
@@ -244,6 +419,8 @@ def _load_unlocked(path: Path) -> ConnectorState:
         raw = path.read_bytes()
     except FileNotFoundError:
         return ConnectorState()
+    if len(raw) > 4 * 1024 * 1024:
+        raise ConnectorError("CAPACITY_EXCEEDED", "state_load")
     return state_from_json(json.loads(raw.decode("utf-8")))
 
 
