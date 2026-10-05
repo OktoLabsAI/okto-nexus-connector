@@ -904,7 +904,6 @@ async def test_19_noninteractive_connect_does_not_prompt(tmp_path,
     monkeypatch.setattr(connect_module, "_remember_server", lambda *a: None)
     monkeypatch.setattr(connect_module, "_choose_harness",
                         noop)
-    monkeypatch.setattr(connect_module, "create_binding", noop)
     from okto_nexus_connector.daemon import manager as daemon_manager
     monkeypatch.setattr(daemon_manager, "start",
                         lambda root: {"started": True})

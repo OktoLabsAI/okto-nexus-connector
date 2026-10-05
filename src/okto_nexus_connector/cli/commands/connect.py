@@ -19,7 +19,6 @@ from ...identity.import_flow import (
 )
 from ...identity.vault import open_vault, vault_backend_names
 from ...platform import paths
-from ...services.connect_service import create_binding
 from ...services.discovery_service import (
     discover_inventory, known_adapter, pi_candidate, probe_version,
     select_explicit,
@@ -55,6 +54,10 @@ def _read_key(args, output: Output) -> str:
 
 
 async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
+    if args.non_interactive:
+        raise ConnectorError('VALIDATION_ERROR', 'connect',
+            'connect is an interactive R4 connection wizard.',
+            action='Use connection-config apply with explicit parameters for automation.')
     store = StateStore(paths.state_file(root))
     # 1. Identity import with /me validation and hint comparison.
     key = _read_key(args, output)
@@ -96,74 +99,39 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
         output.line(f"identity ok: {identity_result.identity.alias} -> "
                     f"{identity_result.me_agent_id}")
 
-        # 2. Local discovery; explicit selection only (TC-11).
-        adapter_id, candidate, version = await _choose_harness(
-            args, output)
-        output.line(f"harness selected: {adapter_id} "
-                    f"({candidate.executable}"
-                    f"{', version ' + version if version else ''})")
 
-        # 3. Resolve the project from cwd (C03.2).
-        project = (args.project or Path.cwd()).resolve()
-        if not project.is_dir():
-            raise ConnectorError("WORKSPACE_UNAVAILABLE", "connect",
-                                 f"project directory not found: {project}")
+    # The current Server accepts R4 registrations, realizations and binding
+    # proposals. Share the durable wizard used by configure; never send the
+    # obsolete executor/workspace_hint binding payload.
+    from types import SimpleNamespace
+    from nexus_connector_core.installation import effective_installation_ref
+    from .configure import template
+    from .configure_local import configure_local
 
-        # One aggregated confirmation (plan 2.1); human-readable preview
-        # only — the structured form travels in the final result payload.
-        from ...services.connect_service import aggregated_confirmation
-        confirmation = aggregated_confirmation(
-            server_url=args.server,
-            me_agent_id=identity_result.me_agent_id,
-            identity_alias=identity_result.identity.alias,
-            adapter_id=adapter_id, executable=candidate.executable,
-            version=version, workspace_root=str(project))
-        for line in _render_confirmation(confirmation):
-            output.line(line)
-        # CN1/A14: the aggregated confirmation honors non-interactive.
-        approved = (args.non_interactive or
-                    confirm("Create this binding?",
-                            non_interactive=args.non_interactive,
-                            default=True))
-        if not approved:
-            return {"connected": False, "aborted": True,
-                    "identity_alias": identity_result.identity.alias}
-
-        # 5. Prepare/apply the binding and persist locally (idempotent).
-        summary = await create_binding(
-            http, store, identity=identity_result, key=key,
-            alias=args.binding_alias or _binding_alias(adapter_id),
-            adapter_id=adapter_id, candidate=candidate, version=version,
-            workspace_root=project, server_url=args.server)
-        if args.trusted_provider_home:
-            store.update(lambda s: s.preferences.update(
-                {f"binding.{summary.binding.binding_id}."
-                 f"trusted_provider_home": True}))
-    payload = summary.to_json()
-
-    # 6. Ensure the daemon; start a runtime only when asked.
-    from ...daemon import manager
-    started = manager.start(root)
-    payload["daemon"] = started
-    try:
-        client = manager.connect(root)
-    except ConnectorError:
-        client = None
-    if client is not None:
-        try:
-            client.call("state.reload")
-        finally:
-            client.close()
-    if args.start:
+    identity = identity_result.identity
+    request_id = getattr(args, 'request_id', None)
+    saved = store.load().preferences.get(
+        f'configure.{identity.server_id}.{identity.agent_id}.{request_id}') if request_id else None
+    candidate_ref = None
+    portable = template()
+    if not saved:
+        adapter_id, candidate, version = await _choose_harness(args, output)
+        output.line(f'harness selected: {adapter_id} ({candidate.executable}, version {version})')
+        candidate_ref = effective_installation_ref(candidate)
+        portable.update(adapter_id=adapter_id, alias=args.binding_alias or _binding_alias(adapter_id))
+    wizard = SimpleNamespace(identity=identity.alias, agent=args.agent, request_id=request_id,
+        candidate_ref=candidate_ref, project=str(args.project.resolve()) if args.project else None,
+        workspace_label=None, provider_home=getattr(args, 'provider_home', None),
+        workspace_id=None, binding_id=None,
+        operator_identity=getattr(args, 'operator_identity', None),
+        operator_proof_ref=getattr(args, 'operator_proof_ref', None))
+    result = await configure_local(wizard, output, root, store, identity, args.server, portable)
+    if result.get('saved') and args.start:
         from .runtime import start_runtime
-        result = await start_runtime(
-            output, root, alias=summary.binding.alias,
-            project=None, harness=None, new_session=False, text=None)
-        payload["runtime_start"] = result
-    payload["connected"] = True
-    output.line(f"connected: binding {summary.binding.alias} "
-                f"({summary.binding.binding_id})")
-    return payload
+        result['runtime_start'] = await start_runtime(output, root,
+            alias=result['connection_name'], project=None, harness=None, new_session=False, text=None)
+        result['runtime_started'] = True
+    return result
 
 
 def _default_alias(args) -> str:
@@ -194,6 +162,7 @@ def _binding_alias(adapter_id: str) -> str:
 async def _choose_harness(args, output: Output):
     """Discovery + selection; nothing is executed during discovery."""
     inventory = await discover_inventory()
+    executable_choice = None
     if args.harness:
         adapter_id = args.harness
         if not known_adapter(adapter_id):

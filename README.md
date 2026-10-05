@@ -69,8 +69,19 @@ reconnects use a separate backoff. Previously submitted work is never replayed
 by the recovery supervisor. The `configure` wizard and JSON imports use the
 same automatic-message default as Nexus.
 
-**Managed execution hosts currently require Windows or Linux.** Native macOS
-execution is unsupported; see [platform support](#platform-support-before-installation).
+See [platform support](#platform-support-before-installation) for native execution requirements.
+
+`connect --server URL --agent AGENT` imports the agent key through a hidden prompt
+and uses the same R4 onboarding as `configure`: host registration, installation
+inventory, local configuration, realization and a binding proposal. Select
+**Remote** for the agent in Nexus first. Approval and execution authorization
+remain on the Server; a pending approval is not a completed connection.
+The command prints a request ID. Resume with `connect --server URL --agent AGENT
+--request-id ID` (using the same identity alias), or the printed `configure`
+command. `--operator-identity` selects an already imported operator identity
+when applying Nexus policies. `--start` starts only after setup succeeds.
+`connect` is interactive; for automation use `connection-config apply` and the
+explicit R4 executor/binding commands.
 
 - Distribution `okto-nexus-connector`, import `okto_nexus_connector`,
   Python ≥ 3.11, entry point `okto-nexus-connector`, consuming
@@ -91,7 +102,7 @@ execution is unsupported; see [platform support](#platform-support-before-instal
 |---|---|
 | Windows | Job Object backend; requires successful containment preflight and a qualified provider build |
 | Linux | procfs, child tracking, pidfd and subreaper backend; requires successful preflight and a qualified provider build |
-| macOS | Unsupported: no qualified Core containment backend; managed launches are refused |
+| macOS | libproc process identity for daemon ownership; native execution requires successful Core containment preflight and a qualified provider build |
 
 Installation, passive discovery and an available macOS keyring do not qualify
 managed execution. The final Windows/Linux provider matrix remains under
