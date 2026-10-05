@@ -346,6 +346,7 @@ class R4DaemonControl:
             poll_refresh_at = self.clock() + 5
             from .r4_execution import R4DaemonExecution
             self.execution = R4DaemonExecution(self, http, recovered_lanes=recovered_lanes)
+            onboarding_task = None
             try:
                 await self.execution.sync()
                 self.phase, self.error_code = 'CONTROL_READY', None
@@ -353,8 +354,12 @@ class R4DaemonControl:
                 logging.getLogger(__name__).info('Runtime connected: server=%s executor=%s',
                                                  self.server_id, self.executor_id)
                 renew_at = self.clock() + max(0, bootstrap.deadline_monotonic - self.clock()) * 0.7
+                onboarding_at = self.clock()
                 while not self._stopped.is_set() and self.connection.online:
                     await self._require(snapshot)
+                    if self.clock() >= onboarding_at and (onboarding_task is None or onboarding_task.done()):
+                        onboarding_task = asyncio.create_task(self._continue_onboarding())
+                        onboarding_at = self.clock() + 5
                     await self.execution.sync()
                     if self.clock() >= renew_at:
                         # A bootstrap cannot rotate an attached lane or renew a
@@ -379,12 +384,25 @@ class R4DaemonControl:
                     getattr(error, 'code', 'CONTROL_DISCONNECTED'), type(error).__name__)
                 raise
             finally:
+                if onboarding_task is not None and not onboarding_task.done():
+                    onboarding_task.cancel()
+                    await asyncio.gather(onboarding_task, return_exceptions=True)
                 self.phase = 'DRAINING'
                 self._retained_lanes.update(self.execution.lanes)
                 await self.execution.close(
                     preserve_leases=not self._stopped.is_set() and not self.connection.online,
                     stop_event=self._stopped)
                 self.execution = None
+
+    async def _continue_onboarding(self):
+        from ..services.background_onboarding import continue_pending_bindings
+        try:
+            await continue_pending_bindings(self.store, self.vault,
+                server_id=self.server_id, executor_id=self.executor_id,
+                http_factory=self.http_factory)
+        except Exception as error:
+            logging.getLogger(__name__).warning('Background onboarding interrupted: code=%s exception=%s',
+                getattr(error, 'code', 'ONBOARDING_ERROR'), type(error).__name__)
 
     async def _run(self):
         from nexus_connector_core import RuntimeAutomation, RuntimeAutomationPolicy

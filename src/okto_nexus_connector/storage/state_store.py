@@ -221,6 +221,7 @@ class BindingIntentRecord:
     binding_id: str = ""
     replace_binding_id: str | None = None
     replacement_snapshot: dict[str, Any] | None = None
+    connection_configuration: dict[str, Any] | None = None
     applied_binding: dict[str, Any] | None = None
 
 

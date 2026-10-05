@@ -12,7 +12,7 @@ import uuid
 from nexus_connector_core import discover_harness_configuration, calculate_inventory_revision
 from nexus_connector_core.installation import effective_installation_ref
 from nexus_connector_core.provider_discovery import discover_provider_home
-from nexus_connector_core.connection_configuration import materialize_connection_configuration
+from nexus_connector_core.connection_configuration import materialize_connection_configuration, parse_portable_connection_configuration
 from ...errors import ConnectorError
 from ...services.discovery_configuration import configured_candidates
 from ...services.installation_observation import observe_installation
@@ -74,7 +74,7 @@ async def configure_local(args,output,root,store,identity,server,portable):
         configuration=materialize_connection_configuration(portable,execution_location='remote',
             workspace_root=project,workspace_label=label,provider_home=home)
         output.line(f'Review: agent {identity.agent_id} at {server}; installation {selected}; workspace {project}; login {home or "harness default"}.')
-        output.line('Nexus policies and execution authorization still require an operator. This wizard never bypasses Server approval.')
+        output.line('Approve this connection and its requested execution limits once in Nexus. Setup will continue automatically.')
         if not choice('7. Finish local setup and submit this connection?',[(True,'Finish'),(False,'Cancel')],False):
             return {'saved':False,'canceled':True}
         saved=dict(configuration=configuration,candidate_ref=selected,inventory_revision=calculate_inventory_revision(candidates),
@@ -83,7 +83,7 @@ async def configure_local(args,output,root,store,identity,server,portable):
         store.update(lambda s:s.preferences.update({storage_key:saved}))
     elif saved['identity']!=args.identity:
         raise ConnectorError('OPERATION_CONFLICT','configure','Resume with the original identity.')
-    output.line('Request ID: '+args.request_id+' — resume with configure --identity '+args.identity+' --request-id '+args.request_id)
+    output.line('Request ID: '+args.request_id)
     if saved['stage']=='done':return saved['result']
     c=saved['configuration']
     vault=_vault(root,store)
@@ -135,9 +135,14 @@ async def configure_local(args,output,root,store,identity,server,portable):
         checkpoint('prepare',realization_ref=publication['realization_ref'])
     bindings=BindingOnboarding(store,vault)
     if saved['stage']=='prepare':
+        requested = parse_portable_connection_configuration(c)
+        if requested['runtime_enabled'] is False:
+            raise ConnectorError('VALIDATION_ERROR', 'configure', 'Enable runtime access to connect this harness.')
+        requested['runtime_enabled'] = True
         proposal=await bindings.prepare(identity_alias=args.identity,realization_ref=saved['realization_ref'],
-            alias=c['alias'],client_intent_id=args.request_id+'_prepare',replace_binding_id=saved['replace_binding_id'])
-        checkpoint('apply',proposal=proposal['proposal'])
+            alias=c['alias'],client_intent_id=args.request_id+'_prepare',replace_binding_id=saved['replace_binding_id'],
+            connection_configuration=requested)
+        checkpoint('apply',proposal=proposal['proposal'],single_approval=True)
     if saved['stage']=='apply':
         proposal=saved['proposal']
         proofs=[ref for ref in proposal['required_approvals'] if ref.startswith('apr_')]
@@ -146,10 +151,19 @@ async def configure_local(args,output,root,store,identity,server,portable):
             applied=await bindings.apply(identity_alias=args.identity,prepare_intent_id=args.request_id+'_prepare',
                 client_intent_id=args.request_id+'_apply',approved_diff_hash=proposal['approved_diff_hash'],operator_proof_ref=proof)
         except ConnectorError as exc:
-            if exc.code not in ('APPROVAL_REQUIRED','PERMISSION_DENIED','BINDING_NOT_AUTHORIZED'):raise
+            if exc.code != 'APPROVAL_REQUIRED':
+                raise
+            output.line('Request submitted. Approve it in Nexus; the daemon will complete the connection in the background. You can close this terminal.')
             return dict(saved=False,status='awaiting_operator_approval',request_id=args.request_id,
-                required_approvals=proposal['required_approvals'],message='Approve the binding in Nexus, then resume this request.')
+                required_approvals=proposal['required_approvals'],background=True,
+                message='The daemon will complete this connection automatically after approval in Nexus.')
         checkpoint('policies',binding=applied['binding'])
+    if saved.get('single_approval'):
+        checkpoint('done', result=dict(saved=True, request_id=args.request_id,
+            connection_name=c['alias'], binding=saved['binding'], runtime_started=False))
+        await ipc(root,'state.reload')
+        output.line('Connection approved and configured. The daemon will attach it automatically.')
+        return saved['result']
     operator=args.operator_identity
     if not operator:
         aliases=[i for i in store.load().identities if i.server_id==identity.server_id and not i.revoked]
