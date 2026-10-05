@@ -152,6 +152,8 @@ class R4DaemonControl:
             control_ready=bool(connection is not None and connection.online and
                                connection.state.control_ready and self.phase == 'CONTROL_READY'),
             execution_ready=bool(self.execution is not None and self.execution.ready), error_code=self.error_code,
+            execution_errors=dict(self.execution.owner.execution_errors)
+                if self.execution is not None and self.execution.owner is not None else {},
             recovery_required=self._recovery_error is not None, cleanup_pending=self.cleanup_pending,
             publication_sequence=self.publication_sequence, inventory_revision=self.inventory_revision,
             connection_generation=connection.state.connection_generation if connection else None,

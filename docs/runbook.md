@@ -95,6 +95,13 @@ No Nexus records or authorizations are deleted/revoked. Reconfiguring creates a 
 
 ## Reconnect all connections
 
+`HARNESS_ERROR` means the server connection is available but a harness operation
+failed. Inspect the per-connection error and `logs --errors`. A durable failed
+startup is reported to Nexus without disconnecting unrelated agents. Updating or
+repairing the harness and opening a new session can restore execution. The
+installation check now verifies native startup protocol as well as the version;
+it does not send a model request or prove provider login.
+
 Run okto-nexus-connector reconnect to gracefully stop and restart the daemon for the selected state directory. Configurations and credentials are preserved. Active harness executions may be interrupted during shutdown. The command returns when the daemon is ready; server connections complete asynchronously. Check okto-nexus-connector status and okto-nexus-connector logs --errors for progress. If shutdown cannot finish within 30 seconds, no second daemon is started.
 
 Automatic connection retries use delays of 2, 4, 8, 16 and 30 seconds, then continue every 30 seconds until the daemon is stopped, including reconciliation failures. Pending socket cleanup is retried before opening another connection. Retrying does not replay submitted work or bypass Nexus authorization.

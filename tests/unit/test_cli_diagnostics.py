@@ -15,6 +15,7 @@ from okto_nexus_connector.daemon.logging_setup import configure_logging
     (True, False, None, 'NOT_ATTACHED'),
     (True, True, None, 'CONNECTED'),
     (True, False, 'CONTROL_DISCONNECTED', 'CONNECTION_ERROR'),
+    (True, True, None, 'HARNESS_ERROR'),
 ])
 async def test_status_requires_live_agent_attachment(monkeypatch, tmp_path, running, attached, error, expected):
     state = NS(servers={'server': NS(base_url='http://nexus:8202')},
@@ -25,7 +26,8 @@ async def test_status_requires_live_agent_attachment(monkeypatch, tmp_path, runn
     monkeypatch.setattr(diagnostics.manager, 'status', lambda _: NS(running=running, pid=123 if running else None))
     client = NS(call=lambda _: {'ok': True, 'result': {'r4_controls': {'server': {
         'state': 'CONTROL_READY', 'control_ready': not error, 'execution_ready': attached,
-        'attached_bindings': ['binding'] if attached else [], 'error_code': error}}}}, close=lambda: None)
+        'attached_bindings': ['binding'] if attached else [], 'error_code': error,
+        'execution_errors': {'binding': 'NATIVE_PROTOCOL_INCOMPATIBLE'} if expected == 'HARNESS_ERROR' else {}}}}}, close=lambda: None)
     monkeypatch.setattr(diagnostics.manager, 'connect', lambda _: client)
     async def checked(*args):
         return {'local': {'connections': [{'binding_id':'binding', 'status':'CONNECTED'}]}}
@@ -34,6 +36,9 @@ async def test_status_requires_live_agent_attachment(monkeypatch, tmp_path, runn
     assert result['agents'][0]['status'] == expected
     assert result['servers'][0]['error'] == (error if running else None)
     assert 'secret_handle' not in str(result)
+    if expected == 'HARNESS_ERROR':
+        assert result['servers'][0]['control_ready'] is True
+        assert result['connections'][0]['error'] == 'NATIVE_PROTOCOL_INCOMPATIBLE'
 
 
 async def test_logs_are_persisted_redacted_and_filtered(tmp_path):
