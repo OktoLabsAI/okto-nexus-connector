@@ -378,7 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
         item._output_context = context
         if item is not parser:
             item.add_argument('--json', action='store_true', default=argparse.SUPPRESS,
-                              help='machine-readable JSON output (no interactive prompts)')
+                              help='machine-readable JSON output')
             item.add_argument('--verbose', action='store_true', default=argparse.SUPPRESS,
                               help='include technical details')
         for action in item._actions:
@@ -393,7 +393,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     output = Output(json_mode=args.json, verbose=args.verbose)
-    args.non_interactive = args.non_interactive or args.json
     from .commands import dispatch
     try:
         result = asyncio.run(dispatch(args, output))

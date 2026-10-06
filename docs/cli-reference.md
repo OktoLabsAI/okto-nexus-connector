@@ -58,7 +58,7 @@ usage: okto-nexus-connector clean [-h] [--yes] [--json] [--verbose]
 options:
   -h, --help  show this help message and exit
   --yes       explicitly confirm cleanup without prompting
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -76,7 +76,7 @@ positional arguments:
 
 options:
   -h, --help        show this help message and exit
-  --json            machine-readable JSON output (no interactive prompts)
+  --json            machine-readable JSON output
   --verbose         include technical details
 ```
 
@@ -95,7 +95,7 @@ options:
   --direct             disable proxy use, including environment proxies
   --no-proxy NO_PROXY  comma-separated bypass hosts, domains, or host:port
                        entries; * bypasses all
-  --json               machine-readable JSON output (no interactive prompts)
+  --json               machine-readable JSON output
   --verbose            include technical details
 ```
 
@@ -106,7 +106,7 @@ usage: okto-nexus-connector proxy show [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -117,7 +117,7 @@ usage: okto-nexus-connector proxy clear [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -129,7 +129,7 @@ usage: okto-nexus-connector reach [-h] --server SERVER [--json] [--verbose]
 options:
   -h, --help       show this help message and exit
   --server SERVER  Nexus Server base URL
-  --json           machine-readable JSON output (no interactive prompts)
+  --json           machine-readable JSON output
   --verbose        include technical details
 ```
 
@@ -185,7 +185,7 @@ options:
                         after binding approval
   --operator-proof-ref OPERATOR_PROOF_REF
                         operator approval reference from the binding proposal
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -239,7 +239,7 @@ options:
                         imported operator identity for Nexus configuration
   --operator-proof-ref OPERATOR_PROOF_REF
                         operator approval reference from Nexus
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -255,7 +255,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -274,7 +274,7 @@ options:
   --alias ALIAS
   --credential-stdin
   --credential-env CREDENTIAL_ENV
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -285,7 +285,7 @@ usage: okto-nexus-connector identity list [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -299,7 +299,7 @@ positional arguments:
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -313,7 +313,7 @@ positional arguments:
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -333,7 +333,7 @@ options:
   -h, --help            show this help message and exit
   --credential-stdin
   --credential-env CREDENTIAL_ENV
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -359,7 +359,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -378,7 +378,7 @@ options:
   --client-intent-id CLIENT_INTENT_ID
                         explicit registration intent ID; otherwise persisted
                         automatically
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -389,7 +389,7 @@ usage: okto-nexus-connector executor list [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -403,7 +403,7 @@ positional arguments:
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -429,7 +429,7 @@ options:
   --secret-ref NAME=REFERENCE
                         protected vault/provider reference; never credential
                         material
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -459,7 +459,7 @@ options:
   --project PROJECT
   --workspace-id WORKSPACE_ID
   --label LABEL
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -482,7 +482,7 @@ options:
   --pi-install-root PI_INSTALL_ROOT
                         approved Pi releases directory
   --pi-node PI_NODE     Node executable for the Pi releases
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -501,7 +501,7 @@ options:
   --harness HARNESS
   --candidate-ref CANDIDATE_REF
   --inventory-revision INVENTORY_REVISION
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -522,7 +522,7 @@ options:
                         passively enumerate Pi release layouts under this
                         installation root
   --pi-node PI_NODE     trusted Node executable pairing the Pi releases
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -540,7 +540,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -562,7 +562,7 @@ options:
                         Explicitly replace the reviewed binding realization.
   --alias ALIAS
   --client-intent-id CLIENT_INTENT_ID
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -585,7 +585,7 @@ options:
   --operator-proof-ref OPERATOR_PROOF_REF
                         explicit Server operator proof reference, when
                         required
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -607,7 +607,7 @@ options:
   --pi-node PI_NODE
   --alias ALIAS
   --project PROJECT
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -618,7 +618,7 @@ usage: okto-nexus-connector bind list [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -632,7 +632,7 @@ positional arguments:
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -649,7 +649,7 @@ positional arguments:
 options:
   -h, --help     show this help message and exit
   --keep-config
-  --json         machine-readable JSON output (no interactive prompts)
+  --json         machine-readable JSON output
   --verbose      include technical details
 ```
 
@@ -668,7 +668,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -695,7 +695,7 @@ options:
   --session-id SESSION_ID
                         select an existing compatible R4 session
   --text TEXT           initial turn text
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -708,7 +708,7 @@ usage: okto-nexus-connector runtime status [-h] [--alias ALIAS] [--json]
 options:
   -h, --help     show this help message and exit
   --alias ALIAS  read retained R4 sessions from the Server
-  --json         machine-readable JSON output (no interactive prompts)
+  --json         machine-readable JSON output
   --verbose      include technical details
 ```
 
@@ -725,7 +725,7 @@ positional arguments:
 options:
   -h, --help     show this help message and exit
   --alias ALIAS  select the retained R4 binding alias
-  --json         machine-readable JSON output (no interactive prompts)
+  --json         machine-readable JSON output
   --verbose      include technical details
 ```
 
@@ -741,7 +741,7 @@ positional arguments:
 options:
   -h, --help  show this help message and exit
   --follow
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -761,7 +761,7 @@ options:
   -h, --help            show this help message and exit
   --alias ALIAS
   --client-intent-id CLIENT_INTENT_ID
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -784,7 +784,7 @@ options:
   --client-intent-id CLIENT_INTENT_ID
   --expected-turn-id EXPECTED_TURN_ID
   --current-run
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -809,7 +809,7 @@ options:
   --expected-turn-id EXPECTED_TURN_ID
   --current-run
   --reason REASON
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -830,7 +830,7 @@ options:
   --alias ALIAS
   --client-intent-id CLIENT_INTENT_ID
   --reason REASON
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -845,7 +845,7 @@ options:
   -h, --help            show this help message and exit
   --alias ALIAS
   --client-intent-id CLIENT_INTENT_ID
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -862,7 +862,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -873,7 +873,7 @@ usage: okto-nexus-connector daemon start [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -884,7 +884,7 @@ usage: okto-nexus-connector daemon run [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -895,7 +895,7 @@ usage: okto-nexus-connector daemon status [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -906,7 +906,7 @@ usage: okto-nexus-connector daemon stop [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -921,7 +921,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -934,7 +934,7 @@ usage: okto-nexus-connector service install [-h] [--dry-run] [--json]
 options:
   -h, --help  show this help message and exit
   --dry-run
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -947,7 +947,7 @@ usage: okto-nexus-connector service uninstall [-h] [--dry-run] [--json]
 options:
   -h, --help  show this help message and exit
   --dry-run
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -958,7 +958,7 @@ usage: okto-nexus-connector service status [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -969,7 +969,7 @@ usage: okto-nexus-connector reconnect [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -981,7 +981,7 @@ usage: okto-nexus-connector status [-h] [--agent AGENT] [--json] [--verbose]
 options:
   -h, --help     show this help message and exit
   --agent AGENT  show one agent by canonical agent id
-  --json         machine-readable JSON output (no interactive prompts)
+  --json         machine-readable JSON output
   --verbose      include technical details
 ```
 
@@ -996,7 +996,7 @@ options:
   --follow         stream new log entries until Ctrl+C
   --errors         show warnings and errors only
   --tail 1..10000  maximum recent lines (default: 50)
-  --json           machine-readable JSON output (no interactive prompts)
+  --json           machine-readable JSON output
   --verbose        include technical details
 ```
 
@@ -1008,7 +1008,7 @@ usage: okto-nexus-connector doctor [-h] [--probe] [--json] [--verbose]
 options:
   -h, --help  show this help message and exit
   --probe     attempt live network probes
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -1024,7 +1024,7 @@ positional arguments:
 
 options:
   -h, --help     show this help message and exit
-  --json         machine-readable JSON output (no interactive prompts)
+  --json         machine-readable JSON output
   --verbose      include technical details
 ```
 
@@ -1035,7 +1035,7 @@ usage: okto-nexus-connector approvals list [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
-  --json      machine-readable JSON output (no interactive prompts)
+  --json      machine-readable JSON output
   --verbose   include technical details
 ```
 
@@ -1054,7 +1054,7 @@ options:
   -h, --help            show this help message and exit
   --cas-token CAS_TOKEN
                         CAS token correlating the pending request
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -1069,7 +1069,7 @@ positional arguments:
 
 options:
   -h, --help           show this help message and exit
-  --json               machine-readable JSON output (no interactive prompts)
+  --json               machine-readable JSON output
   --verbose            include technical details
 ```
 
@@ -1087,7 +1087,7 @@ options:
   --harness {codex_app_server,claude_stream,pi_rpc}
   --capability-ref CAPABILITY_REF
                         mcp-cap: reference issued by the Server
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -1108,7 +1108,7 @@ options:
   --capability-ref CAPABILITY_REF
   --file FILE
   --entry-name ENTRY_NAME
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -1125,7 +1125,7 @@ options:
   --harness HARNESS
   --file FILE
   --entry-name ENTRY_NAME
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -1148,7 +1148,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -1162,7 +1162,7 @@ usage: okto-nexus-connector harness-config describe [-h]
 options:
   -h, --help            show this help message and exit
   --harness {codex_app_server,claude_stream,pi_rpc}
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -1177,7 +1177,7 @@ options:
   -h, --help         show this help message and exit
   --file FILE
   --harness HARNESS
-  --json             machine-readable JSON output (no interactive prompts)
+  --json             machine-readable JSON output
   --verbose          include technical details
 ```
 
@@ -1192,7 +1192,7 @@ options:
   -h, --help            show this help message and exit
   --identity IDENTITY
   --endpoint-id ENDPOINT_ID
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -1212,7 +1212,7 @@ options:
   --file FILE
   --expected-revision EXPECTED_REVISION
                         revision reviewed with harness-config show
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
 
@@ -1227,7 +1227,7 @@ positional arguments:
 
 options:
   -h, --help        show this help message and exit
-  --json            machine-readable JSON output (no interactive prompts)
+  --json            machine-readable JSON output
   --verbose         include technical details
 ```
 
@@ -1240,7 +1240,7 @@ usage: okto-nexus-connector connection-config validate [-h] --file FILE
 options:
   -h, --help   show this help message and exit
   --file FILE
-  --json       machine-readable JSON output (no interactive prompts)
+  --json       machine-readable JSON output
   --verbose    include technical details
 ```
 
@@ -1282,6 +1282,6 @@ options:
                         login directory on the destination host; never
                         imported
   --execution-location {local,remote,all}
-  --json                machine-readable JSON output (no interactive prompts)
+  --json                machine-readable JSON output
   --verbose             include technical details
 ```
