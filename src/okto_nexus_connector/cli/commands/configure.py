@@ -21,7 +21,7 @@ def template():
     return dict(format='okto-nexus-connection',version=2,adapter_id='',runtime_enabled=True,
         session_policy=None,alias='',harness_settings={},
         automatic_reply=DEFAULT_RUNTIME_AUTOMATION.automatic_messages,tool_access='ask',
-        authorization=dict(minutes=60,actions=20))
+        authorization=dict(minutes=60,actions=20,no_expiry=False,unlimited_actions=False))
 
 
 async def select_identity(args, output, root):

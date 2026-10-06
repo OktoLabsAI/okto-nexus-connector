@@ -57,7 +57,7 @@ Export from Nexus Connections, **Host & harness**. Example:
   "harness_settings": {},
   "automatic_reply": true,
   "tool_access": "ask",
-  "authorization": {"minutes": 60, "actions": 20}
+  "authorization": {"minutes": 60, "actions": 20, "no_expiry": false, "unlimited_actions": false}
 }
 ```
 
@@ -70,7 +70,7 @@ okto-nexus-connector configure --identity assistant --file connection.json --pro
 
 Paths above are examples on the Connector computer. On Windows use existing absolute paths such as `"C:\Work\My Project"`. Model/account login remains on the execution computer.
 
-Session policy values are `shared`, `per_sender`, `per_sender_session`, or `null` (inherit the server default). Automatic replies are enabled; imported `automatic_reply` is normalized to true. A remote runtime binding requires runtime access enabled. Configure MCP-only access in Nexus rather than submitting a disabled remote runtime binding. Remote runtime authorization requires finite duration and action limits.
+Session policy values are `shared`, `per_sender`, `per_sender_session`, or `null` (inherit the server default). Automatic replies are enabled; imported `automatic_reply` is normalized to true. A remote runtime binding requires runtime access enabled. Configure MCP-only access in Nexus rather than submitting a disabled remote runtime binding. In `authorization`, `0` means unlimited and is sent with `no_expiry: true` (duration) or `unlimited_actions: true` (actions); the wizard accepts `0` for either. Older files with `null` limits are read as `0` plus the flag. Remote runtime authorization requires finite duration and action limits.
 
 ## Server-hosted setup and automation
 
