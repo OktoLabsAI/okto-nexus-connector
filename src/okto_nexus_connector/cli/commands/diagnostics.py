@@ -66,6 +66,9 @@ async def run_status(args, output, root):
             last_connected_at=_stamp(control.get('last_connected_at')),
             last_error_at=_stamp(control.get('last_error_at')),
             last_received_at=_stamp(control.get('last_received_at')),
+            last_disconnect_cause=control.get('last_disconnect_cause'),
+            consecutive_failures=control.get('consecutive_failures', 0),
+            attention_required=control.get('attention_required', False),
             recovery_required=control.get('recovery_required', False)))
     agents = []
     for identity in state.identities:
@@ -160,9 +163,13 @@ async def run_status(args, output, root):
             output.line(f'IPC error: {ipc_error}')
         for server in servers:
             output.line(redact_text(f"Server: {server['server']} | {server['state']}"))
-            for field in ('error', 'last_connected_at', 'last_received_at', 'last_error_at'):
+            for field in ('error', 'last_connected_at', 'last_received_at', 'last_error_at',
+                          'last_disconnect_cause'):
                 if server[field]:
                     output.line(f"  {field.replace('_', ' ')}: {server[field]}")
+            if server['attention_required']:
+                output.line(f"  Attention: {server['consecutive_failures']} consecutive connection failures; "
+                            "still retrying. Inspect logs --errors and the Server.")
         for agent in agents:
             names = {'codex_app_server': 'Codex', 'claude_stream': 'Claude Code', 'pi_rpc': 'Pi'}
             harnesses = ', '.join(names.get(name, name) for name in agent['harnesses'])
