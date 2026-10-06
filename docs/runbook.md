@@ -113,3 +113,20 @@ it does not send a model request or prove provider login.
 Run okto-nexus-connector reconnect to gracefully stop and restart the daemon for the selected state directory. Configurations and credentials are preserved. Active harness executions may be interrupted during shutdown. The command returns when the daemon is ready; server connections complete asynchronously. Check okto-nexus-connector status and okto-nexus-connector logs --errors for progress. If shutdown cannot finish within 30 seconds, no second daemon is started.
 
 Automatic connection retries use delays of 2, 4, 8, 16 and 30 seconds, then continue every 30 seconds until the daemon is stopped, including reconciliation failures. Pending socket cleanup is retried before opening another connection. Retrying does not replay submitted work or bypass Nexus authorization.
+# Connection continuity
+
+With an updated Nexus server, the Connector renews control and lane tickets on
+the existing WebSocket. Scheduled renewal does not restart the native harness,
+replace its lane, or wait for session drain. Look for `Runtime authority renewed
+in place` in the daemon log.
+
+Negotiated heartbeats detect a silent server. A short transport loss can resume
+the same authenticated connection owner while native sessions retain their
+existing leases. Look for `Control transport resumed`. Fast resume is bounded
+and is not used when a control request is awaiting an uncertain reply. Those
+cases still use durable reconciliation; native actions are never blindly
+replayed. A revoked authorization remains invalid.
+
+Older servers retain their previous renewal behavior and emit an upgrade hint.
+Update Nexus, Core, and Connector together for uninterrupted ticket renewal.
+

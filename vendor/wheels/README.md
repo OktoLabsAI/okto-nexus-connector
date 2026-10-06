@@ -126,7 +126,7 @@ The Connector pins `okto-nexus-connector-core==0.0.1`. Its matching artifact is
 `okto_nexus_connector_core-0.0.1-py3-none-any.whl`, built from Core main commit
 `a5dd65cf21d8628685a7932c8e701c06d20a9d09`.
 
-SHA-256: `1accdfe1c0075cfcd224cec91cc60ab7df43e8785138518bc86a48ccf034144c`.
+SHA-256: `3445c41ce295b8d5b872d5ff720fc55471de87228bd0eb5f97c0a1db2127f64d`.
 
 This artifact includes current connection configuration, native protocol probes,
 remote HTTP MCP support and reconnect automation. The older entries below are
