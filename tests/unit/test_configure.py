@@ -21,6 +21,27 @@ def test_eof_cancels_required_questions(monkeypatch):
     with pytest.raises(ConnectorError,match='canceled'):wizard_prompts.text('Server',required=True)
 
 
+def test_limit_zero_means_unlimited_and_rejects_words(monkeypatch,capsys):
+    answers=iter(['unlimited','-1','1441','0'])
+    monkeypatch.setattr('builtins.input',lambda:next(answers))
+    assert wizard_prompts.limit('Authorization duration in minutes',60,1440)==0
+    assert capsys.readouterr().err.count('Enter 0 (unlimited) or 1') == 3
+
+
+@pytest.mark.parametrize('answers,expected',[
+    (['0','0'],dict(minutes=0,actions=0,no_expiry=True,unlimited_actions=True)),
+    (['','30'],dict(minutes=60,actions=30,no_expiry=False,unlimited_actions=False)),
+])
+def test_wizard_authorization_sends_server_flags(monkeypatch,answers,expected):
+    from nexus_connector_core.connection_configuration import materialize_connection_configuration
+    replies=iter(['','','',*answers])
+    monkeypatch.setattr('builtins.input',lambda:next(replies))
+    portable=wizard_prompts.preferences(configure.template()|{'adapter_id':'claude_stream'},{'parameters':[]})
+    assert portable['authorization']==expected
+    configuration=materialize_connection_configuration(portable,workspace_root='/work',workspace_label='Work')
+    assert configuration['authorization']==expected
+
+
 async def test_noninteractive_wizard_never_prompts(tmp_path,monkeypatch):
     args=build_parser().parse_args(['--non-interactive','configure'])
     monkeypatch.setattr('builtins.input',lambda:pytest.fail('unexpected question'))

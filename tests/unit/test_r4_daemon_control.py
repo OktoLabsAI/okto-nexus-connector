@@ -420,3 +420,30 @@ async def test_realization_refreshes_only_its_stale_administrative_ticket(contro
         assert owner._bootstrap is original and owner.connection is connection
     finally:
         await dispose(owner, host)
+
+
+async def test_generic_disconnect_logs_the_fenced_link_cause(control, monkeypatch, caplog):
+    # The next caller only sees CONTROL_DISCONNECTED; the reader fenced the
+    # real cause on the connection. The log and status must name the latter.
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+    from okto_nexus_connector.daemon.r4_execution import R4DaemonExecution
+    owner, peer, _, host, _ = control
+    owner.start()
+    try:
+        await eventually(lambda: owner.status()['control_ready'])
+        caplog.set_level('WARNING', logger='okto_nexus_connector.daemon.r4_control')
+        async def closed(self):
+            raise ConnectorError('CONTROL_DISCONNECTED', 'r4_lanes', 'The execution connection is closed.')
+        monkeypatch.setattr(R4DaemonExecution, 'sync', closed)
+        peer.sockets[0].failure = ConnectionClosedError(Close(1011, 'remote detail nxs_secret'), None)
+        await eventually(lambda: owner.status()['last_disconnect_cause'] is not None)
+        cause = 'ConnectionClosedError rcvd_close=1011'
+        assert owner.status()['last_disconnect_cause'] == cause
+        messages = [r.getMessage() for r in caplog.records]
+        assert any('Runtime execution interrupted: code=CONTROL_DISCONNECTED' in m and f'cause={cause}' in m
+                   for m in messages)
+        assert not any('nxs_secret' in m or 'remote detail' in m for m in messages)
+    finally:
+        monkeypatch.undo()
+        await dispose(owner, host)

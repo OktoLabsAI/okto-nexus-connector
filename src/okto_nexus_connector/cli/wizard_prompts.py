@@ -32,13 +32,12 @@ def choice(label, options, default=None):
 
 
 def limit(label, default, maximum):
+    """0 means unlimited; the caller sets the matching Server flag."""
     while True:
-        value = text(label + ' (number or unlimited)', 'unlimited' if default is None else str(default), required=True)
-        if value.lower() == 'unlimited':
-            return None
-        if value.isdecimal() and 1 <= int(value) <= maximum:
+        value = text(label + ' (0 = unlimited)', str(default or 0), required=True)
+        if value.isdecimal() and 0 <= int(value) <= maximum:
             return int(value)
-        print(f'Enter 1–{maximum}, or unlimited.', file=sys.stderr)
+        print(f'Enter 0 (unlimited) or 1–{maximum}.', file=sys.stderr)
 
 
 def preferences(configuration, schema):
@@ -60,6 +59,8 @@ def preferences(configuration, schema):
     configuration['session_policy']=choice('Conversation context',[(None,'Use global setting'),('per_sender','One session per sender'),('per_sender_session','One session per sender + source session'),('shared','Shared')],configuration['session_policy'])
     configuration['automatic_reply']=True
     configuration['tool_access']=choice('Nexus tool approval',[('ask','Ask for approval'),('always_allow','Always allow')],configuration['tool_access'])
-    configuration['authorization']={'minutes':limit('Authorization duration in minutes',configuration['authorization']['minutes'],1440),
-        'actions':limit('Action limit',configuration['authorization']['actions'],1000)}
+    minutes=limit('Authorization duration in minutes',configuration['authorization']['minutes'],1440)
+    actions=limit('Action limit',configuration['authorization']['actions'],1000)
+    configuration['authorization']={'minutes':minutes,'actions':actions,
+        'no_expiry':minutes==0,'unlimited_actions':actions==0}
     return configuration
