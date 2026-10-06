@@ -43,6 +43,12 @@ class R4DaemonExecution:
         """Renew before the earliest lane expires, including recovered lanes."""
         return min((lane.deadline - 30 for lane in self.lanes.values()), default=float('inf'))
 
+    async def renew_connection(self):
+        deadline = await self.connection.renew_connection()
+        for binding_id, lane in self.lanes.items():
+            self.lanes[binding_id] = replace(lane, deadline=deadline)
+        return deadline
+
     def _bindings(self):
         state = self.store.load()
         records = [r for r in state.execution_bindings if

@@ -53,7 +53,7 @@ def _disconnect_cause(error):
         return None
     parts = [type(error).__name__]
     # ConnectionClosed.code is deprecated in websockets; its frames carry it.
-    code = None if hasattr(type(error), 'rcvd') else getattr(error, 'code', None)
+    code = None if hasattr(error, 'rcvd') else getattr(error, 'code', None)
     if type(code) is str and code.isupper() and len(code) <= 64:
         parts.append(code)
     stage = getattr(error, 'stage', None)
@@ -65,6 +65,20 @@ def _disconnect_cause(error):
         if type(getattr(frame, 'code', None)) is int:
             parts.append(f'{side}_close={frame.code}')
     return ' '.join(parts)
+
+
+def _root_failure(*failures):
+    """First specific failure among link, owner and visible error, in that order.
+
+    The link records the first fence (Server error frame, close, heartbeat).
+    Callers waiting on it, including the owner's lease renewal, only see the
+    generic CONTROL_DISCONNECTED that the fence or a later close() produces.
+    """
+    present = [failure for failure in failures if failure is not None]
+    generic = lambda failure: (not hasattr(failure, 'rcvd') and
+                               getattr(failure, 'code', None) == 'CONTROL_DISCONNECTED')
+    return next((failure for failure in present if not generic(failure)),
+                present[0] if present else None)
 
 
 def _link_url(profile, executor_id):
@@ -405,12 +419,16 @@ class R4DaemonControl:
                         onboarding_at = self.clock() + 5
                     lane_renew_at = self.execution.renewal_deadline()
                     if self.clock() >= min(renew_at, lane_renew_at):
-                        # A bootstrap cannot rotate an attached lane or renew a
-                        # runtime lease. Reconnect control with a fresh proof.
-                        logging.getLogger(__name__).info(
-                            'Renewing runtime connection: server=%s reason=%s',
-                            self.server_id, 'binding_ticket' if lane_renew_at <= renew_at else 'bootstrap_ticket')
-                        return
+                        if 'connection_renewal_v1' in getattr(self.connection.state, 'control_capabilities', ()):
+                            deadline = await self.execution.renew_connection()
+                            bootstrap = replace(bootstrap, deadline_monotonic=deadline)
+                            self._bootstrap = bootstrap
+                            renew_at = self.clock() + max(0, deadline - self.clock()) * 0.7
+                            lane_renew_at = self.execution.renewal_deadline()
+                            logging.getLogger(__name__).info('Runtime authority renewed in place: server=%s', self.server_id)
+                        else:
+                            logging.getLogger(__name__).warning('Server requires reconnect for ticket renewal; upgrade Nexus for uninterrupted continuity.')
+                            return
                     await self.execution.sync()
                     delivery = None
                     if self.clock() >= poll_refresh_at:
@@ -427,15 +445,11 @@ class R4DaemonControl:
             except Exception as error:
                 code = getattr(error, 'code', None)
                 self.error_code = code if type(code) is str and code in _STATUS_ERRORS else 'CONTROL_DISCONNECTED'
-                # A closed link usually surfaces as a generic CONTROL_DISCONNECTED
-                # from the next caller; the reader/heartbeat fenced the real cause.
-                underlying = (getattr(self.execution.owner, 'failure', None)
-                              or getattr(self.connection, 'failure', None))
-                cause = underlying or error
-                self._interrupt_code = (None if hasattr(type(cause), 'rcvd')
+                cause = _root_failure(getattr(self.connection, 'failure', None),
+                                      getattr(self.execution.owner, 'failure', None), error)
+                self._interrupt_code = (None if hasattr(cause, 'rcvd')
                                         else getattr(cause, 'code', None))
-                self._interrupt_cause = _disconnect_cause(
-                    underlying if underlying is not None and underlying is not error else error)
+                self._interrupt_cause = _disconnect_cause(cause)
                 import traceback
                 logging.getLogger(__name__).warning(
                     'Runtime execution interrupted: code=%s exception=%s stage=%s cause=%s location=%s',

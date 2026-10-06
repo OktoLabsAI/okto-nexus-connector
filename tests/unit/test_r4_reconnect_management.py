@@ -7,7 +7,7 @@ from websockets.exceptions import ConnectionClosedError
 from websockets.frames import Close
 
 from okto_nexus_connector.daemon import r4_control
-from okto_nexus_connector.daemon.r4_control import R4DaemonControl, _disconnect_cause
+from okto_nexus_connector.daemon.r4_control import R4DaemonControl, _disconnect_cause, _root_failure
 from okto_nexus_connector.errors import ConnectorError
 
 
@@ -75,3 +75,31 @@ async def test_stable_connection_starts_a_new_failure_streak():
     status = owner.status()
     assert status['consecutive_failures'] == 1 and not status['attention_required']
     assert status['last_disconnect_cause'] == 'ConnectorError CONTROL_DISCONNECTED stage=r4_link'
+
+
+def _closed(stage='r4_link'):
+    return ConnectorError('CONTROL_DISCONNECTED', stage, 'The control connection was closed.')
+
+
+def test_root_failure_prefers_the_link_fence_over_waiting_callers():
+    # Server error frame fenced the link; the owner's lease renewal only saw
+    # the generic close and must not hide it (12:22 incident).
+    server = ConnectorError('ATTACH_DENIED', 'r4_link', 'The Server rejected a control request.')
+    assert _root_failure(server, _closed(), _closed()) is server
+    remote = ConnectionClosedError(Close(1011, 'detail'), None)
+    assert _root_failure(remote, _closed(), _closed()) is remote
+
+
+def test_root_failure_keeps_a_specific_owner_or_visible_error():
+    native = ConnectorError('NATIVE_OPERATION_FAILED', 'renewal', 'x')
+    assert _root_failure(_closed(), native, _closed()) is native
+    # A restart closed the link while an HTTP call failed with its own code.
+    conflict = ConnectorError('CONFLICT', 'inventory.refresh.claim', 'x')
+    assert _root_failure(_closed(), None, conflict) is conflict
+
+
+def test_root_failure_falls_back_to_the_first_generic_failure():
+    first, visible = _closed(), _closed('r4_lanes')
+    assert _root_failure(first, None, visible) is first
+    assert _root_failure(None, None, visible) is visible
+    assert _root_failure(None, None, None) is None

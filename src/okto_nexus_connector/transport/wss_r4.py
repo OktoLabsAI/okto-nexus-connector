@@ -6,6 +6,8 @@ never authorizes a native effect or declares a binding ready.
 
 from __future__ import annotations
 
+import asyncio
+
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Mapping
 from urllib.parse import urlsplit
@@ -42,6 +44,7 @@ class R4ControlState:
     connection_id: str
     connection_generation: int
     control_ready: bool
+    control_capabilities: tuple[str, ...] = ()
 
 
 async def apply_r4_lease(
@@ -103,7 +106,7 @@ async def negotiate_r4_control(
         "management_revision": management_revision,
         "supported_nxl": [R4_PREVIEW_REVISION],
         "snapshot_formats": [snapshot_format],
-        "control_capabilities": [],
+        "control_capabilities": ['connection_renewal_v1', 'heartbeat_ack_v1', 'connection_resume_v1'],
     }
     await _send(websocket, hello)
     welcome = await _receive(websocket)
@@ -201,7 +204,8 @@ async def negotiate_r4_control(
             if projection.ready:
                 recovery.online = False
                 return R4ControlState(
-                    server_id, executor_id, connection_id, generation, True)
+                    server_id, executor_id, connection_id, generation, True,
+                    tuple(welcome['control_capabilities']))
             await _send(websocket, {
                 "protocol_major": 1,
                 "contract_revision": R4_PREVIEW_REVISION,
@@ -253,8 +257,38 @@ async def connect_r4_connection(link_url: str, ticket: str, *, server_id: str,
         server_id=server_id, executor_id=executor_id, management_revision=management_revision,
         snapshot_format=snapshot_format, boot_id=boot_id, report_reconciliation=report_reconciliation,
         recover_before_report=recover_before_report,recovery_lanes=lanes)
+    async def resume(current):
+        from .proxy import resolve_proxy
+        for attempt in range(4):
+            replacement = None
+            try:
+                replacement = await websockets.connect(link_url, subprotocols=['nxl.v1'],
+                    proxy=resolve_proxy(link_url), additional_headers=[('Authorization', f'Bearer {ticket}')],
+                    max_size=1024 * 1024, open_timeout=2, ping_interval=None)
+                request_id = 'resume_' + secrets.token_hex(16)
+                await _send(replacement, dict(protocol_major=1, contract_revision=R4_PREVIEW_REVISION,
+                    type='hello', link_attempt_id=request_id, server_id=server_id, executor_id=executor_id,
+                    core_version=CORE_VERSION, management_revision=management_revision,
+                    supported_nxl=[R4_PREVIEW_REVISION], snapshot_formats=[snapshot_format],
+                    control_capabilities=list(current.control_capabilities),
+                    resume_connection_id=current.connection_id, resume_connection_generation=current.connection_generation))
+                reply = await asyncio.wait_for(_receive(replacement), 2)
+                if (reply['type'] != 'welcome' or reply.get('resumed') is not True
+                        or reply['link_attempt_id'] != request_id or not _scope(reply, server_id=server_id,
+                            executor_id=executor_id, connection_id=current.connection_id, generation=current.connection_generation)):
+                    raise ValueError('The Server did not confirm the existing connection owner.')
+                return replacement
+            except BaseException as error:
+                if replacement is not None:
+                    await replacement.close()
+                if isinstance(error, asyncio.CancelledError):
+                    raise
+                if attempt == 3:
+                    raise
+                await asyncio.sleep(.25)
     try:
-        connection = R4Connection(websocket, state, boot_id=boot_id, initial_lanes=lanes)
+        connection = R4Connection(websocket, state, boot_id=boot_id, initial_lanes=lanes,
+            resume=resume if 'connection_resume_v1' in state.control_capabilities else None)
         connection.start()
         return connection
     except BaseException:
