@@ -36,6 +36,36 @@ _STATUS_ERRORS = frozenset({
 })
 
 
+# Reconnect management. Every failure is retried; these only decide when the
+# status asks an operator to look instead of reporting a transient retry.
+_ATTENTION_AFTER = 5
+_PERSISTENT_ERRORS = frozenset({
+    'PERMISSION_DENIED', 'AGENT_AUTH_REQUIRED', 'CREDENTIAL_REPLACEMENT_REQUIRED',
+    'BINDING_NOT_AUTHORIZED', 'VERSION_INCOMPATIBLE', 'PROFILE_DRIFT', 'AGENT_ID_MISMATCH',
+})
+_RECONNECT_JITTER = 0.2
+
+
+def _disconnect_cause(error):
+    """Sanitized type/code/stage of a failure; never its text or close reason."""
+    if error is None:
+        return None
+    parts = [type(error).__name__]
+    # ConnectionClosed.code is deprecated in websockets; its frames carry it.
+    code = None if hasattr(type(error), 'rcvd') else getattr(error, 'code', None)
+    if type(code) is str and code.isupper() and len(code) <= 64:
+        parts.append(code)
+    stage = getattr(error, 'stage', None)
+    if type(stage) is str and len(stage) <= 64:
+        parts.append('stage=' + stage)
+    # websockets ConnectionClosed: the close codes are numeric protocol facts.
+    for side in ('rcvd', 'sent'):
+        frame = getattr(error, side, None)
+        if type(getattr(frame, 'code', None)) is int:
+            parts.append(f'{side}_close={frame.code}')
+    return ' '.join(parts)
+
+
 def _link_url(profile, executor_id):
     expected = NexusHTTPClient(profile.base_url).link_url(executor_id)
     target = profile.link_url_override or expected
@@ -75,6 +105,11 @@ class R4DaemonControl:
         self.inventory_revision = None
         self.publication_sequence = 0
         self.attempts = 0
+        self.consecutive_failures = 0
+        self.last_disconnect_cause = None
+        self._interrupt_cause = None
+        self._ready_since = None
+        self._attention_logged = False
         self._task = None
         self._recovery_error = None
         self._reporter = None
@@ -160,6 +195,9 @@ class R4DaemonControl:
             attempts=self.attempts,
             last_connected_at=getattr(self, 'last_connected_at', None),
             last_error_at=getattr(self, 'last_error_at', None),
+            last_disconnect_cause=self.last_disconnect_cause,
+            consecutive_failures=self.consecutive_failures,
+            attention_required=self.phase == 'RECOVERY_ATTENTION_REQUIRED',
             last_received_at=getattr(connection, 'last_received_at', None),
             attached_bindings=sorted(self.execution.lanes) if self.execution else [])
 
@@ -353,6 +391,7 @@ class R4DaemonControl:
                 await self.execution.sync()
                 self.phase, self.error_code = 'CONTROL_READY', None
                 self.last_connected_at = time.time()
+                self._ready_since = self.clock()
                 logging.getLogger(__name__).info('Runtime connected: server=%s executor=%s',
                                                  self.server_id, self.executor_id)
                 renew_at = self.clock() + max(0, bootstrap.deadline_monotonic - self.clock()) * 0.7
@@ -382,11 +421,17 @@ class R4DaemonControl:
             except Exception as error:
                 code = getattr(error, 'code', None)
                 self.error_code = code if type(code) is str and code in _STATUS_ERRORS else 'CONTROL_DISCONNECTED'
+                # A closed link usually surfaces as a generic CONTROL_DISCONNECTED
+                # from the next caller; the reader/heartbeat fenced the real cause.
+                underlying = (getattr(self.execution.owner, 'failure', None)
+                              or getattr(self.connection, 'failure', None))
+                self._interrupt_cause = _disconnect_cause(
+                    underlying if underlying is not None and underlying is not error else error)
                 import traceback
                 logging.getLogger(__name__).warning(
-                    'Runtime execution interrupted: code=%s exception=%s stage=%s location=%s',
+                    'Runtime execution interrupted: code=%s exception=%s stage=%s cause=%s location=%s',
                     getattr(error, 'code', 'CONTROL_DISCONNECTED'), type(error).__name__,
-                    getattr(error, 'stage', 'unknown'),
+                    getattr(error, 'stage', 'unknown'), self._interrupt_cause,
                     ' > '.join(f'{frame.name}:{frame.lineno}' for frame in traceback.extract_tb(error.__traceback__)))
                 raise
             finally:
@@ -436,19 +481,40 @@ class R4DaemonControl:
             # Error text can contain credentials or remote payloads.
             code = self._recovery_error or getattr(error, 'code', None)
             self.error_code = code if type(code) is str and code in _STATUS_ERRORS else 'CONTROL_DISCONNECTED'
+            self.last_disconnect_cause = self._interrupt_cause or _disconnect_cause(error)
+            self._interrupt_cause = None
+            # A link that stayed ready for a stable period starts a new streak,
+            # matching the backoff reset in RuntimeAutomation.
+            if (self._ready_since is not None and
+                    self.clock() - self._ready_since >= DEFAULT_RUNTIME_AUTOMATION.stable_seconds):
+                self.consecutive_failures = 0
+                self._attention_logged = False
+            self._ready_since = None
+            self.consecutive_failures += 1
             logging.getLogger(__name__).warning(
-                'Runtime connection failed: server=%s phase=%s code=%s exception=%s stage=%s location=%s',
+                'Runtime connection failed: server=%s phase=%s code=%s exception=%s stage=%s cause=%s consecutive=%d location=%s',
                 self.server_id, self.phase, self.error_code, type(error).__name__,
                 getattr(error, 'stage', 'unknown') if isinstance(error, ConnectorError) else 'unknown',
+                self.last_disconnect_cause, self.consecutive_failures,
                 ' > '.join(f'{frame.name}:{frame.lineno}' for frame in traceback.extract_tb(error.__traceback__)))
             recovering = self.error_code in ('RECONCILIATION_REQUIRED', 'JOURNAL_UNAVAILABLE')
             self._recovery_error = self.error_code if recovering else None
             self.phase = 'CLEANUP_PENDING' if self.cleanup_pending else 'RECOVERING' if recovering else 'RETRY_WAIT'
+            if self.phase == 'RETRY_WAIT' and (self.consecutive_failures >= _ATTENTION_AFTER or (
+                    self.error_code in _PERSISTENT_ERRORS and self.consecutive_failures >= 2)):
+                # Still retried with backoff; the status asks for an operator.
+                if not self._attention_logged:
+                    self._attention_logged = True
+                    logging.getLogger(__name__).warning(
+                        'Runtime connection needs attention: server=%s code=%s consecutive=%d cause=%s',
+                        self.server_id, self.error_code, self.consecutive_failures, self.last_disconnect_cause)
+                self.phase = 'RECOVERY_ATTENTION_REQUIRED'
             return recovering
         async def exhausted():
             self.phase = 'RECOVERY_ATTENTION_REQUIRED'
         try:
-            automation = RuntimeAutomation(RuntimeAutomationPolicy(retry_delays=self.retry_delays))
+            automation = RuntimeAutomation(RuntimeAutomationPolicy(
+                retry_delays=self.retry_delays, retry_jitter=_RECONNECT_JITTER))
             await automation.supervise_connection(cycle=cycle, stop=self._stopped,
                 failed=failed, exhausted=exhausted, wait=self._wait)
         finally:
