@@ -11,7 +11,7 @@ from okto_nexus_connector.cli.main import build_parser
 def render():
     lines = ['# CLI syntax reference', '',
         'Generated from the CLI parser. Regenerate with `python tools/generate_cli_reference.py`.', '',
-        'Read the [usage guide](cli.md) for effects and prerequisites. Global options go before the command. Uppercase values are placeholders. Brackets mean optional; unbracketed flags are required. Legacy syntax is not proof of R4 support.', '']
+        'Read the [usage guide](cli.md) for effects and prerequisites. --json and --verbose work before or after any command; other global options go before the command. Uppercase values are placeholders. Brackets mean optional; unbracketed flags are required. Legacy syntax is not proof of R4 support.', '']
     def walk(parser, name):
         lines.extend(['## ' + name, '', '```text', parser.format_help().rstrip(), '```', ''])
         for action in parser._actions:

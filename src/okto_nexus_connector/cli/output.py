@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from typing import IO
+from .presentation import plain, styled, table
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -14,9 +15,10 @@ EXIT_UNKNOWN_OUTCOME = 4
 
 
 class Output:
-    def __init__(self, *, json_mode: bool, stream: IO | None = None):
+    def __init__(self, *, json_mode: bool, stream: IO | None = None, verbose: bool = False):
         self.json_mode = json_mode
         self.stream = stream or sys.stdout
+        self.verbose = verbose
 
     def result(self, payload: dict[str, object]) -> None:
         if self.json_mode:
@@ -24,12 +26,51 @@ class Output:
                       default=str)
             self.stream.write("\n")
             return
-        for line in _render(payload):
-            print(line, file=self.stream)
+        if self.verbose:
+            self.heading('Details')
+            for line in _render(payload):
+                self.line(line)
+        else:
+            self._human(payload)
+
+    def heading(self, text):
+        if not self.json_mode:
+            print('\n' + styled(text, 'heading', self.stream), file=self.stream)
+
+    def table(self, headers, rows):
+        if not self.json_mode:
+            table(headers, rows, self.stream)
+
+    def _human(self, payload, indent=0):
+        for key, value in payload.items():
+            label = key.replace('_', ' ').capitalize()
+            if isinstance(value, dict):
+                self.heading(label)
+                self._human(value, indent + 1)
+            elif isinstance(value, list):
+                self.heading(label)
+                if not value:
+                    self.line('  None')
+                elif all(isinstance(item, dict) for item in value):
+                    keys = list(dict.fromkeys(k for item in value for k in item))
+                    if len(keys) <= 5 and all(not isinstance(v, (dict, list)) for item in value for v in item.values()):
+                        self.table([k.replace('_', ' ').capitalize() for k in keys],
+                                   [[item.get(k) for k in keys] for item in value])
+                    else:
+                        for index, item in enumerate(value, 1):
+                            self.line(f'\n  {label} {index}')
+                            self._human(item, indent + 1)
+                else:
+                    for item in value:
+                        self.line(f'  - {item}')
+            else:
+                self.line('  ' * indent + f'{label}: {value if value is not None else "-"}')
 
     def line(self, text: str) -> None:
         if not self.json_mode:
-            print(text, file=self.stream)
+            safe = plain(text)
+            label, separator, value = safe.partition(':')
+            print(styled(label, 'label', self.stream) + separator + value if separator else safe, file=self.stream)
 
     def stream_record(self, record: dict[str, object]) -> None:
         if self.json_mode:
@@ -55,8 +96,8 @@ class Output:
                       sort_keys=True, default=str)
             self.stream.write("\n")
         else:
-            print(f"error: {payload.get('code')} ({payload.get('stage')}): "
-                  f"{payload.get('message', '')}", file=sys.stderr)
+            print('\n' + styled(f"error: {payload.get('code')} ({payload.get('stage')}):", 'error', sys.stderr), file=sys.stderr)
+            print('  ' + plain(payload.get('message', '')), file=sys.stderr)
             if payload.get("action"):
                 print(f"action: {payload['action']}", file=sys.stderr)
         if payload.get("code") == "OUTCOME_UNKNOWN":
@@ -78,9 +119,7 @@ def _render(payload: dict[str, object], indent: int = 0) -> list[str]:
             for item in value:
                 if isinstance(item, dict):
                     lines.extend(_render(item, indent + 1))
-                    lines.append(f"{pad}  ---")
-                    if lines and lines[-1] == f"{pad}  ---":
-                        lines.pop()
+                    lines.append('')
                 else:
                     lines.append(f"{pad}  - {item}")
         else:

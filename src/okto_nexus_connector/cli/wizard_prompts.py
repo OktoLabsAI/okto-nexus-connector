@@ -1,11 +1,12 @@
 """Terminal questions with retry, visible defaults and explicit cancellation."""
 import sys
 from ..errors import ConnectorError
+from .presentation import styled
 
 
 def text(label, default='', *, required=False):
     while True:
-        print(f'{label}' + (f' [{default}]' if default else '') + ': ', end='', file=sys.stderr, flush=True)
+        print(styled(label, 'label', sys.stderr) + (f' [{default}]' if default else '') + ': ', end='', file=sys.stderr, flush=True)
         try:
             value = input().strip() or str(default)
             if value == '-':value=''
@@ -20,9 +21,9 @@ def choice(label, options, default=None):
     """Values are opaque keys, labels are human-readable (never credentials)."""
     if not options:
         raise ConnectorError('VALIDATION_ERROR','configure',f'No available choices: {label}')
-    print(label, file=sys.stderr)
+    print('\n' + styled(label, 'heading', sys.stderr), file=sys.stderr)
     for index, (key, caption) in enumerate(options, 1):
-        print(f'  {index}. {caption}' + (' (current)' if key == default else ''), file=sys.stderr)
+        print(styled(f'  {index}.', 'label', sys.stderr) + f' {caption}' + (' (current)' if key == default else ''), file=sys.stderr)
     default_index = next((str(i) for i,(key,_) in enumerate(options,1) if key == default),'')
     while True:
         value = text('Choice', default_index, required=True)

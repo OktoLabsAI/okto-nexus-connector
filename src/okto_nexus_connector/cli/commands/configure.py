@@ -57,10 +57,12 @@ async def _run_configure(args, output, root):
         raise ConnectorError('VALIDATION_ERROR','configure','configure is an interactive terminal wizard.',
             action='Use connection-config apply with --file and explicit destination flags for automation.')
     portable=parse_portable_connection_configuration(read_configuration_file(args.file)) if args.file else template()
-    output.line('Nexus connection setup — Ctrl+C cancels; enter - to clear an optional default. Imported files never select an identity, installation or folder.')
+    output.heading('Nexus connection setup')
+    output.line('Ctrl+C cancels. Enter - to clear an optional default.')
+    output.line('Imported files never select an identity, installation or folder.\n')
     store,identity,server=await select_identity(args,output,root)
     host=args.host or 'connector'
-    output.line('2. Execution host: '+('this Connector machine' if host=='connector' else 'Nexus Server machine'))
+    output.heading('2. Execution host: '+('this Connector machine' if host=='connector' else 'Nexus Server machine'))
     if host=='connector' and args.request_id and store.load().preferences.get(f'configure.{identity.server_id}.{identity.agent_id}.{args.request_id}'):
         from .configure_local import configure_local
         return await configure_local(args,output,root,store,identity,server,portable)
@@ -115,7 +117,7 @@ async def _run_configure(args, output, root):
     if selected.get('binding') and not args.binding_id:
         if choice('Existing connection for this workspace',[(True,'Update existing connection'),(False,'Cancel')],True):args.binding_id=selected['binding']['binding_id']
         else:return {'saved':False,'canceled':True}
-    output.line('6. Preferences and authorization')
+    output.heading('6. Preferences and authorization')
     portable=preferences(portable,selected.get('harness_configuration') or discover_harness_configuration(harness))
     configuration=materialize_connection_configuration(portable,workspace_root=args.project,
         workspace_label=args.workspace_label,provider_home=args.provider_home)

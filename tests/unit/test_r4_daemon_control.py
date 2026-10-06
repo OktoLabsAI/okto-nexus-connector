@@ -163,6 +163,58 @@ async def test_lost_publication_reply_never_reuses_sequence(control):
         await dispose(owner, host)
 
 
+async def test_lane_renewal_rotates_control_before_bootstrap_expiry(control, monkeypatch):
+    from okto_nexus_connector.daemon.r4_execution import R4DaemonExecution
+    owner, peer, _, host, _ = control
+    original_close = R4DaemonExecution.close
+    observed = []
+
+    def deadline(execution):
+        # Two consecutive binding tickets expire before the 600s bootstrap.
+        if len(peer.sockets) < 3:
+            owner._retained_lanes['recovery-ticket'] = object()
+            return owner.clock() - 1
+        return float('inf')
+
+    async def close(execution, **kwargs):
+        observed.append(dict(owner._retained_lanes))
+        await original_close(execution, **kwargs)
+
+    monkeypatch.setattr(R4DaemonExecution, 'renewal_deadline', deadline)
+    monkeypatch.setattr(R4DaemonExecution, 'close', close)
+    owner.start()
+    try:
+        await eventually(lambda: len(peer.sockets) == 3 and owner.status()['control_ready'])
+        assert peer.calls == 3
+        assert observed == [{}, {}]
+        assert all(not socket.online for socket in peer.sockets[:2])
+        await asyncio.sleep(.05)
+        assert len(peer.sockets) == 3  # No loop reusing the nearly expired ticket.
+    finally:
+        await dispose(owner, host)
+
+
+async def test_attach_denied_discards_retained_tickets_and_retries(control):
+    owner, peer, _, host, _ = control
+    original = owner._attempt
+    async def attempt():
+        if owner.attempts == 1:
+            owner._retained_lanes['binding'] = object()
+            raise ConnectorError('ATTACH_DENIED', 'attach', 'Remote payload must stay private')
+        assert owner._retained_lanes == {}
+        assert owner.error_code == 'ATTACH_DENIED'
+        await original()
+    owner._attempt = attempt
+    owner.start()
+    try:
+        await eventually(lambda: owner.status()['control_ready'])
+        assert owner.attempts == 2 and peer.calls == 1
+        assert 'ATTACH_DENIED' in owner.status()['last_disconnect_cause']
+        assert 'Remote payload' not in str(owner.status())
+    finally:
+        await dispose(owner, host)
+
+
 async def test_core_automation_recovers_without_cli_intervention(control):
     owner, peer, _, host, _ = control
     original = owner._attempt

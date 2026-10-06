@@ -77,11 +77,13 @@ async def configure_local(args,output,root,store,identity,server,portable):
         label=args.workspace_label or text('Workspace name',Path(project).name,required=True)
         home=local_directory('Provider login directory (optional)',args.provider_home,
             discover_provider_home(portable['adapter_id']) or '',optional=True)
-        output.line('6. Harness preferences and requested Nexus policies')
+        output.heading('6. Harness preferences and requested Nexus policies')
         portable=preferences(portable,discover_harness_configuration(portable['adapter_id']))
         configuration=materialize_connection_configuration(portable,execution_location='remote',
             workspace_root=project,workspace_label=label,provider_home=home)
-        output.line(f'Review: agent {identity.agent_id} at {server}; installation {selected}; workspace {project}; login {home or "harness default"}.')
+        output.heading('Review connection')
+        output.table(['Setting', 'Value'], [('Agent', identity.agent_id), ('Server', server),
+                     ('Installation', selected), ('Workspace', project), ('Login directory', home or 'Harness default')])
         output.line('Approve this connection and its requested execution limits once in Nexus. Setup will continue automatically.')
         if not choice('7. Finish local setup and submit this connection?',[(True,'Finish'),(False,'Cancel')],False):
             return {'saved':False,'canceled':True}

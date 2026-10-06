@@ -2,13 +2,13 @@
 
 Generated from the CLI parser. Regenerate with `python tools/generate_cli_reference.py`.
 
-Read the [usage guide](cli.md) for effects and prerequisites. Global options go before the command. Uppercase values are placeholders. Brackets mean optional; unbracketed flags are required. Legacy syntax is not proof of R4 support.
+Read the [usage guide](cli.md) for effects and prerequisites. --json and --verbose work before or after any command; other global options go before the command. Uppercase values are placeholders. Brackets mean optional; unbracketed flags are required. Legacy syntax is not proof of R4 support.
 
 ## okto-nexus-connector
 
 ```text
-usage: okto-nexus-connector [-h] [--version] [--json] [--non-interactive]
-                            [--state-dir STATE_DIR]
+usage: okto-nexus-connector [-h] [--version] [--json] [--verbose]
+                            [--non-interactive] [--state-dir STATE_DIR]
                             {clean,proxy,reach,configure,connect,identity,executor,discover,bind,runtime,daemon,service,reconnect,status,logs,doctor,approvals,mcp-config,harness-config,connection-config} ...
 
 Remote harness connector for Okto Nexus
@@ -44,6 +44,7 @@ options:
   -h, --help            show this help message and exit
   --version             show program's version number and exit
   --json                machine-readable JSON output
+  --verbose             include technical details
   --non-interactive     never prompt; ambiguity fails with guidance
   --state-dir STATE_DIR
                         override the per-user state directory
@@ -52,17 +53,20 @@ options:
 ## okto-nexus-connector clean
 
 ```text
-usage: okto-nexus-connector clean [-h] [--yes]
+usage: okto-nexus-connector clean [-h] [--yes] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
   --yes       explicitly confirm cleanup without prompting
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector proxy
 
 ```text
-usage: okto-nexus-connector proxy [-h] {set,show,clear} ...
+usage: okto-nexus-connector proxy [-h] [--json] [--verbose]
+                                  {set,show,clear} ...
 
 positional arguments:
   {set,show,clear}
@@ -72,13 +76,16 @@ positional arguments:
 
 options:
   -h, --help        show this help message and exit
+  --json            machine-readable JSON output (no interactive prompts)
+  --verbose         include technical details
 ```
 
 ## okto-nexus-connector proxy set
 
 ```text
 usage: okto-nexus-connector proxy set [-h] (--url URL | --url-env URL_ENV |
-                                      --direct) [--no-proxy NO_PROXY]
+                                      --direct) [--no-proxy NO_PROXY] [--json]
+                                      [--verbose]
 
 options:
   -h, --help           show this help message and exit
@@ -88,34 +95,42 @@ options:
   --direct             disable proxy use, including environment proxies
   --no-proxy NO_PROXY  comma-separated bypass hosts, domains, or host:port
                        entries; * bypasses all
+  --json               machine-readable JSON output (no interactive prompts)
+  --verbose            include technical details
 ```
 
 ## okto-nexus-connector proxy show
 
 ```text
-usage: okto-nexus-connector proxy show [-h]
+usage: okto-nexus-connector proxy show [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector proxy clear
 
 ```text
-usage: okto-nexus-connector proxy clear [-h]
+usage: okto-nexus-connector proxy clear [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector reach
 
 ```text
-usage: okto-nexus-connector reach [-h] --server SERVER
+usage: okto-nexus-connector reach [-h] --server SERVER [--json] [--verbose]
 
 options:
   -h, --help       show this help message and exit
   --server SERVER  Nexus Server base URL
+  --json           machine-readable JSON output (no interactive prompts)
+  --verbose        include technical details
 ```
 
 ## okto-nexus-connector configure
@@ -137,6 +152,7 @@ usage: okto-nexus-connector configure [-h] [--file FILE] [--identity IDENTITY]
                                       [--request-id REQUEST_ID]
                                       [--operator-identity OPERATOR_IDENTITY]
                                       [--operator-proof-ref OPERATOR_PROOF_REF]
+                                      [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -169,6 +185,8 @@ options:
                         after binding approval
   --operator-proof-ref OPERATOR_PROOF_REF
                         operator approval reference from the binding proposal
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector connect
@@ -189,6 +207,7 @@ usage: okto-nexus-connector connect [-h] --server SERVER [--agent AGENT]
                                     [--request-id REQUEST_ID]
                                     [--operator-identity OPERATOR_IDENTITY]
                                     [--operator-proof-ref OPERATOR_PROOF_REF]
+                                    [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -220,12 +239,14 @@ options:
                         imported operator identity for Nexus configuration
   --operator-proof-ref OPERATOR_PROOF_REF
                         operator approval reference from Nexus
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector identity
 
 ```text
-usage: okto-nexus-connector identity [-h]
+usage: okto-nexus-connector identity [-h] [--json] [--verbose]
                                      {add,list,show,remove,replace-credential} ...
 
 positional arguments:
@@ -234,6 +255,8 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector identity add
@@ -242,6 +265,7 @@ options:
 usage: okto-nexus-connector identity add [-h] --server SERVER [--agent AGENT]
                                          --alias ALIAS [--credential-stdin]
                                          [--credential-env CREDENTIAL_ENV]
+                                         [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -250,39 +274,47 @@ options:
   --alias ALIAS
   --credential-stdin
   --credential-env CREDENTIAL_ENV
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector identity list
 
 ```text
-usage: okto-nexus-connector identity list [-h]
+usage: okto-nexus-connector identity list [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector identity show
 
 ```text
-usage: okto-nexus-connector identity show [-h] alias
+usage: okto-nexus-connector identity show [-h] [--json] [--verbose] alias
 
 positional arguments:
   alias
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector identity remove
 
 ```text
-usage: okto-nexus-connector identity remove [-h] alias
+usage: okto-nexus-connector identity remove [-h] [--json] [--verbose] alias
 
 positional arguments:
   alias
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector identity replace-credential
@@ -291,6 +323,7 @@ options:
 usage: okto-nexus-connector identity replace-credential [-h]
                                                         [--credential-stdin]
                                                         [--credential-env CREDENTIAL_ENV]
+                                                        [--json] [--verbose]
                                                         alias
 
 positional arguments:
@@ -300,12 +333,14 @@ options:
   -h, --help            show this help message and exit
   --credential-stdin
   --credential-env CREDENTIAL_ENV
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector executor
 
 ```text
-usage: okto-nexus-connector executor [-h]
+usage: okto-nexus-connector executor [-h] [--json] [--verbose]
                                      {register,list,show,configure-launch,realize,configure-discovery,probe} ...
 
 positional arguments:
@@ -324,6 +359,8 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector executor register
@@ -332,6 +369,7 @@ options:
 usage: okto-nexus-connector executor register [-h] --identity IDENTITY
                                               --label LABEL
                                               [--client-intent-id CLIENT_INTENT_ID]
+                                              [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -340,27 +378,33 @@ options:
   --client-intent-id CLIENT_INTENT_ID
                         explicit registration intent ID; otherwise persisted
                         automatically
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector executor list
 
 ```text
-usage: okto-nexus-connector executor list [-h]
+usage: okto-nexus-connector executor list [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector executor show
 
 ```text
-usage: okto-nexus-connector executor show [-h] server_id
+usage: okto-nexus-connector executor show [-h] [--json] [--verbose] server_id
 
 positional arguments:
   server_id
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector executor configure-launch
@@ -372,6 +416,7 @@ usage: okto-nexus-connector executor configure-launch [-h] --identity IDENTITY
                                                       --profile-revision PROFILE_REVISION
                                                       [--provider-home PROVIDER_HOME]
                                                       [--secret-ref NAME=REFERENCE]
+                                                      [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -384,6 +429,8 @@ options:
   --secret-ref NAME=REFERENCE
                         protected vault/provider reference; never credential
                         material
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector executor realize
@@ -397,7 +444,8 @@ usage: okto-nexus-connector executor realize [-h] --identity IDENTITY
                                              --configuration-digest CONFIGURATION_DIGEST
                                              --project PROJECT
                                              [--workspace-id WORKSPACE_ID]
-                                             --label LABEL
+                                             --label LABEL [--json]
+                                             [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -411,6 +459,8 @@ options:
   --project PROJECT
   --workspace-id WORKSPACE_ID
   --label LABEL
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector executor configure-discovery
@@ -421,6 +471,7 @@ usage: okto-nexus-connector executor configure-discovery [-h]
                                                          [--harness-root HARNESS_ROOT]
                                                          [--pi-install-root PI_INSTALL_ROOT]
                                                          [--pi-node PI_NODE]
+                                                         [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -431,6 +482,8 @@ options:
   --pi-install-root PI_INSTALL_ROOT
                         approved Pi releases directory
   --pi-node PI_NODE     Node executable for the Pi releases
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector executor probe
@@ -440,6 +493,7 @@ usage: okto-nexus-connector executor probe [-h] --server-id SERVER_ID
                                            --harness HARNESS
                                            --candidate-ref CANDIDATE_REF
                                            --inventory-revision INVENTORY_REVISION
+                                           [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -447,20 +501,20 @@ options:
   --harness HARNESS
   --candidate-ref CANDIDATE_REF
   --inventory-revision INVENTORY_REVISION
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector discover
 
 ```text
-usage: okto-nexus-connector discover [-h] [--verbose] [--server-id SERVER_ID]
+usage: okto-nexus-connector discover [-h] [--server-id SERVER_ID]
                                      [--harness HARNESS]
                                      [--pi-releases-root PI_RELEASES_ROOT]
-                                     [--pi-node PI_NODE]
+                                     [--pi-node PI_NODE] [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
-  --verbose             show full installation paths, identities and technical
-                        diagnostics
   --server-id SERVER_ID
                         preview persisted executor discovery configuration
   --harness HARNESS
@@ -468,12 +522,14 @@ options:
                         passively enumerate Pi release layouts under this
                         installation root
   --pi-node PI_NODE     trusted Node executable pairing the Pi releases
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector bind
 
 ```text
-usage: okto-nexus-connector bind [-h]
+usage: okto-nexus-connector bind [-h] [--json] [--verbose]
                                  {prepare,apply,create,list,show,remove} ...
 
 positional arguments:
@@ -484,6 +540,8 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector bind prepare
@@ -494,6 +552,7 @@ usage: okto-nexus-connector bind prepare [-h] --identity IDENTITY
                                          [--replace-binding-id REPLACE_BINDING_ID]
                                          --alias ALIAS
                                          --client-intent-id CLIENT_INTENT_ID
+                                         [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -503,6 +562,8 @@ options:
                         Explicitly replace the reviewed binding realization.
   --alias ALIAS
   --client-intent-id CLIENT_INTENT_ID
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector bind apply
@@ -513,6 +574,7 @@ usage: okto-nexus-connector bind apply [-h] --identity IDENTITY
                                        --client-intent-id CLIENT_INTENT_ID
                                        --approved-diff-hash APPROVED_DIFF_HASH
                                        [--operator-proof-ref OPERATOR_PROOF_REF]
+                                       [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -523,6 +585,8 @@ options:
   --operator-proof-ref OPERATOR_PROOF_REF
                         explicit Server operator proof reference, when
                         required
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector bind create
@@ -532,7 +596,8 @@ usage: okto-nexus-connector bind create [-h] --identity IDENTITY
                                         --harness HARNESS
                                         --executable EXECUTABLE
                                         [--pi-node PI_NODE] --alias ALIAS
-                                        [--project PROJECT]
+                                        [--project PROJECT] [--json]
+                                        [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -542,33 +607,41 @@ options:
   --pi-node PI_NODE
   --alias ALIAS
   --project PROJECT
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector bind list
 
 ```text
-usage: okto-nexus-connector bind list [-h]
+usage: okto-nexus-connector bind list [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector bind show
 
 ```text
-usage: okto-nexus-connector bind show [-h] alias
+usage: okto-nexus-connector bind show [-h] [--json] [--verbose] alias
 
 positional arguments:
   alias
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector bind remove
 
 ```text
-usage: okto-nexus-connector bind remove [-h] [--keep-config] alias
+usage: okto-nexus-connector bind remove [-h] [--keep-config] [--json]
+                                        [--verbose]
+                                        alias
 
 positional arguments:
   alias
@@ -576,12 +649,14 @@ positional arguments:
 options:
   -h, --help     show this help message and exit
   --keep-config
+  --json         machine-readable JSON output (no interactive prompts)
+  --verbose      include technical details
 ```
 
 ## okto-nexus-connector runtime
 
 ```text
-usage: okto-nexus-connector runtime [-h]
+usage: okto-nexus-connector runtime [-h] [--json] [--verbose]
                                     {start,status,inspect,logs,submit,steer,interrupt,stop,operation} ...
 
 positional arguments:
@@ -593,6 +668,8 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector runtime start
@@ -603,7 +680,7 @@ usage: okto-nexus-connector runtime start [-h]
                                           [--project PROJECT]
                                           [--harness HARNESS] [--new-session]
                                           [--session-id SESSION_ID]
-                                          [--text TEXT]
+                                          [--text TEXT] [--json] [--verbose]
                                           alias
 
 positional arguments:
@@ -618,22 +695,29 @@ options:
   --session-id SESSION_ID
                         select an existing compatible R4 session
   --text TEXT           initial turn text
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector runtime status
 
 ```text
-usage: okto-nexus-connector runtime status [-h] [--alias ALIAS]
+usage: okto-nexus-connector runtime status [-h] [--alias ALIAS] [--json]
+                                           [--verbose]
 
 options:
   -h, --help     show this help message and exit
   --alias ALIAS  read retained R4 sessions from the Server
+  --json         machine-readable JSON output (no interactive prompts)
+  --verbose      include technical details
 ```
 
 ## okto-nexus-connector runtime inspect
 
 ```text
-usage: okto-nexus-connector runtime inspect [-h] [--alias ALIAS] session_id
+usage: okto-nexus-connector runtime inspect [-h] [--alias ALIAS] [--json]
+                                            [--verbose]
+                                            session_id
 
 positional arguments:
   session_id
@@ -641,12 +725,15 @@ positional arguments:
 options:
   -h, --help     show this help message and exit
   --alias ALIAS  select the retained R4 binding alias
+  --json         machine-readable JSON output (no interactive prompts)
+  --verbose      include technical details
 ```
 
 ## okto-nexus-connector runtime logs
 
 ```text
-usage: okto-nexus-connector runtime logs [-h] [--follow] session_id
+usage: okto-nexus-connector runtime logs [-h] [--follow] [--json] [--verbose]
+                                         session_id
 
 positional arguments:
   session_id
@@ -654,6 +741,8 @@ positional arguments:
 options:
   -h, --help  show this help message and exit
   --follow
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector runtime submit
@@ -661,6 +750,7 @@ options:
 ```text
 usage: okto-nexus-connector runtime submit [-h] [--alias ALIAS]
                                            [--client-intent-id CLIENT_INTENT_ID]
+                                           [--json] [--verbose]
                                            session_id text
 
 positional arguments:
@@ -671,6 +761,8 @@ options:
   -h, --help            show this help message and exit
   --alias ALIAS
   --client-intent-id CLIENT_INTENT_ID
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector runtime steer
@@ -679,7 +771,7 @@ options:
 usage: okto-nexus-connector runtime steer [-h] --alias ALIAS
                                           --client-intent-id CLIENT_INTENT_ID
                                           [--expected-turn-id EXPECTED_TURN_ID]
-                                          [--current-run]
+                                          [--current-run] [--json] [--verbose]
                                           session_id text
 
 positional arguments:
@@ -692,6 +784,8 @@ options:
   --client-intent-id CLIENT_INTENT_ID
   --expected-turn-id EXPECTED_TURN_ID
   --current-run
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector runtime interrupt
@@ -701,7 +795,8 @@ usage: okto-nexus-connector runtime interrupt [-h] [--alias ALIAS]
                                               [--client-intent-id CLIENT_INTENT_ID]
                                               [--expected-turn-id EXPECTED_TURN_ID]
                                               [--current-run]
-                                              [--reason REASON]
+                                              [--reason REASON] [--json]
+                                              [--verbose]
                                               session_id
 
 positional arguments:
@@ -714,6 +809,8 @@ options:
   --expected-turn-id EXPECTED_TURN_ID
   --current-run
   --reason REASON
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector runtime stop
@@ -721,7 +818,8 @@ options:
 ```text
 usage: okto-nexus-connector runtime stop [-h] [--alias ALIAS]
                                          [--client-intent-id CLIENT_INTENT_ID]
-                                         [--reason REASON]
+                                         [--reason REASON] [--json]
+                                         [--verbose]
                                          session_id
 
 positional arguments:
@@ -732,6 +830,8 @@ options:
   --alias ALIAS
   --client-intent-id CLIENT_INTENT_ID
   --reason REASON
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector runtime operation
@@ -739,17 +839,21 @@ options:
 ```text
 usage: okto-nexus-connector runtime operation [-h] --alias ALIAS
                                               --client-intent-id CLIENT_INTENT_ID
+                                              [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
   --alias ALIAS
   --client-intent-id CLIENT_INTENT_ID
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector daemon
 
 ```text
-usage: okto-nexus-connector daemon [-h] {start,run,status,stop} ...
+usage: okto-nexus-connector daemon [-h] [--json] [--verbose]
+                                   {start,run,status,stop} ...
 
 positional arguments:
   {start,run,status,stop}
@@ -758,130 +862,161 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector daemon start
 
 ```text
-usage: okto-nexus-connector daemon start [-h]
+usage: okto-nexus-connector daemon start [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector daemon run
 
 ```text
-usage: okto-nexus-connector daemon run [-h]
+usage: okto-nexus-connector daemon run [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector daemon status
 
 ```text
-usage: okto-nexus-connector daemon status [-h]
+usage: okto-nexus-connector daemon status [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector daemon stop
 
 ```text
-usage: okto-nexus-connector daemon stop [-h]
+usage: okto-nexus-connector daemon stop [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector service
 
 ```text
-usage: okto-nexus-connector service [-h] {install,uninstall,status} ...
+usage: okto-nexus-connector service [-h] [--json] [--verbose]
+                                    {install,uninstall,status} ...
 
 positional arguments:
   {install,uninstall,status}
 
 options:
   -h, --help            show this help message and exit
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector service install
 
 ```text
-usage: okto-nexus-connector service install [-h] [--dry-run]
+usage: okto-nexus-connector service install [-h] [--dry-run] [--json]
+                                            [--verbose]
 
 options:
   -h, --help  show this help message and exit
   --dry-run
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector service uninstall
 
 ```text
-usage: okto-nexus-connector service uninstall [-h] [--dry-run]
+usage: okto-nexus-connector service uninstall [-h] [--dry-run] [--json]
+                                              [--verbose]
 
 options:
   -h, --help  show this help message and exit
   --dry-run
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector service status
 
 ```text
-usage: okto-nexus-connector service status [-h]
+usage: okto-nexus-connector service status [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector reconnect
 
 ```text
-usage: okto-nexus-connector reconnect [-h]
+usage: okto-nexus-connector reconnect [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector status
 
 ```text
-usage: okto-nexus-connector status [-h] [--agent AGENT]
+usage: okto-nexus-connector status [-h] [--agent AGENT] [--json] [--verbose]
 
 options:
   -h, --help     show this help message and exit
   --agent AGENT  show one agent by canonical agent id
+  --json         machine-readable JSON output (no interactive prompts)
+  --verbose      include technical details
 ```
 
 ## okto-nexus-connector logs
 
 ```text
 usage: okto-nexus-connector logs [-h] [--follow] [--errors] [--tail 1..10000]
+                                 [--json] [--verbose]
 
 options:
   -h, --help       show this help message and exit
   --follow         stream new log entries until Ctrl+C
   --errors         show warnings and errors only
   --tail 1..10000  maximum recent lines (default: 50)
+  --json           machine-readable JSON output (no interactive prompts)
+  --verbose        include technical details
 ```
 
 ## okto-nexus-connector doctor
 
 ```text
-usage: okto-nexus-connector doctor [-h] [--probe]
+usage: okto-nexus-connector doctor [-h] [--probe] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
   --probe     attempt live network probes
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector approvals
 
 ```text
-usage: okto-nexus-connector approvals [-h] {list,decide} ...
+usage: okto-nexus-connector approvals [-h] [--json] [--verbose]
+                                      {list,decide} ...
 
 positional arguments:
   {list,decide}
@@ -889,21 +1024,26 @@ positional arguments:
 
 options:
   -h, --help     show this help message and exit
+  --json         machine-readable JSON output (no interactive prompts)
+  --verbose      include technical details
 ```
 
 ## okto-nexus-connector approvals list
 
 ```text
-usage: okto-nexus-connector approvals list [-h]
+usage: okto-nexus-connector approvals list [-h] [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
+  --json      machine-readable JSON output (no interactive prompts)
+  --verbose   include technical details
 ```
 
 ## okto-nexus-connector approvals decide
 
 ```text
 usage: okto-nexus-connector approvals decide [-h] [--cas-token CAS_TOKEN]
+                                             [--json] [--verbose]
                                              request_id {approve,deny}
 
 positional arguments:
@@ -914,18 +1054,23 @@ options:
   -h, --help            show this help message and exit
   --cas-token CAS_TOKEN
                         CAS token correlating the pending request
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector mcp-config
 
 ```text
-usage: okto-nexus-connector mcp-config [-h] {plan,apply,remove} ...
+usage: okto-nexus-connector mcp-config [-h] [--json] [--verbose]
+                                       {plan,apply,remove} ...
 
 positional arguments:
   {plan,apply,remove}
 
 options:
   -h, --help           show this help message and exit
+  --json               machine-readable JSON output (no interactive prompts)
+  --verbose            include technical details
 ```
 
 ## okto-nexus-connector mcp-config plan
@@ -934,6 +1079,7 @@ options:
 usage: okto-nexus-connector mcp-config plan [-h] --server SERVER
                                             --harness {codex_app_server,claude_stream,pi_rpc}
                                             --capability-ref CAPABILITY_REF
+                                            [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -941,6 +1087,8 @@ options:
   --harness {codex_app_server,claude_stream,pi_rpc}
   --capability-ref CAPABILITY_REF
                         mcp-cap: reference issued by the Server
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector mcp-config apply
@@ -951,6 +1099,7 @@ usage: okto-nexus-connector mcp-config apply [-h] --server SERVER
                                              --capability-ref CAPABILITY_REF
                                              --file FILE
                                              [--entry-name ENTRY_NAME]
+                                             [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -959,6 +1108,8 @@ options:
   --capability-ref CAPABILITY_REF
   --file FILE
   --entry-name ENTRY_NAME
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector mcp-config remove
@@ -967,18 +1118,21 @@ options:
 usage: okto-nexus-connector mcp-config remove [-h] --harness HARNESS
                                               --file FILE
                                               [--entry-name ENTRY_NAME]
+                                              [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
   --harness HARNESS
   --file FILE
   --entry-name ENTRY_NAME
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector harness-config
 
 ```text
-usage: okto-nexus-connector harness-config [-h]
+usage: okto-nexus-connector harness-config [-h] [--json] [--verbose]
                                            {describe,validate,show,apply} ...
 
 positional arguments:
@@ -994,6 +1148,8 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector harness-config describe
@@ -1001,10 +1157,13 @@ options:
 ```text
 usage: okto-nexus-connector harness-config describe [-h]
                                                     --harness {codex_app_server,claude_stream,pi_rpc}
+                                                    [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
   --harness {codex_app_server,claude_stream,pi_rpc}
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector harness-config validate
@@ -1012,11 +1171,14 @@ options:
 ```text
 usage: okto-nexus-connector harness-config validate [-h] --file FILE
                                                     [--harness HARNESS]
+                                                    [--json] [--verbose]
 
 options:
   -h, --help         show this help message and exit
   --file FILE
   --harness HARNESS
+  --json             machine-readable JSON output (no interactive prompts)
+  --verbose          include technical details
 ```
 
 ## okto-nexus-connector harness-config show
@@ -1024,11 +1186,14 @@ options:
 ```text
 usage: okto-nexus-connector harness-config show [-h] --identity IDENTITY
                                                 --endpoint-id ENDPOINT_ID
+                                                [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
   --identity IDENTITY
   --endpoint-id ENDPOINT_ID
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector harness-config apply
@@ -1038,6 +1203,7 @@ usage: okto-nexus-connector harness-config apply [-h] --identity IDENTITY
                                                  --endpoint-id ENDPOINT_ID
                                                  --file FILE
                                                  --expected-revision EXPECTED_REVISION
+                                                 [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -1046,28 +1212,36 @@ options:
   --file FILE
   --expected-revision EXPECTED_REVISION
                         revision reviewed with harness-config show
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector connection-config
 
 ```text
-usage: okto-nexus-connector connection-config [-h] {validate,apply} ...
+usage: okto-nexus-connector connection-config [-h] [--json] [--verbose]
+                                              {validate,apply} ...
 
 positional arguments:
   {validate,apply}
 
 options:
   -h, --help        show this help message and exit
+  --json            machine-readable JSON output (no interactive prompts)
+  --verbose         include technical details
 ```
 
 ## okto-nexus-connector connection-config validate
 
 ```text
 usage: okto-nexus-connector connection-config validate [-h] --file FILE
+                                                       [--json] [--verbose]
 
 options:
   -h, --help   show this help message and exit
   --file FILE
+  --json       machine-readable JSON output (no interactive prompts)
+  --verbose    include technical details
 ```
 
 ## okto-nexus-connector connection-config apply
@@ -1086,6 +1260,7 @@ usage: okto-nexus-connector connection-config apply [-h] --file FILE
                                                     [--workspace-label WORKSPACE_LABEL]
                                                     [--provider-home PROVIDER_HOME]
                                                     [--execution-location {local,remote,all}]
+                                                    [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
@@ -1107,4 +1282,6 @@ options:
                         login directory on the destination host; never
                         imported
   --execution-location {local,remote,all}
+  --json                machine-readable JSON output (no interactive prompts)
+  --verbose             include technical details
 ```
