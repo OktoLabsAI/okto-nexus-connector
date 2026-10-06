@@ -32,7 +32,7 @@ _STATUS_ERRORS = frozenset({
     'AGENT_ID_MISMATCH', 'SCOPE_MISMATCH', 'OPERATION_CONFLICT', 'CONTROL_DISCONNECTED',
     'RECONCILIATION_REQUIRED', 'JOURNAL_UNAVAILABLE', 'EXECUTOR_OFFLINE', 'OUTCOME_UNKNOWN',
     'VALIDATION_ERROR', 'CAPACITY_EXCEEDED', 'RUNTIME_DRAINING', 'BINDING_NOT_AUTHORIZED',
-    'CONFLICT', 'PERMISSION_DENIED',
+    'CONFLICT', 'PERMISSION_DENIED', 'ATTACH_DENIED',
 })
 
 
@@ -42,6 +42,7 @@ _ATTENTION_AFTER = 5
 _PERSISTENT_ERRORS = frozenset({
     'PERMISSION_DENIED', 'AGENT_AUTH_REQUIRED', 'CREDENTIAL_REPLACEMENT_REQUIRED',
     'BINDING_NOT_AUTHORIZED', 'VERSION_INCOMPATIBLE', 'PROFILE_DRIFT', 'AGENT_ID_MISMATCH',
+    'ATTACH_DENIED',
 })
 _RECONNECT_JITTER = 0.2
 
@@ -108,6 +109,7 @@ class R4DaemonControl:
         self.consecutive_failures = 0
         self.last_disconnect_cause = None
         self._interrupt_cause = None
+        self._interrupt_code = None
         self._ready_since = None
         self._attention_logged = False
         self._task = None
@@ -401,18 +403,22 @@ class R4DaemonControl:
                     if self.clock() >= onboarding_at and (onboarding_task is None or onboarding_task.done()):
                         onboarding_task = asyncio.create_task(self._continue_onboarding())
                         onboarding_at = self.clock() + 5
-                    await self.execution.sync()
-                    if self.clock() >= renew_at:
+                    lane_renew_at = self.execution.renewal_deadline()
+                    if self.clock() >= min(renew_at, lane_renew_at):
                         # A bootstrap cannot rotate an attached lane or renew a
                         # runtime lease. Reconnect control with a fresh proof.
+                        logging.getLogger(__name__).info(
+                            'Renewing runtime connection: server=%s reason=%s',
+                            self.server_id, 'binding_ticket' if lane_renew_at <= renew_at else 'bootstrap_ticket')
                         return
+                    await self.execution.sync()
                     delivery = None
                     if self.clock() >= poll_refresh_at:
                         delivery = await claim_refresh()
                         poll_refresh_at = self.clock() + 5
                     if delivery is not None or self.clock() >= refresh_at:
                         refresh_at = await self._publish(http, bootstrap, snapshot, delivery)
-                    await self._wait(min(self.poll_seconds, max(0.001, renew_at - self.clock())))
+                    await self._wait(min(self.poll_seconds, max(0.001, min(renew_at, lane_renew_at) - self.clock())))
                 if not self._stopped.is_set():
                     failure = getattr(self.execution.owner, 'failure', None) or getattr(self.connection, 'failure', None)
                     if failure is not None:
@@ -425,6 +431,9 @@ class R4DaemonControl:
                 # from the next caller; the reader/heartbeat fenced the real cause.
                 underlying = (getattr(self.execution.owner, 'failure', None)
                               or getattr(self.connection, 'failure', None))
+                cause = underlying or error
+                self._interrupt_code = (None if hasattr(type(cause), 'rcvd')
+                                        else getattr(cause, 'code', None))
                 self._interrupt_cause = _disconnect_cause(
                     underlying if underlying is not None and underlying is not error else error)
                 import traceback
@@ -439,7 +448,10 @@ class R4DaemonControl:
                     onboarding_task.cancel()
                     await asyncio.gather(onboarding_task, return_exceptions=True)
                 self.phase = 'DRAINING'
-                self._retained_lanes.update(self.execution.lanes)
+                # Reconcile durable events on the next link, but acquire fresh
+                # connection tickets. A still-live ticket may have been revoked
+                # remotely or may be the reason this link is being renewed.
+                self._retained_lanes.clear()
                 await self.execution.close(
                     preserve_leases=not self._stopped.is_set() and not self.connection.online,
                     stop_event=self._stopped)
@@ -479,9 +491,14 @@ class R4DaemonControl:
         async def failed(error):
             self.last_error_at = time.time()
             # Error text can contain credentials or remote payloads.
-            code = self._recovery_error or getattr(error, 'code', None)
+            code = self._recovery_error or self._interrupt_code or getattr(error, 'code', None)
+            self._interrupt_code = None
             self.error_code = code if type(code) is str and code in _STATUS_ERRORS else 'CONTROL_DISCONNECTED'
             self.last_disconnect_cause = self._interrupt_cause or _disconnect_cause(error)
+            # A rejected or closed connection cannot vouch for its retained
+            # derivative. Durable events/receipts remain; the next attempt
+            # obtains fresh tickets using the canonical agent credential.
+            self._retained_lanes.clear()
             self._interrupt_cause = None
             # A link that stayed ready for a stable period starts a new streak,
             # matching the backoff reset in RuntimeAutomation.

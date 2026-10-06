@@ -36,10 +36,17 @@ See the [complete syntax reference](cli-reference.md) for every flag, including 
 okto-nexus-connector --help
 okto-nexus-connector configure --help
 okto-nexus-connector --json status
+okto-nexus-connector status --verbose
+okto-nexus-connector status --json
+okto-nexus-connector identity list --json
 okto-nexus-connector --state-dir /absolute/connector-state status
 ```
 
-Global flags must precede the command. Quote paths with spaces. Examples use single-line commands compatible with ordinary POSIX shells and PowerShell; replace example addresses, aliases, IDs and paths. Do not type placeholder names literally. `configure` and `connect` are interactive; `configure` rejects JSON/non-interactive mode, and `connect` rejects non-interactive mode. Do not use interactive wizards as unattended scripts.
+`--json` and `--verbose` work before or after any command or subcommand. Other global flags (`--state-dir`, `--non-interactive`) precede the command. Quote paths with spaces. Examples use single-line commands compatible with ordinary POSIX shells and PowerShell; replace example addresses, aliases, IDs and paths. Do not type placeholder names literally. `configure` and `connect` are interactive and reject JSON/non-interactive mode. Do not use interactive wizards as unattended scripts.
+
+Default output groups related information and uses readable tables for status, discovery and diagnostics. `--verbose` includes technical details such as connection IDs, timestamps and pending request IDs. Errors and suggested actions remain visible in the summary. `--json` takes precedence over `--verbose` and keeps the existing data fields. Interaction remains unchanged: supported prompts use stderr, including vault consent during identity import. Use `--non-interactive` before the command to prohibit questions and supply explicit arguments and credential input for automation. Help and version retain their standard text output; log streams retain JSON Lines.
+
+Color is automatic on compatible interactive terminals, including Windows terminals with virtual terminal support. Redirected output and pipes contain no color codes. Set `NO_COLOR` (even an empty value) or `TERM=dumb` to disable color. Tables use ASCII separators and wrap long values; narrow terminals use labeled rows. Status words always convey meaning without color. No additional terminal library is required.
 
 JSON status contains `connections` and is useful for automation. Exit code 0 indicates the command completed, not necessarily that every connection is online; inspect result/status fields. Exit codes: 1 application error, 2 usage/interruption, 3 daemon/executor unavailable, 4 uncertain outcome. Streaming JSON output uses one record per line where supported.
 
