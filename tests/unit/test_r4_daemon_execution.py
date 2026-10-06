@@ -17,6 +17,15 @@ from tests.unit.test_execution_selection import selection
 from tests.unit.test_r4_execution import Connection, Factory, observed
 
 
+def test_renewal_deadline_uses_earliest_lane_with_safety_margin():
+    execution = object.__new__(R4DaemonExecution)
+    execution.lanes = {}
+    assert execution.renewal_deadline() == float('inf')
+    execution.lanes = {'fresh': SimpleNamespace(deadline=1600),
+                       'recovered': SimpleNamespace(deadline=1100)}
+    assert execution.renewal_deadline() == 1070
+
+
 @pytest.fixture
 async def lifecycle(selection, tmp_path):
     store, candidate, binding, frame, *_ = selection

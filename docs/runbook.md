@@ -27,9 +27,9 @@ okto-nexus-connector doctor --probe
 | `EXPIRED` | Proposal or scoped authority expired | Identify the expired item; request renewed approval |
 | `REVOKED` / `REJECTED` | Access removed or request denied | Review in Nexus; do not repeat automatically |
 | `CLEANUP_PENDING` | Resource/socket cleanup could not be confirmed | Inspect logs; update Connector and restart after resolving the cause |
-| `RECOVERY_ATTENTION_REQUIRED` | Recovery attempts exhausted | Resolve the reported condition, then restart |
+| `RECOVERY_ATTENTION_REQUIRED` | Repeated recovery failures need attention | Inspect the reported cause; automatic retries continue |
 
-Exact text differs between CLI and dashboard. A process can be running while its connection supervisor is stopped. `EXPIRED` on a proposal does not necessarily mean the canonical agent key expired.
+Exact text differs between CLI and dashboard. A running daemon does not prove that a connection is ready. `EXPIRED` on a proposal does not necessarily mean the canonical agent key expired.
 
 ## Approval accepted but setup never completes
 
@@ -40,6 +40,14 @@ Check whether the request was actually submitted, then whether the daemon attemp
 Use the Nexus LAN hostname/IP from another computer; loopback addresses point to that computer. HTTP/WS are allowed when the Nexus transport policy permits them; HTTPS-only mode requires HTTPS/WSS. Check `reach`, proxy settings and server listening address. `PERMISSION_DENIED` can concern a scoped execution ticket even when `/me` accepts the agent key.
 
 Inventory is published by the daemon. `awaiting_inventory` or `inventory_not_fresh` requires checking its control connection and selected installation. Automatic revalidation can recover unchanged installations. A changed executable, workspace or contract can require review.
+
+### Unlimited authorization and temporary tickets
+
+Unlimited duration/action limits apply to the execution authorization, not to connection tickets. The daemon renews control before the bootstrap renewal deadline or 30 seconds before the earliest binding ticket expires, whichever comes first. Logs identify planned renewal as `Renewing runtime connection`.
+
+Renewal uses the existing reconnect/reconciliation lifecycle, not an in-place WebSocket credential update. It can interrupt active harness execution. On the next connection, the daemon acquires fresh tickets using the stored agent credential; it does not reuse tickets from the closed link or discard durable event/receipt records. No new approval is required while the canonical authorization remains valid.
+
+`ATTACH_DENIED` means Nexus rejected binding attachment; it does not by itself mean the provider login failed. The daemon drops retained ticket material and retries. If it repeats, inspect Nexus server logs for `Binding attach rejected` and verify current agent authorization and binding revisions. Revoked authorization is never automatically restored.
 
 ## Existing binding
 

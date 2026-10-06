@@ -39,6 +39,10 @@ class R4DaemonExecution:
         return bool(not self.closing and self.lanes and self.owner is not None
                     and self.owner.failure is None and self.connection.online)
 
+    def renewal_deadline(self):
+        """Renew before the earliest lane expires, including recovered lanes."""
+        return min((lane.deadline - 30 for lane in self.lanes.values()), default=float('inf'))
+
     def _bindings(self):
         state = self.store.load()
         records = [r for r in state.execution_bindings if

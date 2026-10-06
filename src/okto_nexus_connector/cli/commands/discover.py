@@ -55,13 +55,8 @@ def render_summary(result, output: Output, *, harness=None):
         status = next(iter(states)) if len(states) == 1 else "Mixed readiness; see --verbose"
         rows.append((family["name"], str(count), status))
     headers = ("Harness", "Found", "Status")
-    widths = [max(len(row[index]) for row in [headers, *rows]) for index in range(3)]
-    def line(row):
-        return "  ".join(value.ljust(width) for value, width in zip(row, widths)).rstrip()
-    output.line(line(headers))
-    output.line(line(tuple("-" * width for width in widths)))
-    for row in rows:
-        output.line(line(row))
+    output.heading('Local harnesses')
+    output.table(headers, rows)
     output.line("")
     output.line("Discovery starts nothing; runtime approval is separate.")
     if host_unsupported:

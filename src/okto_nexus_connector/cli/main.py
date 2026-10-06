@@ -20,16 +20,38 @@ from pathlib import Path
 from .. import __version__
 from ..errors import ConnectorError
 from .output import EXIT_OK, EXIT_USAGE, Output
+from .presentation import styled
+
+
+class ConnectorParser(argparse.ArgumentParser):
+    def print_help(self, file=None):
+        stream = file or sys.stdout
+        text = self.format_help()
+        for title in ('usage:', 'positional arguments:', 'options:'):
+            text = text.replace(title, styled(title, 'heading', stream))
+        self._print_message(text, stream)
+
+    def parse_args(self, args=None, namespace=None):
+        tokens = list(sys.argv[1:] if args is None else args)
+        self._output_context['json'] = '--json' in tokens[:tokens.index('--') if '--' in tokens else len(tokens)]
+        return super().parse_args(tokens, namespace)
+
+    def error(self, message):
+        if getattr(self, '_output_context', {}).get('json'):
+            Output(json_mode=True).error(ConnectorError('VALIDATION_ERROR', 'cli', message))
+            self.exit(EXIT_USAGE)
+        super().error(message)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = ConnectorParser(
         prog="okto-nexus-connector",
         description="Remote harness connector for Okto Nexus")
     parser.add_argument("--version", action="version",
                         version=f"okto-nexus-connector {__version__}")
     parser.add_argument("--json", action="store_true",
                         help="machine-readable JSON output")
+    parser.add_argument('--verbose', action='store_true', help='include technical details')
     parser.add_argument("--non-interactive", action="store_true",
                         help="never prompt; ambiguity fails with guidance")
     parser.add_argument("--state-dir", type=Path, default=None,
@@ -171,8 +193,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     discover = sub.add_parser("discover",
                               help="local harness inventory (redacted)")
-    discover.add_argument("--verbose", action="store_true",
-                          help="show full installation paths, identities and technical diagnostics")
     discover.add_argument("--server-id", default=None,
                           help="preview persisted executor discovery configuration")
     discover.add_argument("--harness", default=None)
@@ -353,13 +373,27 @@ def build_parser() -> argparse.ArgumentParser:
             item.add_argument('--workspace-label', default=None)
             item.add_argument('--provider-home', help='login directory on the destination host; never imported')
             item.add_argument('--execution-location', choices=['local','remote','all'], default='local')
+    context = {'json': False}
+    def shared_options(item):
+        item._output_context = context
+        if item is not parser:
+            item.add_argument('--json', action='store_true', default=argparse.SUPPRESS,
+                              help='machine-readable JSON output (no interactive prompts)')
+            item.add_argument('--verbose', action='store_true', default=argparse.SUPPRESS,
+                              help='include technical details')
+        for action in item._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                for child in action.choices.values():
+                    shared_options(child)
+    shared_options(parser)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    output = Output(json_mode=args.json)
+    output = Output(json_mode=args.json, verbose=args.verbose)
+    args.non_interactive = args.non_interactive or args.json
     from .commands import dispatch
     try:
         result = asyncio.run(dispatch(args, output))
@@ -368,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
     except EOFError:
         return output.error(ConnectorError('VALIDATION_ERROR','cli','Terminal input ended. Configuration canceled.'))
     except KeyboardInterrupt:
-        print("interrupted", file=sys.stderr)
+        output.error(ConnectorError('INTERRUPTED', 'cli', 'Operation interrupted.'))
         return EXIT_USAGE
     if result is None:
         return EXIT_OK
@@ -377,6 +411,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "discover" and not args.json and not args.verbose:
         from .commands.discover import render_summary
         render_summary(result, output, harness=args.harness)
+    elif args.command == 'doctor' and not args.json and not args.verbose:
+        output.heading('Diagnostic checks')
+        output.table(['Layer', 'Check', 'Status', 'Detail'],
+                     [[c['layer'], c['name'], c['status'], c['detail']] for c in result['checks']])
+        actions = [c for c in result['checks'] if c.get('action')]
+        if actions:
+            output.heading('Next steps')
+            for check in actions:
+                output.line(f"  {check['name']}: {check['action']}")
+        output.line('\nDetails: doctor --verbose | JSON: doctor --json')
     else:
         output.result(result)
     return EXIT_OK

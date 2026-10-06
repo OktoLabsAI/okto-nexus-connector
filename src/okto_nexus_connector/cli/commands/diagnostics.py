@@ -34,6 +34,51 @@ def _stamp(value):
     return datetime.fromtimestamp(value, timezone.utc).isoformat() if value else None
 
 
+def render_status(result, output):
+    names = {'codex_app_server': 'Codex', 'claude_stream': 'Claude Code', 'pi_rpc': 'Pi'}
+    output.heading('Connector status')
+    daemon = result['daemon']
+    output.line(f"Daemon: {'running' if daemon['running'] else 'stopped'}" +
+                (f" (PID {daemon['pid']})" if daemon.get('pid') else ''))
+    if daemon.get('ipc_error'):
+        output.line(f"IPC error: {daemon['ipc_error']}")
+    output.heading('Servers')
+    if result['servers']:
+        output.table(['Server', 'Status', 'Error'],
+                     [[s['server'], s['state'], s.get('error') or '-'] for s in result['servers']])
+    if not result['servers']:
+        output.line('No servers configured.')
+    output.heading('Agent connections')
+    rows = [[c.get('alias') or c.get('identity') or c['agent'], c['agent'],
+             names.get(c.get('adapter_id'), c.get('adapter_id') or '-'), c['status']]
+            for c in result['connections']]
+    connected_agents = {(c.get('identity'), c['agent']) for c in result['connections']}
+    rows.extend([[a['identity'], a['agent'], ', '.join(names.get(h, h) for h in a['harnesses']) or '-', a['status']]
+                 for a in result['agents'] if (a['identity'], a['agent']) not in connected_agents])
+    if rows:
+        output.table(['Connection', 'Agent', 'Harness', 'Status'], rows)
+    if not rows:
+        output.line('No matching agents configured. Run connect to configure an agent.')
+    notices = []
+    for server in result['servers']:
+        if server.get('attention_required'):
+            notices.append(f"{server['server']}: {server['consecutive_failures']} consecutive failures; still retrying.")
+    for connection in result['connections']:
+        if connection.get('error'):
+            notices.append(f"{connection['agent']}: {connection['error']}")
+    for agent in result['agents']:
+        if agent.get('action'):
+            notices.append(f"{agent['agent']}: {agent['action']}")
+        if agent.get('pending_requests'):
+            notices.append(f"{agent['agent']}: {len(agent['pending_requests'])} pending configuration request(s). Use status --verbose for details.")
+    if notices:
+        output.heading('Needs attention')
+        for notice in dict.fromkeys(notices):
+            output.line('  - ' + notice)
+    output.line('\nDetails: status --verbose | JSON: status --json')
+    output.line('Troubleshooting: logs --errors | doctor --probe')
+
+
 async def run_status(args, output, root):
     store = StateStore(paths.state_file(root))
     state = store.load()
@@ -155,13 +200,17 @@ async def run_status(args, output, root):
     result = dict(daemon={'running': current.running, 'pid': current.pid, 'ipc_error': ipc_error},
                   servers=servers, agents=agents, connections=connections,
                   logs=str(root / 'logs' / 'daemon.log'))
+    if not output.json_mode and not output.verbose:
+        render_status(redact_mapping(result), output)
+        return None
     if not output.json_mode:
-        output.line('Connector status')
+        output.heading('Connector status - details')
         output.line(f"Daemon: {'running' if current.running else 'stopped'}" +
                     (f' (PID {current.pid})' if current.pid else ''))
         if ipc_error:
             output.line(f'IPC error: {ipc_error}')
         for server in servers:
+            output.line('')
             output.line(redact_text(f"Server: {server['server']} | {server['state']}"))
             for field in ('error', 'last_connected_at', 'last_received_at', 'last_error_at',
                           'last_disconnect_cause'):
@@ -171,6 +220,7 @@ async def run_status(args, output, root):
                 output.line(f"  Attention: {server['consecutive_failures']} consecutive connection failures; "
                             "still retrying. Inspect logs --errors and the Server.")
         for agent in agents:
+            output.line('')
             names = {'codex_app_server': 'Codex', 'claude_stream': 'Claude Code', 'pi_rpc': 'Pi'}
             harnesses = ', '.join(names.get(name, name) for name in agent['harnesses'])
             output.line(f"Agent: {agent['agent']} | {agent['status']}" + (f' | {harnesses}' if harnesses else ''))
@@ -183,12 +233,13 @@ async def run_status(args, output, root):
         if not agents:
             output.line('No matching agents configured. Run connect to configure an agent.')
         for connection in connections:
+            output.line('')
             output.line(f"Connection: {connection.get('alias') or connection['binding_id']} | {connection['agent']} | {connection['status']}")
             output.line(f"  Server: {connection['server']} | Host: {connection.get('host') or 'unknown'} | Machine: {connection.get('machine_id') or connection.get('executor_id') or 'unknown'}")
             if connection.get('error'):
                 output.line(f"  Error: {connection['error']}")
         output.line(f"Logs: {result['logs']}")
-        output.line('Details: --json status | Live logs: logs --follow | Diagnostics: doctor --probe')
+        output.line('JSON: status --json | Live logs: logs --follow | Diagnostics: doctor --probe')
         return None
     return redact_mapping(result)
 
