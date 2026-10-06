@@ -382,8 +382,12 @@ class R4DaemonControl:
             except Exception as error:
                 code = getattr(error, 'code', None)
                 self.error_code = code if type(code) is str and code in _STATUS_ERRORS else 'CONTROL_DISCONNECTED'
-                logging.getLogger(__name__).warning('Runtime execution interrupted: code=%s exception=%s',
-                    getattr(error, 'code', 'CONTROL_DISCONNECTED'), type(error).__name__)
+                import traceback
+                logging.getLogger(__name__).warning(
+                    'Runtime execution interrupted: code=%s exception=%s stage=%s location=%s',
+                    getattr(error, 'code', 'CONTROL_DISCONNECTED'), type(error).__name__,
+                    getattr(error, 'stage', 'unknown'),
+                    ' > '.join(f'{frame.name}:{frame.lineno}' for frame in traceback.extract_tb(error.__traceback__)))
                 raise
             finally:
                 if onboarding_task is not None and not onboarding_task.done():
