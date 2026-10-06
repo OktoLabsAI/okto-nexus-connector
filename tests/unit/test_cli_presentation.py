@@ -44,17 +44,18 @@ def test_usage_errors_are_json_with_original_exit_code(capsys):
     assert captured.err == ''
 
 
-def test_json_dispatch_is_noninteractive_and_preserves_payload(monkeypatch, capsys):
+@pytest.mark.parametrize('non_interactive', [False, True])
+def test_json_preserves_explicit_interaction_mode_and_payload(monkeypatch, capsys, non_interactive):
     from okto_nexus_connector.cli import commands
     payload = {'items': [{'id': 'original', 'empty': None}], 'ok': True}
     async def dispatch(args, output):
-        assert args.non_interactive and output.verbose
+        assert args.non_interactive == non_interactive and output.verbose
         output.heading('Must not appear')
         output.line('Must not appear')
         output.table(['Must not appear'], [['hidden']])
         return payload
     monkeypatch.setattr(commands, 'dispatch', dispatch)
-    assert main(['status', '--json', '--verbose']) == 0
+    assert main((['--non-interactive'] if non_interactive else []) + ['status', '--json', '--verbose']) == 0
     captured = capsys.readouterr()
     assert json.loads(captured.out) == payload
     assert '\x1b' not in captured.out and not captured.err
