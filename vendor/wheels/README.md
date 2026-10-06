@@ -120,3 +120,15 @@ SHA-256: `19a5bb4bf1e43bc2d523682a1aa4b1f14305e7ce21c8a5a5704b98efc5b8d600`.
 SHA-256 `6af120edf1279cc07c026ba86ce1a2bc856d6982e3acd82fa1b63c951a39c25c`. The same wheel is used by Nexus and Connector regression tests.
 
 The current 0.0.1 artifact includes the exact Okto Nexus LICENSE and SaaS/Branding Addendum.
+# Current release dependency
+
+The Connector pins `okto-nexus-connector-core==0.0.1`. Its matching artifact is
+`okto_nexus_connector_core-0.0.1-py3-none-any.whl`, built from Core main commit
+`a5dd65cf21d8628685a7932c8e701c06d20a9d09`.
+
+SHA-256: `1accdfe1c0075cfcd224cec91cc60ab7df43e8785138518bc86a48ccf034144c`.
+
+This artifact includes current connection configuration, native protocol probes,
+remote HTTP MCP support and reconnect automation. The older entries below are
+historical and are not the dependency selected by the current package metadata.
+
