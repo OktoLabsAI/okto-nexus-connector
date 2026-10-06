@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import secrets
 import time
 
@@ -44,13 +44,14 @@ class R4Connection:
     def __init__(self, websocket, state: R4ControlState, *, boot_id: str,
                  regular_items=32, control_items=8, regular_bytes=256 * 1024,
                  control_bytes=128 * 1024, max_requests=16, max_lanes=256,
-                 request_timeout=15.0, send_timeout=5.0, heartbeat_seconds=15.0, initial_lanes=None):
+                 request_timeout=15.0, send_timeout=5.0, heartbeat_seconds=15.0, initial_lanes=None, resume=None):
         limits = (regular_items, control_items, regular_bytes, control_bytes, max_requests, max_lanes)
         if (not state.control_ready or not boot_id or
                 any(type(n) is not int or n <= 0 for n in limits) or
                 min(request_timeout, send_timeout, heartbeat_seconds) <= 0):
             raise ValueError('Invalid R4 connection settings.')
         self.websocket, self.state, self.boot_id = websocket, state, boot_id
+        self._resume = resume
         self.limits = {False: (regular_items, regular_bytes), True: (control_items, control_bytes)}
         self.max_requests = max_requests
         self.max_lanes = max_lanes
@@ -71,6 +72,7 @@ class R4Connection:
         self.failure = None
         self.close_error = None
         self.last_received_at = None
+        self._last_received_monotonic = time.monotonic()
         for binding_id,lane in (initial_lanes or {}).items():
             if (len(self._lanes)>=max_lanes or not isinstance(lane,R4LaneProjection) or
                     binding_id!=lane.binding_id or lane.boot_id!=boot_id or
@@ -177,6 +179,10 @@ class R4Connection:
         try:
             while self.online:
                 await asyncio.sleep(self.heartbeat_seconds)
+                if ('heartbeat_ack_v1' in self.state.control_capabilities and
+                        time.monotonic() - self._last_received_monotonic > self.heartbeat_seconds * 2):
+                    if not await self._try_resume(self.websocket):
+                        raise ConnectorError('CONTROL_DISCONNECTED', 'r4_heartbeat', 'The Server heartbeat deadline expired.')
                 await self.send(encode_r4_frame(dict(**self._base(), type='heartbeat')).decode())
         except asyncio.CancelledError:
             raise
@@ -186,7 +192,16 @@ class R4Connection:
     async def _read(self):
         try:
             while self.online:
-                raw = await self.websocket.recv()
+                socket = self.websocket
+                try:
+                    raw = await socket.recv()
+                except Exception as error:
+                    from websockets.exceptions import ConnectionClosed
+                    code = getattr(getattr(error, 'rcvd', None), 'code', None)
+                    if (isinstance(error, (OSError, ConnectionClosed)) and code in (None, 1000, 1001, 1006)
+                            and await self._try_resume(socket)):
+                        continue
+                    raise
                 encoded = raw.encode('utf-8') if isinstance(raw, str) else raw
                 frame = decode_r4_frame(encoded)
                 kind = frame['type']
@@ -197,10 +212,11 @@ class R4Connection:
                         for k in ('connection_id', 'connection_generation')):
                     raise CoreError('STALE_GENERATION', 'r4_link')
                 self.last_received_at = time.time()
+                self._last_received_monotonic = time.monotonic()
                 if kind == 'operation.submit':
                     self._admit(frame, encoded)
-                elif kind in ('lease.granted', 'binding.attached'):
-                    field = 'request_id' if kind == 'lease.granted' else 'attach_request_id'
+                elif kind in ('lease.granted', 'binding.attached', 'connection.renewed'):
+                    field = 'attach_request_id' if kind == 'binding.attached' else 'request_id'
                     pending = self._pending.get((kind, frame[field]))
                     if pending is None or pending[0].done():
                         raise CoreError('STALE_GENERATION', 'r4_link')
@@ -229,6 +245,29 @@ class R4Connection:
             raise
         except Exception as error:
             self._fence(error)
+
+    async def _try_resume(self, socket):
+        # An uncertain request must use durable reconciliation. A quiet wire
+        # may resume while native work continues under its existing lease.
+        if not self._resume or self._pending or self._closed:
+            return False
+        async with self._write_lock:
+            if self.websocket is not socket:
+                return True
+            if self._pending or self._closed:
+                return False
+            try:
+                await asyncio.wait_for(socket.close(), self.send_timeout)
+                replacement = await asyncio.wait_for(self._resume(self.state), 8)
+            except Exception:
+                return False
+            if self._closed:
+                await replacement.close()
+                return False
+            self.websocket = replacement
+            self._last_received_monotonic = time.monotonic()
+            logging.getLogger(__name__).info('Control transport resumed; runtime sessions and lease ownership retained.')
+            return True
 
     async def _request(self, frame, *, reply_type, request_id, validate=None, finish=None, fence_on_error=True, before_send=None):
         self._require_online()
@@ -284,15 +323,33 @@ class R4Connection:
         if ('event.ack',stream) in self._pending:
             raise ConnectorError('CAPACITY_EXCEEDED','r4_event','The event stream already has an in-flight batch.')
         def prepare_send():
-            if self._lanes.get(binding_id) is not lane or time.monotonic() >= lane.deadline_monotonic:
+            current = self._lanes.get(binding_id)
+            if current is None or replace(current, deadline_monotonic=lane.deadline_monotonic) != lane or time.monotonic() >= current.deadline_monotonic:
                 raise CoreError('BINDING_NOT_AUTHORIZED','r4_event')
             self._event_written[stream] = max(target,self._event_written.get(stream,0))
         def validate(reply):
-            if self._lanes.get(binding_id) is not lane or time.monotonic() >= lane.deadline_monotonic:
+            current = self._lanes.get(binding_id)
+            if current is None or replace(current, deadline_monotonic=lane.deadline_monotonic) != lane or time.monotonic() >= current.deadline_monotonic:
                 raise CoreError('BINDING_NOT_AUTHORIZED','r4_event')
             return reply['sequence'] >= target
         return await self._request(parsed,reply_type='event.ack',request_id=stream,
                                    validate=validate,fence_on_error=False,before_send=prepare_send)
+
+    async def renew_connection(self):
+        """Extend the current proofs; retain socket, lane attempts and native owners."""
+        if 'connection_renewal_v1' not in self.state.control_capabilities:
+            raise ConnectorError('VERSION_INCOMPATIBLE', 'r4_renewal', 'The Server does not support connection continuity.')
+        started = time.monotonic()
+        request_id = 'renew_' + secrets.token_hex(16)
+        def validate(reply):
+            deadline = started + reply['expires_in']
+            if deadline <= time.monotonic() or set(reply['binding_ids']) != set(self._lanes):
+                raise CoreError('STALE_GENERATION', 'r4_renewal')
+            for binding_id, lane in self._lanes.items():
+                self._lanes[binding_id] = replace(lane, deadline_monotonic=deadline)
+        reply = await self._request(dict(**self._base(), type='connection.renew', request_id=request_id),
+            reply_type='connection.renewed', request_id=request_id, validate=validate)
+        return started + reply['expires_in']
 
     async def attach_binding(self, *, binding_id, agent_id, ticket, credential_epoch,
                              authorization_revision, configuration_revision):

@@ -499,3 +499,33 @@ async def test_generic_disconnect_logs_the_fenced_link_cause(control, monkeypatc
     finally:
         monkeypatch.undo()
         await dispose(owner, host)
+
+
+async def test_repeated_ticket_renewals_do_not_reconnect(control):
+    owner, peer, _, host, _ = control
+    instant = [100.0]
+    owner.clock = owner.registration.clock = lambda: instant[0]
+    original = peer.connect
+    renewals = []
+    async def connect(*args, **kwargs):
+        connection = await original(*args, **kwargs)
+        connection.state.control_capabilities = ('connection_renewal_v1',)
+        async def renew():
+            renewals.append(instant[0])
+            return instant[0] + 600
+        connection.renew_connection = renew
+        return connection
+    owner.connect = connect
+    owner.start()
+    try:
+        await eventually(lambda: owner.status()['control_ready'])
+        connection, execution = owner.connection, owner.execution
+        for index in range(4):
+            instant[0] += 421
+            await eventually(lambda: len(renewals) == index + 1)
+            assert owner.connection is connection and owner.execution is execution
+            assert connection.online and not owner.cleanup_pending
+            assert peer.calls == 1 and len(peer.sockets) == 1
+            assert owner._bootstrap.deadline_monotonic == instant[0] + 600
+    finally:
+        await dispose(owner, host)

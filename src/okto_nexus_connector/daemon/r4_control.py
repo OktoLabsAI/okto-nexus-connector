@@ -419,12 +419,16 @@ class R4DaemonControl:
                         onboarding_at = self.clock() + 5
                     lane_renew_at = self.execution.renewal_deadline()
                     if self.clock() >= min(renew_at, lane_renew_at):
-                        # A bootstrap cannot rotate an attached lane or renew a
-                        # runtime lease. Reconnect control with a fresh proof.
-                        logging.getLogger(__name__).info(
-                            'Renewing runtime connection: server=%s reason=%s',
-                            self.server_id, 'binding_ticket' if lane_renew_at <= renew_at else 'bootstrap_ticket')
-                        return
+                        if 'connection_renewal_v1' in getattr(self.connection.state, 'control_capabilities', ()):
+                            deadline = await self.execution.renew_connection()
+                            bootstrap = replace(bootstrap, deadline_monotonic=deadline)
+                            self._bootstrap = bootstrap
+                            renew_at = self.clock() + max(0, deadline - self.clock()) * 0.7
+                            lane_renew_at = self.execution.renewal_deadline()
+                            logging.getLogger(__name__).info('Runtime authority renewed in place: server=%s', self.server_id)
+                        else:
+                            logging.getLogger(__name__).warning('Server requires reconnect for ticket renewal; upgrade Nexus for uninterrupted continuity.')
+                            return
                     await self.execution.sync()
                     delivery = None
                     if self.clock() >= poll_refresh_at:
