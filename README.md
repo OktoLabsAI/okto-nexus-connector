@@ -4,7 +4,7 @@ Run Codex, Claude Code or Pi on the Connector computer while Nexus coordinates t
 
 ## Install
 
-Python 3.11 or newer is required. This release is `0.0.1` and requires `okto-nexus-connector-core==0.0.3`.
+Python 3.11 or newer is required. This release is `0.0.2` and requires `okto-nexus-connector-core==0.0.3`.
 
 From a checkout, using the included Core wheel:
 
