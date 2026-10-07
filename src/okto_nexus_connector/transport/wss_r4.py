@@ -133,6 +133,10 @@ async def negotiate_r4_control(
                       connection_id=connection_id, generation=generation):
             raise ValueError("The R4 control frame changed scope.")
         kind = frame["type"]
+        if kind == "heartbeat" and 'heartbeat_ack_v1' in welcome['control_capabilities']:
+            # Acknowledgements can arrive between reconciliation pages or
+            # retries. Liveness does not grant control readiness.
+            continue
         if kind == "reconcile.request":
             if frame['cursor'] is None:
                 attempts += 1
