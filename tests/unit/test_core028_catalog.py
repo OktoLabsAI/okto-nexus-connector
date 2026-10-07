@@ -1,8 +1,7 @@
 """Unit: Core 0.2.8 integrations — the public runtime catalog (C9/C01).
 
 The catalog is the single source: the connector keeps no host-side
-adapter arrays; ``claude_attach`` surfaces as registered-unqualified and
-never enters discovery flows merely by existing.
+adapter arrays; removed attach connections are absent from discovery.
 """
 
 from __future__ import annotations
@@ -33,14 +32,9 @@ def test_catalog_is_the_single_source():
         or set(adapter_ids()) == managed
 
 
-def test_attach_is_registered_unqualified_not_discoverable():
+def test_removed_attach_is_not_offered():
     catalog = get_runtime_catalog()
-    attach = next(d for d in catalog.runtimes
-                  if d.adapter_id == "claude_attach")
-    assert attach.support_status == "registered_unqualified"
-    assert attach.discoverable is False
-    assert attach.connection_mode == "attach"
-    # the connector never treats it as a known managed harness
+    assert "claude_attach" not in {d.adapter_id for d in catalog.runtimes}
     assert not known_adapter("claude_attach")
 
 
