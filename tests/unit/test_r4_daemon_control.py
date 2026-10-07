@@ -112,7 +112,8 @@ def control(tmp_path):
 
 async def eventually(predicate, *, diagnostics=None):
     try:
-        async with asyncio.timeout(3):
+        # Includes real journal/ledger initialization on cold CI filesystems.
+        async with asyncio.timeout(15):
             while not predicate():
                 await asyncio.sleep(0.005)
     except TimeoutError as error:
