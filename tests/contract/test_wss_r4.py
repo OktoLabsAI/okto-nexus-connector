@@ -202,3 +202,56 @@ async def test_r4_control_applies_core_authority_before_ack_and_rejects_bad_repl
     finally:
         await runtime.shutdown(ShutdownPolicy(0, 0))
         await journal.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wrong_scope", [False, True])
+async def test_negotiation_handles_heartbeat_ack_between_reconciliation_pages(wrong_scope):
+    peer = Peer()
+    original_send = peer.send
+    reports = []
+
+    async def send(raw):
+        frame = decode_r4_frame(raw.encode("utf-8"))
+        if frame["type"] == "hello":
+            await original_send(raw)
+            welcome, request = await peer.inbox.get(), await peer.inbox.get()
+            await peer.inbox.put({**welcome, "control_capabilities": ["heartbeat_ack_v1"]})
+            await peer.inbox.put(request)
+        elif frame["type"] == "reconcile.report":
+            peer.sent.append(frame)
+            await peer.inbox.put({**BASE, **peer.connection, "type": "reconcile.accepted",
+                "reconcile_id": frame["reconcile_id"], "recovery_remaining": frame["next_cursor"] is not None,
+                "ready_lane_ids": [], "session_lease_requirements": []})
+        elif frame["type"] == "heartbeat":
+            peer.sent.append(frame)
+            ack = dict(frame)
+            if wrong_scope:
+                ack["connection_generation"] += 1
+            await peer.inbox.put(ack)
+            await peer.inbox.put({**BASE, **peer.connection, "type": "reconcile.request",
+                "reconcile_id": "reconcile-1", "cursor": "page-2", "operation_ids": [],
+                "session_ids": [], "stream_watermarks": []})
+        else:
+            await original_send(raw)
+
+    peer.send = send
+    async def report(request):
+        reports.append(request["cursor"])
+        return {**BASE, **peer.connection, "type": "reconcile.report",
+            "reconcile_id": request["reconcile_id"], "cursor": request["cursor"],
+            "next_cursor": "page-2" if request["cursor"] is None else None,
+            "complete": request["cursor"] is not None, "receipts": [], "claims": [],
+            "stream_watermarks": [], "ownership_facts": []}
+
+    call = negotiate_r4_control(peer, server_id="srv", executor_id="exe",
+        management_revision=MANAGEMENT, snapshot_format=SNAPSHOT_FORMAT_VERSION,
+        boot_id="boot", report_reconciliation=report)
+    if wrong_scope:
+        with pytest.raises(ValueError, match="changed scope"):
+            await asyncio.wait_for(call, 2)
+        assert reports == [None]
+    else:
+        state = await asyncio.wait_for(call, 2)
+        assert state.control_ready
+        assert reports == [None, "page-2"]
