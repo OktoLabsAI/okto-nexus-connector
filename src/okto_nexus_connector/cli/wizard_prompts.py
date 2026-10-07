@@ -51,7 +51,7 @@ def preferences(configuration, schema):
             continue
         name=field['name']
         if field['type']=='enum':
-            options=[('', 'Harness default')] + [(v,v) for v in field['values']]
+            options=[('', 'Inherit agent/global policy' if name == 'inherit_global_mcps' else 'Harness default')] + [(v,v) for v in field['values']]
             value=choice(field['label'],options,current.get(name,''))
         else:
             value=text(field['label']+' (optional)',current.get(name,''))

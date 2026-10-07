@@ -1,3 +1,8 @@
+# Current release dependency
+
+Core 0.0.3 is required by Nexus 0.2.2 and Connector 0.0.2.
+The shared wheel SHA-256 is `504e744002f91158995bc9bf4d6f1d6c982462abbe9c864b575865fda9c0aff7`.
+
 Current PyPI release candidate: `okto_nexus_connector_core-0.0.1-py3-none-any.whl`
 SHA-256: 1547d389913f6de6b9060f03b9492b38be660d876ab1d6a5298442720cf28421.
 Python imports remain `nexus_connector_core`.
@@ -90,9 +95,9 @@ Current: `nexus_connector_core-0.2.14.dev0-py3-none-any.whl`
 
 SHA-256: `759cdee946037ed5e215f901cdfb09b31baf350c7fde69e4d5f79bd41f515bee`
 
-É o mesmo artefato usado pelo Nexus. Para instalar o Connector via pip antes
-de publicar o Core em um índice, use `pip install --find-links vendor/wheels .`
-na raiz deste repositório. O NXL ainda é R3; o artefato não habilita execução
+Ã‰ o mesmo artefato usado pelo Nexus. Para instalar o Connector via pip antes
+de publicar o Core em um Ã­ndice, use `pip install --find-links vendor/wheels .`
+na raiz deste repositÃ³rio. O NXL ainda Ã© R3; o artefato nÃ£o habilita execuÃ§Ã£o
 remota R4. Os wheels 0.2.12 e 0.2.13 permanecem apenas para rastreabilidade.
 
 Current pinned artifact: `nexus_connector_core-0.2.18.dev0-py3-none-any.whl`,

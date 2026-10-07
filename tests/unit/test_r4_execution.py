@@ -166,7 +166,10 @@ async def observed(queue, owner):
 
 async def failed(owner):
     try:
-        async with asyncio.timeout(3):
+        # Includes cold journal/ledger initialization before the injected
+        # fault. Match the receipt watchdog on loaded Windows CI runners;
+        # this assertion verifies containment and durability, not latency.
+        async with asyncio.timeout(15):
             while owner.failure is None or owner.pending_count:
                 await asyncio.sleep(.005)
     except TimeoutError as error:

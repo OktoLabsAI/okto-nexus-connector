@@ -4,7 +4,7 @@ Run Codex, Claude Code or Pi on the Connector computer while Nexus coordinates t
 
 ## Install
 
-Python 3.11 or newer is required. This release is `0.0.1` and requires `okto-nexus-connector-core==0.0.1`.
+Python 3.11 or newer is required. This release is `0.0.2` and requires `okto-nexus-connector-core==0.0.3`.
 
 From a checkout, using the included Core wheel:
 
@@ -65,3 +65,8 @@ python -m build
 ## License
 
 Elastic License 2.0 with the Okto Labs SaaS/Branding Addendum. [LICENSE](LICENSE) is authoritative and matches the Nexus license. See [CONTRIBUTING.md](CONTRIBUTING.md) for branch and review rules.
+
+## Global harness MCPs
+
+See [MCP inheritance](docs/mcp-inheritance.md) for host-local MCP configuration,
+agent/global policy inheritance and version requirements.

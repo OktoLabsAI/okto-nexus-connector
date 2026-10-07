@@ -131,6 +131,10 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
     home = record.provider_home
     session_home = None
     process_http = False
+    inherit_mcps = frame['payload'].get('harness_settings', {}).get('inherit_global_mcps') == 'enabled'
+    if inherit_mcps and home is None:
+        raise ConnectorError('WORKSPACE_UNAVAILABLE', 'mcp_client_configuration',
+                             'Configure the harness directory on this host to include its global MCPs.')
     auth_refs = set(record.secret_bindings.values())
     if capability is not None:
         required_scope = {name: frame[name] for name in (
@@ -149,7 +153,7 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
                 connection_generation=frame['connection_generation'], metadata_provider=capability_metadata)
         elif record.adapter_id in ('codex_app_server', 'claude_stream') and http is not None and tool_root is not None:
             from .mcp_launch import mcp_template, session_mcp_home
-            process_http = record.provider_home is not None and not record.secret_bindings
+            process_http = record.provider_home is not None and (not record.secret_bindings or inherit_mcps)
             template = mcp_template(capability, adapter_id=record.adapter_id, approved_origin=http.origin,
                                     process_http=process_http)
             if not process_http:

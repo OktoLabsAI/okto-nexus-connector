@@ -16,12 +16,17 @@ from tests.unit.test_execution_selection import selection
 from tests.unit.test_r4_execution import execution, observed, failed
 
 
+@pytest.mark.parametrize("inherit", [False, True])
 @pytest.mark.parametrize("selection", [True, "claude", "no_refs", "claude_no_refs"], indirect=True)
 @pytest.mark.parametrize("fault", [None, "scope", "origin", "expired"])
 @pytest.mark.parametrize("server_origin", ["https://nexus.test", "http://192.168.0.146:8202"])
-async def test_default_owner_mcp_configuration_and_secret_environment(execution, selection, tmp_path, fault, server_origin):
+async def test_default_owner_mcp_configuration_and_secret_environment(execution, selection, tmp_path, fault, server_origin, inherit):
     owner, connection, factory, receipts, opening = execution
     store, candidate, *_ = selection
+    if inherit:
+        from nexus_connector_core import r4_submit_intent_hash
+        opening['payload']['harness_settings'] = {'inherit_global_mcps':'enabled'}
+        opening['intent_hash'] = r4_submit_intent_hash(opening)
     vault = RestrictedFileVault(tmp_path, approved=True)
     vault.store("provider-demo", "provider-test-secret")
     owner.host._vault = vault
@@ -57,7 +62,7 @@ async def test_default_owner_mcp_configuration_and_secret_environment(execution,
         setup = await owner.host.approved_launch(store, frame=opening, candidates=[candidate],
                                                 capability=issued[0], http=http)
         env = await setup.environment(factory.opened[0])
-        if not store.load().launch_configurations[0].secret_bindings:
+        if inherit or not store.load().launch_configurations[0].secret_bindings:
             from nexus_connector_core.environment import ProcessHTTPEnvironment
             assert isinstance(env,ProcessHTTPEnvironment)
             assert Path(env['HOME'])==tmp_path/'provider-home'
@@ -70,7 +75,7 @@ async def test_default_owner_mcp_configuration_and_secret_environment(execution,
                 assert not list((provider_home/'.codex').iterdir())
             else:
                 assert not list(provider_home.iterdir())
-            assert 'OPENAI_API_KEY' not in env
+            assert (env.get('OPENAI_API_KEY') == 'provider-test-secret') is bool(store.load().launch_configurations[0].secret_bindings)
             template=env.http_templates[0]
             assert template.entry_name.startswith('nexus_') and template.entry_name!='nexus'
             assert env[template.bearer_env_name]==issued[0].capability
