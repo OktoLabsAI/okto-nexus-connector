@@ -7,7 +7,7 @@ contains no MCP server, proxy or relay of any transport, no Nexus user login
 and no copy of the native adapters.
 """
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 from .errors import ConnectorError
 
