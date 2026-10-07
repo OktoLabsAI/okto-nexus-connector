@@ -194,8 +194,15 @@ async def test_each_lane_uses_its_agent_identity_without_cross_server_fallback(l
 @pytest.mark.parametrize("finish", ["expiry", "explicit_stop", "inspection_failure"])
 async def test_disconnected_cleanup_preserves_the_installed_core_lease(lifecycle, monkeypatch, finish):
     from nexus_connector_core import R4_PREVIEW_REVISION, SessionKey
+    from okto_nexus_connector.services import core_host
+    from functools import partial
 
     owner, _, _, frame, native, _, published, _ = lifecycle
+    # Advance expiry explicitly after native open and retained cleanup are
+    # observed; filesystem scheduling must not consume the fixture's lease.
+    instant = [time.monotonic()]
+    clock = SimpleNamespace(monotonic=lambda: instant[0], wall_time=time.time)
+    monkeypatch.setattr(core_host, "create_runtime", partial(core_host.create_runtime, clock=clock))
     await owner.sync()
     async def lease(runtime, *, scope, grant_id):
         attempt = await runtime.begin_r4_lease_request(scope=scope, grant_id=grant_id,
@@ -204,7 +211,7 @@ async def test_disconnected_cleanup_preserves_the_installed_core_lease(lifecycle
         return await runtime.install_r4_lease(attempt, dict(protocol_major=1,
             contract_revision=R4_PREVIEW_REVISION, type="lease.granted",
             request_id=attempt.request_id, grant_id=grant_id, scope=scope,
-            lease_id="lease", lease_serial=1, valid_for_ms=1500,
+            lease_id="lease", lease_serial=1, valid_for_ms=60000,
             allowed_actions=["runtime.open", "turn.submit", "runtime.close"]))
     monkeypatch.setattr(owner.connection, "apply_lease", lease)
     await owner.connection.emit(frame)
@@ -236,6 +243,8 @@ async def test_disconnected_cleanup_preserves_the_installed_core_lease(lifecycle
                 await closing
             assert not owner._close_task.done()
             stop.set()
+        else:
+            instant[0] += 61
         await asyncio.wait_for(owner.close(), 5)
         assert native.native.stopped and not owner.control.cleanup_pending
         assert len(native.opened) == 1 and not native.native.sent
