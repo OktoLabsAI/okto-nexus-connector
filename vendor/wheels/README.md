@@ -1,7 +1,9 @@
-Current dependency: okto-nexus-connector-core==0.0.5.
+# Current release dependency
 
-Pi startup containment correction; built from Core commit 861d191.
-Wheel SHA-256: 71acdfc06102ee549b3f46106017e19f63d6d00ce2ede0243f91fffd34af4d3f
+Core 0.0.7 is required by Nexus 0.2.2 and Connector 0.0.5.
+Shared wheel SHA-256: `b982d6cc6c5184dcc51e77d680d0120e7ff86e924dbc8bb7acb812aeec7ae9d4`.
+Built from Core commit `b5641c3`: correlate native turn-start events with their operation.
+The entries below document historical artifacts.
 
 Earlier release notes follow.
 
