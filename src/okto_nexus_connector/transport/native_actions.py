@@ -12,7 +12,8 @@ from nexus_connector_core.native_action_bridge import (
 )
 from ..errors import ConnectorError
 
-_ACTIONS = frozenset({'handoff.get', 'handoff.claim', 'handoff.complete', 'runtime.input.list', 'runtime.input.respond', 'message.create'})
+_ACTIONS = frozenset({'handoff.get', 'handoff.claim', 'handoff.complete', 'runtime.input.list', 'runtime.input.respond', 'message.create',
+                      'agent.list', 'agent.get', 'capability.list', 'coordination.health'})
 
 
 def native_capability_snapshot(capability):
@@ -55,6 +56,9 @@ class NexusNativeActions:
                 message=error.message) from None
 
     async def get_context(self, request, context):
+        return await self._invoke(request)
+
+    async def read_discovery(self, request, context):
         return await self._invoke(request)
 
     async def create_message(self, request, context):

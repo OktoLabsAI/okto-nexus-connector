@@ -1115,13 +1115,14 @@ class NexusHTTPClient:
             raise ConnectorError(error.code, 'native_action', 'Invalid native action request.') from None
         domain_action = {'context': 'handoff.get', 'claim': 'handoff.claim', 'complete': 'handoff.complete',
                          'input_list': 'runtime.input.list', 'input_respond': 'runtime.input.respond',
-                         'message_create': 'message.create'}[body['action']]
+                         'message_create': 'message.create', 'agent_list': 'agent.list', 'agent_get': 'agent.get',
+                         'capability_list': 'capability.list', 'coordination_health': 'coordination.health'}[body['action']]
         if request.capability_ref != capability.capability_ref or domain_action not in capability.actions:
             raise ConnectorError('BINDING_NOT_AUTHORIZED', 'native_action', 'The native action is outside the capability scope.')
         if time.monotonic() >= capability.deadline_monotonic:
             raise ConnectorError('AUTH_EXPIRED', 'native_action', 'The native capability has expired.')
         assert self._client is not None, "Use 'async with NexusHTTPClient'."
-        mutation = body['action'] not in {'context', 'input_list'}
+        mutation = body['action'] not in {'context', 'input_list', 'agent_list', 'agent_get', 'capability_list', 'coordination_health'}
 
         def uncertain():
             return ConnectorError('OUTCOME_UNKNOWN' if mutation else 'EXECUTOR_OFFLINE', 'native_action',
@@ -1176,6 +1177,17 @@ class NexusHTTPClient:
                 elif body['action'] == 'input_respond':
                     if (data['state'] != 'SUCCEEDED' or type(result.get('decision')) is not dict
                             or type(result.get('reused')) is not bool):
+                        raise uncertain()
+                elif body['action'] in {'agent_list', 'agent_get', 'capability_list', 'coordination_health'}:
+                    if data['state'] != 'SUCCEEDED':
+                        raise uncertain()
+                    if body['action'] == 'agent_list' and type(result.get('agents')) is not list:
+                        raise uncertain()
+                    if body['action'] == 'agent_get' and result.get('agent_id') != request.agent_id:
+                        raise uncertain()
+                    if body['action'] == 'capability_list' and type(result.get('capabilities')) is not list:
+                        raise uncertain()
+                    if body['action'] == 'coordination_health' and result.get('workspace_id') != capability.scope['workspace_id']:
                         raise uncertain()
                 elif (data['state'] != result.get('status', 'SUCCEEDED')
                       or not isinstance(result.get('approval_id') if data['state'] == 'pending_approval'
