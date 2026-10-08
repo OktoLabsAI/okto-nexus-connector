@@ -1,8 +1,8 @@
 # Current release dependency
 
 Core 0.0.7 is required by Nexus 0.2.2 and Connector 0.0.5.
-Shared wheel SHA-256: `b982d6cc6c5184dcc51e77d680d0120e7ff86e924dbc8bb7acb812aeec7ae9d4`.
-Built from Core commit `b5641c3`: correlate native turn-start events with their operation.
+Shared wheel SHA-256: `43e02485ce90e6dc58b69b761e0b013494e4526d4bf77716d6298064da904106`.
+Built from Core commit `6ffa95f`: correlate native turn-start events with their operation.
 The entries below document historical artifacts.
 
 Earlier release notes follow.
