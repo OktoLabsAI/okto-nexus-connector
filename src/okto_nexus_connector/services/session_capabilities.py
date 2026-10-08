@@ -75,7 +75,8 @@ class ApprovedToolLaunchProvider:
         expected = await asyncio.to_thread(_resolve, self.store, frozen, candidates)
         record = expected[1]
         if record.adapter_id == 'pi_rpc':
-            audience, actions = 'nexus-native-session', ('handoff.get', 'handoff.claim', 'handoff.complete', 'runtime.input.list', 'runtime.input.respond', 'message.create')
+            audience, actions = 'nexus-native-session', ('handoff.get', 'handoff.claim', 'handoff.complete', 'runtime.input.list', 'runtime.input.respond', 'message.create',
+                                                       'agent.list', 'agent.get', 'capability.list', 'coordination.health')
         elif record.adapter_id in ('codex_app_server', 'claude_stream'):
             from .mcp_launch import MCP_SESSION_ACTIONS
             audience, actions = 'nexus-mcp-session', MCP_SESSION_ACTIONS

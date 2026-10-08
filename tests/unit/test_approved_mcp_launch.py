@@ -36,6 +36,8 @@ async def test_default_owner_mcp_configuration_and_secret_environment(execution,
         origin = server_origin
         async def request_r4_session_capability(self, key, *, frame, **kwargs):
             assert kwargs["audience"] == "nexus-mcp-session"
+            assert {'agent_list', 'agent_get', 'capability_list', 'coordination_health'} <= set(kwargs['actions'])
+            assert not {'harness_list', 'agent_register', 'session_open'} & set(kwargs['actions'])
             scope = {k: frame[k] for k in (
                 "server_id", "executor_id", "binding_id", "agent_id", "workspace_id",
                 "workspace_binding_id", "session_id", "session_owner_generation",
