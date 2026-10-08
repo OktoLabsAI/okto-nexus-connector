@@ -94,14 +94,17 @@ async def test_retry_without_new_event_converges_without_repeating_native_effect
     await owner.ensure(SCOPE)
     progress = None
     try:
-        async with asyncio.timeout(3):
+        # This exercises durable FULL-sync SQLite writes, not a latency SLA.
+        # Windows CI can spend several seconds flushing those writes; keep a
+        # bounded deadline without making the observer monopolize the store.
+        async with asyncio.timeout(15):
             while True:
                 # Match the publisher: SQLite may wait on a writer, so the
                 # observer must not block the event loop that drives recovery.
                 progress = await asyncio.to_thread(owner.store.read, SCOPE)
                 if progress['core_applied'] == 1:
                     break
-                await asyncio.sleep(.01)
+                await asyncio.sleep(.05)
     except TimeoutError as error:
         from tests.unit.async_diagnostics import pending_task_locations
         counters = None if progress is None else {
