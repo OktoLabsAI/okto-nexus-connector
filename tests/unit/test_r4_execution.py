@@ -202,6 +202,38 @@ async def test_failed_native_open_keeps_connection_and_next_session_working(exec
     assert owner.failure is None and not owner.execution_errors
 
 
+async def test_quota_refusals_are_durable_without_consuming_close_capacity(execution):
+    from dataclasses import replace
+    from nexus_connector_core import OperationKey
+    from okto_nexus_connector.storage.r4_publications import R4PublicationStore
+    owner, connection, factory, receipts, opening = execution
+    await connection.emit(opening)
+    await observed(receipts, owner)
+    journal = await owner.host.ensure_journal()
+    limits = journal.limits
+    # Only open occupies a row; keep the remaining row reserved for close.
+    journal.limits = replace(limits, max_operation_rows=2, reserved_operation_rows=1)
+    for index in range(4):
+        op_id = f'quota-refused-{index}'
+        await connection.emit(operation(opening, 'turn.submit', {'text': 'Must not run'}, operation_id=op_id))
+        refused = await observed(receipts, owner)
+        assert refused['stage'] == 'FAILED' and refused['error_code'] == 'JOURNAL_FULL'
+        assert refused['retry_safe'] and not refused['possible_effect']
+        assert owner.failure is None and connection.online and not factory.native.stopped
+        assert factory.native.sent == []
+        assert await journal.get_receipt(OperationKey(opening['server_id'], opening['executor_id'], op_id)) is None
+        # A fresh host store can recover exactly the refusal before any
+        # transport acknowledgment; it needs no invented Core journal row.
+        persisted = R4PublicationStore(owner.publications.path).lookup(
+            opening['server_id'], opening['executor_id'], [op_id])
+        assert persisted[op_id]['receipt'] == refused
+    await connection.emit(operation(opening, 'runtime.close',
+        {'reason': 'Close while productive capacity is exhausted.', 'drain_seconds': 0, 'interrupt_seconds': 1}))
+    closed = await observed(receipts, owner)
+    assert closed['stage'] == 'SUCCEEDED' and factory.native.stopped
+    assert owner.failure is None and connection.online
+
+
 async def test_control_and_cancelled_stop_do_not_abandon_receipt_producer(execution):
     owner, connection, factory, receipts, opening = execution
     await connection.emit(opening)

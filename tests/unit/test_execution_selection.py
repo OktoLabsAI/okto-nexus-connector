@@ -23,7 +23,8 @@ def selection(tmp_path, request):
     workspace.mkdir()
     binary = tmp_path / 'codex.exe'
     binary.write_bytes(b'Synthetic approved binary')
-    adapter_id = {'pi': 'pi_rpc', 'claude': 'claude_stream', 'claude_no_refs': 'claude_stream'}.get(getattr(request, 'param', None), 'codex_app_server')
+    adapter_id = {'pi': 'pi_rpc', 'claude': 'claude_stream', 'claude_no_refs': 'claude_stream',
+                  'registered': 'fixture.additional.v1'}.get(getattr(request, 'param', None), 'codex_app_server')
     candidate = InstallationCandidate(adapter_id, str(binary), fingerprint(binary), 'explicit',
         'untrusted' if getattr(request, 'param', None) == 'discovered' else 'selected',
         installation_ref=installation_ref(adapter_id, str(binary)))
