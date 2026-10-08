@@ -74,6 +74,14 @@ class ApprovedToolLaunchProvider:
         from .launch_configuration import _resolve
         expected = await asyncio.to_thread(_resolve, self.store, frozen, candidates)
         record = expected[1]
+        def guard():
+            self.require_current(decode_r4_frame(encode_r4_frame(frozen)))
+        from nexus_connector_core import get_runtime_connection_contract
+        if get_runtime_connection_contract(record.adapter_id)['tool_transport'] == 'none':
+            guard()
+            result = await self.host.approved_launch(self.store, frame=frozen, candidates=candidates)
+            guard()
+            return result
         if record.adapter_id == 'pi_rpc':
             audience, actions = 'nexus-native-session', ('handoff.get', 'handoff.claim', 'handoff.complete', 'runtime.input.list', 'runtime.input.respond', 'message.create',
                                                        'agent.list', 'agent.get', 'capability.list', 'coordination.health')
@@ -83,8 +91,6 @@ class ApprovedToolLaunchProvider:
         else:
             raise ConnectorError('CAPABILITY_UNSUPPORTED', 'launch_configuration',
                                  'The approved installation has no qualified tool configuration.')
-        def guard():
-            self.require_current(decode_r4_frame(encode_r4_frame(frozen)))
         guard()
         cap = await self.owner.reserve(self.http, self.key, frame=frozen,
             audience=audience, actions=actions,
