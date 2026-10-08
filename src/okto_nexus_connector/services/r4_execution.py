@@ -17,7 +17,7 @@ from nexus_connector_core import (
     project_r4_open_receipt, project_r4_turn_receipt, project_r4_steer_receipt,
     project_r4_interrupt_receipt, project_r4_close_receipt,
     project_r4_decision_receipt, r4_close_operation, r4_native_decision_operation,
-    prepare_r4_receipt_binding, SessionKey, OperationKey,
+    prepare_r4_receipt_binding, SessionKey, OperationKey, OperationNotAdmitted,
 )
 
 from ..errors import ConnectorError
@@ -408,13 +408,13 @@ class R4ExecutionOwner:
         if action not in ('approval.decide', 'input.provide'):
             context = await self._bind(item, runtime, context)
         if action == 'turn.submit':
-            receipt = await runtime.submit(TurnOperation(frame['operation_id'], frame['session_id'],
-                payload['text'], frame.get('expected_turn_id')), context)
+            receipt = await self._command_receipt(lambda: runtime.submit(TurnOperation(frame['operation_id'], frame['session_id'],
+                payload['text'], frame.get('expected_turn_id')), context))
             project = project_r4_turn_receipt
         elif action in ('turn.steer', 'turn.interrupt'):
-            receipt = await runtime.control(ControlOperation(frame['operation_id'], frame['session_id'],
+            receipt = await self._command_receipt(lambda: runtime.control(ControlOperation(frame['operation_id'], frame['session_id'],
                 action.split('.')[1], text=payload.get('text'), reason=payload.get('reason'),
-                expected_turn_id=frame.get('expected_turn_id')), context)
+                expected_turn_id=frame.get('expected_turn_id')), context))
             project = project_r4_steer_receipt if action == 'turn.steer' else project_r4_interrupt_receipt
         elif action == 'runtime.close':
             await self.host.close_native_actions(key)
@@ -437,3 +437,11 @@ class R4ExecutionOwner:
         else:
             raise CoreError('CAPABILITY_UNSUPPORTED', 'r4_execution')
         return project(frame, receipt, context, receipt_revision=1)
+
+    async def _command_receipt(self, invoke):
+        try:
+            return await invoke()
+        except OperationNotAdmitted as error:
+            # The operation worker durably records the projected refusal in
+            # its reserved publication before sending it over the connection.
+            return error.refusal
