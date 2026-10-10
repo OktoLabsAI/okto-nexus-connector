@@ -32,7 +32,7 @@ async def renewal_entered(owner, entered):
         raise
 
 
-async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None):
+async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None, wait_open=True):
     owner, _, store, frame, native, _, published, _ = lifecycle
     if clock is not None:
         from okto_nexus_connector.services import core_host
@@ -74,9 +74,39 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None)
     monkeypatch.setattr(owner.connection,"apply_lease",lease)
     await owner.sync()
     await owner.connection.emit(frame)
-    await observed(published,owner.owner)
+    if wait_open:
+        await observed(published,owner.owner)
+    else:
+        async with asyncio.timeout(3):
+            while not owner.owner._sessions:
+                await asyncio.sleep(.01)
     session=next(iter(owner.owner._sessions.values()))
     return owner,store,frame,native,published,session,entered,release,calls
+
+
+@pytest.mark.parametrize("selection", [True], indirect=True)
+async def test_renewal_starts_while_native_open_is_still_pending(lifecycle, monkeypatch):
+    native = lifecycle[4]
+    entered_open, release_open = asyncio.Event(), asyncio.Event()
+    original = native.open
+    async def held(*args, **kwargs):
+        entered_open.set()
+        await release_open.wait()
+        return await original(*args, **kwargs)
+    monkeypatch.setattr(native, 'open', held)
+    owner, _, _, _, published, session, renewed, _, calls = await setup(
+        lifecycle, monkeypatch, clock=LeaseClock(), wait_open=False)
+    try:
+        await asyncio.wait_for(entered_open.wait(), 3)
+        await renewal_entered(owner, renewed)
+        async with asyncio.timeout(3):
+            while session.deadline <= calls[0].sent_at_monotonic + 1.6:
+                await asyncio.sleep(.01)
+        assert published.empty() and not native.opened
+    finally:
+        release_open.set()
+    await observed(published, owner.owner)
+    assert len(native.opened) == 1 and owner.owner.failure is None
 
 
 @pytest.mark.parametrize("selection",[True],indirect=True)

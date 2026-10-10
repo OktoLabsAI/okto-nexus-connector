@@ -164,6 +164,70 @@ async def observed(queue, owner):
             + pending_task_locations()) from error
 
 
+@pytest.mark.parametrize('warm_count', [2, 4, 8])
+async def test_parallel_openings_do_not_block_ready_session_or_controls(execution, warm_count):
+    owner, connection, factory, receipts, opening = execution
+    await connection.emit(opening)
+    await observed(receipts, owner)
+    entered, release = asyncio.Event(), asyncio.Event()
+    blocked = []
+
+    async def slow(prepared, session_id, context, *, stream_epoch):
+        blocked.append(session_id)
+        if len(blocked) == warm_count:
+            entered.set()
+        await release.wait()
+        return Native()
+
+    factory.open = slow
+    try:
+        for index in range(warm_count):
+            await connection.emit({**opening, 'operation_id': f'open-{index}', 'session_id': f'cold-{index}'})
+        await asyncio.wait_for(entered.wait(), 15)
+        await connection.emit(operation(opening, 'turn.submit', {'text': 'Ready while replenishing'}))
+        receipt = await observed(receipts, owner)
+        assert receipt['operation_id'] == 'turn.submit'
+        assert receipt['stage'] == 'SUBMITTED'
+        assert not release.is_set() and len(factory.native.sent) == 1
+        await connection.emit(operation(opening, 'turn.interrupt', {'reason': 'Independent control'}))
+        assert (await observed(receipts, owner))['operation_id'] == 'turn.interrupt'
+        assert owner.failure is None
+    finally:
+        release.set()
+    for _ in range(warm_count):
+        assert (await observed(receipts, owner))['operation_id'].startswith('open-')
+
+
+async def test_preparing_sessions_count_against_host_capacity(execution, monkeypatch):
+    from okto_nexus_connector.errors import ConnectorError
+    owner, connection, _, _, opening = execution
+    owner.max_sessions = 1
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def preparing(item):
+        entered.set()
+        await release.wait()
+        return 'prepared'
+
+    monkeypatch.setattr(owner, '_execute_owned', preparing)
+    monkeypatch.setattr(connection, 'require_current', lambda item: item.frame)
+    first = ReceivedOperation('a', encode_r4_frame(opening), False, 'lane')
+    second_frame = {**opening, 'session_id': 'another', 'operation_id': 'another'}
+    second_frame['intent_hash'] = r4_submit_intent_hash(second_frame)
+    second = ReceivedOperation('b', encode_r4_frame(second_frame), False, 'lane')
+    producer = asyncio.create_task(owner._execute(first))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        with pytest.raises(ConnectorError, match='capacity'):
+            await owner._execute(second)
+        with pytest.raises(CoreError, match='OPERATION_CONFLICT'):
+            await owner._execute(first)
+    finally:
+        release.set()
+        assert await producer == 'prepared'
+    assert not owner._opening_sessions
+
+
 async def failed(owner):
     try:
         # Includes cold journal/ledger initialization before the injected
@@ -312,11 +376,14 @@ async def test_frozen_open_selection_and_typed_control_projection(execution):
         return await candidates(frame)
     owner.candidate_provider = mutating
     opening['payload']['model'] = 'approved-model'
+    opening['payload']['mcp_preset'] = [dict(name='docs', enabled=True, transport='http',
+        url='https://example.test/mcp', header_refs={})]
     opening['payload']['harness_settings'] = {'effort':'low', 'approval_policy':'on-request', 'user_input':'enabled'}
     await connection.emit(opening)
     assert (await observed(receipts, owner))['operation_id'] == 'open'
     assert factory.opened[0].intent.mode == 'managed'
     assert factory.opened[0].intent.model == 'approved-model'
+    assert list(factory.opened[0].intent.mcp_preset) == opening['payload']['mcp_preset']
     assert factory.opened[0].intent.harness_settings.effort == 'low'
     assert factory.opened[0].intent.harness_settings.approval_policy == 'on-request'
     assert factory.opened[0].intent.harness_settings.user_input == 'enabled'

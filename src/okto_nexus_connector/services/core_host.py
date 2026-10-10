@@ -27,7 +27,7 @@ from nexus_connector_core.installation import (
     REF_AMBIGUOUS, REF_NOT_FOUND, effective_installation_ref,
     resolve_installation,
 )
-from nexus_connector_core.journal import SQLiteJournal, open_journal
+from nexus_connector_core.journal import JournalLimits, SQLiteJournal, open_journal
 from nexus_connector_core.ports import SecretResolver
 
 from ..errors import ConnectorError
@@ -108,7 +108,10 @@ def make_environment(resolver: LaunchSecretResolver, overlay: LaunchOverlay):
 class CoreRuntimeHost:
     """Builds and owns Core runtime instances for the daemon."""
 
-    def __init__(self, root: Path, vault):
+    def __init__(self, root: Path, vault, *, max_owned_slots: int = 64):
+        if type(max_owned_slots) is not int or max_owned_slots <= 0:
+            raise ValueError('Invalid host capacity.')
+        self.max_owned_slots = max_owned_slots
         self.root = root
         self._vault = vault
         self._journal_path = paths.journal_path(root)
@@ -137,7 +140,7 @@ class CoreRuntimeHost:
         blocking schema setup never runs on the loop.
         """
         if self._journal is None:
-            self._journal = SQLiteJournal(self._journal_path)
+            self._journal = SQLiteJournal(self._journal_path, limits=JournalLimits(max_owned_slots=self.max_owned_slots))
         return self._journal
 
     async def ensure_journal(self) -> SQLiteJournal:
@@ -152,7 +155,7 @@ class CoreRuntimeHost:
             self._journal_gate = asyncio.Lock()
         async with self._journal_gate:
             if self._journal is None:
-                self._journal = await open_journal(self._journal_path)
+                self._journal = await open_journal(self._journal_path, limits=JournalLimits(max_owned_slots=self.max_owned_slots))
         return self._journal
 
     async def ensure_ledger(self) -> SQLiteOwnedSlotLedger:
@@ -163,13 +166,13 @@ class CoreRuntimeHost:
         async with self._ledger_gate:
             if self._ledger is None:
                 self._ledger = await asyncio.to_thread(
-                    SQLiteOwnedSlotLedger, self._ledger_path)
+                    SQLiteOwnedSlotLedger, self._ledger_path, max_slots=self.max_owned_slots)
         return self._ledger
 
     @property
     def ledger(self) -> SQLiteOwnedSlotLedger:
         if self._ledger is None:
-            self._ledger = SQLiteOwnedSlotLedger(self._ledger_path)
+            self._ledger = SQLiteOwnedSlotLedger(self._ledger_path, max_slots=self.max_owned_slots)
         return self._ledger
 
     def journal_if_open(self):

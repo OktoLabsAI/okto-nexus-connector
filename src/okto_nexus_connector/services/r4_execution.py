@@ -116,10 +116,19 @@ class R4ExecutionOwner:
         self.native_tools = native_tools
         self.require_authority, self.clock = require_current, clock
         self._renewal_slots = asyncio.Semaphore(8)
+        # The transport retains bounded item/byte reservations until _produce
+        # releases them. Separate worker budgets keep slow opens from occupying
+        # the workers for ready sessions or containment controls.
+        self._operation_slots = {
+            'opening': asyncio.Semaphore(max_sessions),
+            'regular': asyncio.Semaphore(4),
+            'control': asyncio.Semaphore(2),
+        }
         from .r4_events import R4EventPublisher
         self.events = R4EventPublisher(connection, store, host, max_streams=max_sessions)
-        self.max_sessions = max_sessions
+        self.max_sessions = min(max_sessions, host.max_owned_slots)
         self._sessions = {}
+        self._opening_sessions = set()
         self._consumers = []
         self._producers = set()
         self._stopping = False
@@ -206,15 +215,25 @@ class R4ExecutionOwner:
         try:
             while not self._stopping:
                 item = await self.connection.receive_operation(control=control)
-                producer = asyncio.create_task(self._produce(item), name='r4-operation-producer')
+                producer = asyncio.create_task(self._produce_independently(item), name='r4-operation-producer')
                 self._producers.add(producer)
                 producer.add_done_callback(self._observe)
-                await asyncio.shield(producer)
+                # Do not wait for another session's native acknowledgement.
+                # The retained transport reservation bounds queued producers.
         except asyncio.CancelledError:
             raise
         except Exception as error:
             if self.failure is None:
                 self.failure = error
+
+    async def _produce_independently(self, item):
+        action = item.frame['action']
+        lane = 'opening' if action == 'runtime.open' else 'regular' if action == 'turn.submit' else 'control'
+        async with self._operation_slots[lane]:
+            if self._stopping:
+                self.connection.release_operation(item)
+                return
+            await self._produce(item)
 
     def _context(self, item, runtime):
         return runtime.r4_operation_context(self.connection.require_current(item),
@@ -247,6 +266,8 @@ class R4ExecutionOwner:
             session = self._sessions.get(key)
             if frame['action'] == 'runtime.open' and receipt['stage'] == 'FAILED':
                 self._sessions.pop(key, None)
+                if session is not None:
+                    session.stopped.set()
                 session = None
             if session is not None and not self._stopping:
                 await self.events.ensure({**frame,'stream_epoch':session.stream_epoch})
@@ -312,6 +333,19 @@ class R4ExecutionOwner:
         frame = self.connection.require_current(item)
         key = ExecutionRuntimeKey(frame["server_id"], frame["executor_id"], frame["binding_id"], frame["session_id"])
         session = self._sessions.get(key)
+        if frame['action'] == 'runtime.open':
+            # Reserve before the first await: concurrent preparations must not
+            # overbook the host or open the same identity twice.
+            if key in self._opening_sessions or key in self._sessions:
+                raise CoreError('OPERATION_CONFLICT', 'r4_execution')
+            if len(set(self._sessions) | self._opening_sessions) >= self.max_sessions:
+                raise ConnectorError('CAPACITY_EXCEEDED', 'r4_execution',
+                                     'The execution session capacity is exhausted.')
+            self._opening_sessions.add(key)
+            try:
+                return await self._execute_owned(item)
+            finally:
+                self._opening_sessions.discard(key)
         containment = frame["action"] in ("turn.interrupt", "runtime.close") or (
             frame["action"] in ("approval.decide", "input.provide") and
             frame["payload"].get("decision") in ("decline", "cancel") and
@@ -378,10 +412,14 @@ class R4ExecutionOwner:
             applied = await self.connection.apply_lease(runtime, scope={k: frame[k] for k in _SCOPE},
                                                grant_id=frame['grant_id'])
             session.deadline = applied.context.lease_deadline_monotonic
+            if self.require_authority is not None:
+                session.renewal = asyncio.create_task(self._renew_session(session, dict(frame)),
+                    name='r4-session-lease-renewal')
             context = self._context(item, runtime)
             prepared = await runtime.prepare(LaunchIntent(frame['agent_id'], frame['workspace_id'],
                 payload['adapter_id'], mode=payload['mode'], model=payload.get('model'),
                 auth_refs=setup.auth_refs,
+                mcp_preset=tuple(payload.get('mcp_preset', [])),
                 harness_settings=validate_harness_settings(payload['adapter_id'], payload.get('harness_settings', {}))), context)
             # prepare and environment discovery may yield. The current lane
             # and installed authority are checked again before open.
