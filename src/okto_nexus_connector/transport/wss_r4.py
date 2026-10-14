@@ -17,7 +17,7 @@ import websockets
 
 from nexus_connector_core import (
     R4_PREVIEW_REVISION, R4ReconcileAttempt, __version__ as CORE_VERSION,
-    CoreError, R4LeaseApplication, RuntimeCore,
+    CoreError, R4LeaseApplication, RuntimeCore, CAPACITY_CONTRACT_REVISION,
     decode_r4_frame, encode_r4_frame, reduce_r4_reconcile_accepted,
     r4_lease_renew_frame,
 )
@@ -93,9 +93,10 @@ async def negotiate_r4_control(
         websocket, *, server_id: str, executor_id: str,
         management_revision: str, snapshot_format: int, boot_id: str,
         report_reconciliation: ReconcileReporter,
-        max_reconcile_attempts: int = 3, recover_before_report=None, recovery_lanes=None) -> R4ControlState:
+        max_reconcile_attempts: int = 3, recover_before_report=None, recovery_lanes=None,
+        capacity_enabled: bool = False) -> R4ControlState:
     """Negotiate one socket; a failed journal cannot become an empty report."""
-    if not boot_id or max_reconcile_attempts < 1:
+    if not boot_id or max_reconcile_attempts < 1 or type(capacity_enabled) is not bool:
         raise ValueError("Invalid R4 control settings.")
     link_attempt_id = "link_" + secrets.token_hex(16)
     hello = {
@@ -108,6 +109,8 @@ async def negotiate_r4_control(
         "snapshot_formats": [snapshot_format],
         "control_capabilities": ['connection_renewal_v1', 'heartbeat_ack_v1', 'connection_resume_v1'],
     }
+    if capacity_enabled:
+        hello['control_capabilities'].append(CAPACITY_CONTRACT_REVISION)
     await _send(websocket, hello)
     welcome = await _receive(websocket)
     if (welcome["type"] != "welcome" or
@@ -116,7 +119,8 @@ async def negotiate_r4_control(
             welcome["executor_id"] != executor_id or
             welcome["management_revision"] != management_revision or
             welcome["accepted_nxl"] != R4_PREVIEW_REVISION or
-            welcome["snapshot_format"] != snapshot_format):
+            welcome["snapshot_format"] != snapshot_format or
+            not set(welcome['control_capabilities']).issubset(hello['control_capabilities'])):
         raise ValueError("The R4 control welcome does not match this link.")
     connection_id = welcome["connection_id"]
     generation = welcome["connection_generation"]
@@ -225,7 +229,8 @@ async def negotiate_r4_control(
 async def connect_r4_control(
         link_url: str, ticket: str, *, server_id: str, executor_id: str,
         management_revision: str, snapshot_format: int, boot_id: str,
-        report_reconciliation: ReconcileReporter, recover_before_report=None, recovery_lanes=None):
+        report_reconciliation: ReconcileReporter, recover_before_report=None, recovery_lanes=None,
+        capacity_enabled: bool = False):
     """Open an authenticated R4 socket and return it with control state."""
     validate_link_url(link_url)
     if urlsplit(link_url).scheme not in ("wss", "ws"):
@@ -243,7 +248,7 @@ async def connect_r4_control(
             management_revision=management_revision,
             snapshot_format=snapshot_format, boot_id=boot_id,
             report_reconciliation=report_reconciliation, recover_before_report=recover_before_report,
-            recovery_lanes=recovery_lanes,
+            recovery_lanes=recovery_lanes, capacity_enabled=capacity_enabled,
         )
         return websocket, state
     except BaseException:
@@ -253,14 +258,16 @@ async def connect_r4_control(
 
 async def connect_r4_connection(link_url: str, ticket: str, *, server_id: str,
         executor_id: str, management_revision: str, snapshot_format: int,
-        boot_id: str, report_reconciliation: ReconcileReporter, recover_before_report=None):
+        boot_id: str, report_reconciliation: ReconcileReporter, recover_before_report=None,
+        capacity_handler=None):
     """Negotiate a real socket and transfer its reader to one connection owner."""
     from .r4_connection import R4Connection
     lanes = {}
     websocket, state = await connect_r4_control(link_url, ticket,
         server_id=server_id, executor_id=executor_id, management_revision=management_revision,
         snapshot_format=snapshot_format, boot_id=boot_id, report_reconciliation=report_reconciliation,
-        recover_before_report=recover_before_report,recovery_lanes=lanes)
+        recover_before_report=recover_before_report,recovery_lanes=lanes,
+        capacity_enabled=callable(capacity_handler))
     async def resume(current):
         from .proxy import resolve_proxy
         for attempt in range(4):
@@ -279,7 +286,8 @@ async def connect_r4_connection(link_url: str, ticket: str, *, server_id: str,
                 reply = await asyncio.wait_for(_receive(replacement), 2)
                 if (reply['type'] != 'welcome' or reply.get('resumed') is not True
                         or reply['link_attempt_id'] != request_id or not _scope(reply, server_id=server_id,
-                            executor_id=executor_id, connection_id=current.connection_id, generation=current.connection_generation)):
+                             executor_id=executor_id, connection_id=current.connection_id, generation=current.connection_generation)
+                        or set(reply['control_capabilities']) != set(current.control_capabilities)):
                     raise ValueError('The Server did not confirm the existing connection owner.')
                 return replacement
             except BaseException as error:
@@ -292,7 +300,8 @@ async def connect_r4_connection(link_url: str, ticket: str, *, server_id: str,
                 await asyncio.sleep(.25)
     try:
         connection = R4Connection(websocket, state, boot_id=boot_id, initial_lanes=lanes,
-            resume=resume if 'connection_resume_v1' in state.control_capabilities else None)
+            resume=resume if 'connection_resume_v1' in state.control_capabilities else None,
+            capacity_handler=capacity_handler)
         connection.start()
         return connection
     except BaseException:

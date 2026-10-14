@@ -58,6 +58,17 @@ class R4ReconciliationReporter:
             raise ConnectorError('CAPACITY_EXCEEDED', 'r4_reconcile', 'The reconciliation session budget is exhausted.')
         journal = await self.host.ensure_history_journal()
         ledger = await self.host.ensure_ledger()
+        # The authenticated recovery channel supplies the replacement
+        # generation. Old HELD reservations are cancellable without a native
+        # process proof; consumed or uncertain records must still block below.
+        for _ in range(32):
+            released = await ledger.release_fenced_capacity_holds(self.server_id, self.executor_id,
+                connection_generation=request['connection_generation'], limit=128)
+            if released < 128:
+                break
+        else:
+            raise ConnectorError('RECONCILIATION_REQUIRED', 'capacity_reconcile',
+                                 'The capacity recovery scan requires another pass.')
         # Live/unreleased slots cannot be adopted as stopped resources.
         for source in (journal, ledger):
             after, high = 0, None

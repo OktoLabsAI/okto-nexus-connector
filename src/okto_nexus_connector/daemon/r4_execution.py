@@ -2,6 +2,9 @@
 import asyncio
 from dataclasses import asdict, dataclass, fields, replace
 import time
+import secrets
+
+from nexus_connector_core import execute_capacity_control
 
 from ..errors import ConnectorError
 from ..transport.https_client import R4BindingView
@@ -33,6 +36,51 @@ class R4DaemonExecution:
         self.owner = None
         self.closing = False
         self._close_task = None
+        self.capacity_boot_id = 'capacity_' + secrets.token_hex(16)
+
+    async def check_capacity_scope(self, request, *, action):
+        """Core authority port backed by this authenticated execution owner.
+
+        Historical lookup/cancellation may outlive an agent's lane revocation;
+        neither grants native execution or access to a handoff payload. The
+        ledger requires the exact original request in this host namespace.
+        """
+        scope = request.scope
+        if (scope.server_id, scope.executor_id) != (self.control.server_id, self.control.executor_id):
+            return 'NOT_AUTHORIZED'
+        if self.closing or not self.connection.online or self.control.connection is not self.connection:
+            return 'RECOVERING'
+        if action in ('get', 'release'):
+            return 'AVAILABLE'
+        if scope.connection_generation != self.connection.state.connection_generation:
+            return 'STALE_OBSERVATION'
+        if not self.ready:
+            return 'RECOVERING'
+        projected = scope.to_dict() | {'connection_id': self.connection.state.connection_id}
+        try:
+            lane = await self._current(projected)
+            if (lane.identity.credential_epoch != scope.credential_epoch
+                    or not self.connection.is_attached(**{name: getattr(scope, name) for name in (
+                        'binding_id', 'agent_id', 'credential_epoch', 'authorization_revision', 'configuration_revision')})):
+                return 'NOT_AUTHORIZED'
+            from ..services.execution_selection import validate_capacity_selection
+            selected = await asyncio.to_thread(validate_capacity_selection, self.store, scope=scope.to_dict())
+            current = await self._current(projected)
+            if selected != current.binding or current != lane:
+                return 'STALE_OBSERVATION'
+        except ConnectorError as error:
+            if error.code in ('PROFILE_DRIFT', 'STALE_GENERATION'):
+                return 'STALE_OBSERVATION'
+            return 'NOT_AUTHORIZED'
+        except OSError:
+            return 'RECOVERING'
+        return 'AVAILABLE'
+
+    async def capacity_control(self, frame):
+        # The facade and productive gates must be enabled together in the host.
+        service = await self.host.capacity_service(server_id=self.control.server_id,
+            executor_id=self.control.executor_id, boot_id=self.capacity_boot_id, authority=self)
+        return await execute_capacity_control(service, frame)
 
     @property
     def ready(self):

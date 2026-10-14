@@ -316,6 +316,17 @@ class R4DaemonControl:
             self.error_code = self._recovery_error
             raise
 
+    async def _capacity_control(self, frame):
+        from nexus_connector_core import capacity_denial_frame
+        connection, execution = self.connection, self.execution
+        if (connection is None or execution is None or not connection.online
+                or execution.connection is not connection):
+            return capacity_denial_frame(frame, 'RECOVERING')
+        if any(frame[name] != getattr(connection.state, name) for name in (
+                'server_id', 'executor_id', 'connection_id', 'connection_generation')):
+            return capacity_denial_frame(frame, 'NOT_AUTHORIZED')
+        return await execution.capacity_control(frame)
+
     async def _attempt(self):
         self._recovery_error = None
         self._reporter = None
@@ -378,7 +389,8 @@ class R4DaemonControl:
                     management_revision=protocol.management_revision,
                     snapshot_format=protocol.executor_snapshot_format, boot_id=self.boot_id,
                     report_reconciliation=self._report_reconciliation,
-                    recover_before_report=recover_events), min(30, remaining))
+                    recover_before_report=recover_events,
+                    **({'capacity_handler': self._capacity_control} if self.host.capacity_enabled else {})), min(30, remaining))
             finally:
                 # Keep HTTP, vault and journal owners alive through a canceled
                 # negotiation observer and any already-started ACK write.

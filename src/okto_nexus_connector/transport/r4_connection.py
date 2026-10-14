@@ -16,6 +16,8 @@ import time
 from nexus_connector_core import (
     CoreError, R4AttachAttempt, R4LaneProjection, R4_PREVIEW_REVISION, decode_r4_frame,
     encode_r4_frame, r4_lease_renew_frame, reduce_r4_binding_attached,
+    CAPACITY_CONTRACT_REVISION, CAPACITY_REQUEST_TYPES, CapacityRequest,
+    decode_control_frame, encode_capacity_frame, decode_capacity_frame, capacity_denial_frame,
 )
 
 from ..errors import ConnectorError
@@ -44,13 +46,23 @@ class R4Connection:
     def __init__(self, websocket, state: R4ControlState, *, boot_id: str,
                  regular_items=32, control_items=8, regular_bytes=256 * 1024,
                  control_bytes=128 * 1024, max_requests=16, max_lanes=256,
-                 request_timeout=15.0, send_timeout=5.0, heartbeat_seconds=15.0, initial_lanes=None, resume=None):
-        limits = (regular_items, control_items, regular_bytes, control_bytes, max_requests, max_lanes)
+                 request_timeout=15.0, send_timeout=5.0, heartbeat_seconds=15.0, initial_lanes=None, resume=None,
+                 capacity_handler=None, max_capacity_requests=8, max_capacity_recovery=4, max_capacity_replies=64):
+        limits = (regular_items, control_items, regular_bytes, control_bytes, max_requests, max_lanes,
+                  max_capacity_requests, max_capacity_recovery, max_capacity_replies)
         if (not state.control_ready or not boot_id or
                 any(type(n) is not int or n <= 0 for n in limits) or
                 min(request_timeout, send_timeout, heartbeat_seconds) <= 0):
             raise ValueError('Invalid R4 connection settings.')
+        capacity_negotiated = CAPACITY_CONTRACT_REVISION in state.control_capabilities
+        if capacity_negotiated and not callable(capacity_handler):
+            raise ValueError('Negotiated capacity requires an installed handler.')
         self.websocket, self.state, self.boot_id = websocket, state, boot_id
+        self._capacity_handler = capacity_handler if capacity_negotiated else None
+        self._capacity_limits = {False: max_capacity_requests, True: max_capacity_recovery}
+        self._capacity_tasks = {}
+        self._capacity_replies = asyncio.Queue(maxsize=max_capacity_replies)
+        self._capacity_writer = None
         self._resume = resume
         self.limits = {False: (regular_items, regular_bytes), True: (control_items, control_bytes)}
         self.max_requests = max_requests
@@ -96,6 +108,8 @@ class R4Connection:
             raise RuntimeError('The R4 connection owner has already started.')
         self._reader = asyncio.create_task(self._read(), name='r4-control-reader')
         self._heartbeat = asyncio.create_task(self._beat(), name='r4-heartbeat')
+        if self._capacity_handler is not None:
+            self._capacity_writer = asyncio.create_task(self._write_capacity(), name='r4-capacity-writer')
 
     def _require_online(self):
         if not self.online:
@@ -167,11 +181,12 @@ class R4Connection:
             self._closer = asyncio.create_task(self._close_socket(), name='r4-socket-close-retry')
         # Cancel only observers. Request/install producers remain owned and
         # are shielded even when the caller waiting for close is cancelled.
-        for task in (self._reader, self._heartbeat):
+        for task in (self._reader, self._heartbeat, self._capacity_writer):
             if task is not None and not task.done():
                 task.cancel()
-        tasks = [t for t in (self._reader, self._heartbeat, self._closer) if t is not None]
+        tasks = [t for t in (self._reader, self._heartbeat, self._closer, self._capacity_writer) if t is not None]
         tasks.extend(self._producers)
+        tasks.extend(item[0] for item in self._capacity_tasks.values())
         if tasks:
             await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 
@@ -203,7 +218,7 @@ class R4Connection:
                         continue
                     raise
                 encoded = raw.encode('utf-8') if isinstance(raw, str) else raw
-                frame = decode_r4_frame(encoded)
+                frame = decode_control_frame(encoded, capabilities=self.state.control_capabilities)
                 kind = frame['type']
                 scope = frame['scope'] if kind == 'lease.granted' else frame
                 if any(scope.get(k) != self._base()[k] for k in ('server_id', 'executor_id')):
@@ -213,7 +228,9 @@ class R4Connection:
                     raise CoreError('STALE_GENERATION', 'r4_link')
                 self.last_received_at = time.time()
                 self._last_received_monotonic = time.monotonic()
-                if kind == 'operation.submit':
+                if kind in CAPACITY_REQUEST_TYPES:
+                    self._admit_capacity(frame, encoded)
+                elif kind == 'operation.submit':
                     self._admit(frame, encoded)
                 elif kind in ('lease.granted', 'binding.attached', 'connection.renewed'):
                     field = 'attach_request_id' if kind == 'binding.attached' else 'request_id'
@@ -249,12 +266,12 @@ class R4Connection:
     async def _try_resume(self, socket):
         # An uncertain request must use durable reconciliation. A quiet wire
         # may resume while native work continues under its existing lease.
-        if not self._resume or self._pending or self._closed:
+        if not self._resume or self._pending or self._capacity_tasks or self._closed:
             return False
         async with self._write_lock:
             if self.websocket is not socket:
                 return True
-            if self._pending or self._closed:
+            if self._pending or self._capacity_tasks or self._closed:
                 return False
             try:
                 await asyncio.wait_for(socket.close(), self.send_timeout)
@@ -268,6 +285,68 @@ class R4Connection:
             self._last_received_monotonic = time.monotonic()
             logging.getLogger(__name__).info('Control transport resumed; runtime sessions and lease ownership retained.')
             return True
+
+    def _queue_capacity_reply(self, frame):
+        if not self.online:
+            return
+        try:
+            self._capacity_replies.put_nowait(encode_capacity_frame(frame).decode('utf-8'))
+        except asyncio.QueueFull:
+            # A peer that does not consume replies cannot retain unlimited
+            # memory. Durable mutations remain owned and are queried on reconnect.
+            self._fence(CoreError('CAPACITY_EXCEEDED', 'capacity_replies'))
+
+    async def _write_capacity(self):
+        try:
+            while self.online:
+                reply = await self._capacity_replies.get()
+                await self.send(reply)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            self._fence(error)
+
+    def _admit_capacity(self, frame, encoded):
+        if self._capacity_handler is None:
+            raise CoreError('CAPACITY_PROTOCOL_UNSUPPORTED', 'capacity_control')
+        encoded = encode_capacity_frame(frame)
+        request_id = frame['request_id']
+        prior = self._capacity_tasks.get(request_id)
+        if prior is not None:
+            if prior[2] != encoded:
+                raise CoreError('RESERVATION_CONFLICT', 'capacity_request_id')
+            return  # One retained producer and one result for this wire request.
+        recovery = frame['type'] in ('capacity.get', 'capacity.release')
+        if sum(item[1] == recovery for item in self._capacity_tasks.values()) >= self._capacity_limits[recovery]:
+            self._queue_capacity_reply(capacity_denial_frame(frame, 'STALE_OBSERVATION'))
+            return
+        # No await in the reader. Mutations keep an owner until their durable
+        # result is known, including when the socket or its caller disappears.
+        task = asyncio.create_task(self._serve_capacity(encoded), name='r4-capacity-request')
+        self._capacity_tasks[request_id] = (task, recovery, encoded)
+        def done(completed):
+            if self._capacity_tasks.get(request_id, (None,))[0] is completed:
+                self._capacity_tasks.pop(request_id, None)
+            if not completed.cancelled():
+                completed.exception()
+        task.add_done_callback(done)
+
+    async def _serve_capacity(self, encoded):
+        frame = decode_capacity_frame(encoded)
+        request_hash = CapacityRequest.from_dict(frame['request']).request_hash
+        try:
+            result = await self._capacity_handler(decode_capacity_frame(encoded))
+            result = decode_capacity_frame(encode_capacity_frame(result))
+            if (result['type'] != 'capacity.result' or result['request_hash'] != request_hash
+                    or any(result[key] != frame[key] for key in ('server_id', 'executor_id',
+                        'connection_id', 'connection_generation', 'request_id'))):
+                raise CoreError('SCOPE_MISMATCH', 'capacity_response')
+        except Exception:
+            # Storage/handler failures are uncertain, never fabricated free
+            # capacity. Do not leak exception text, credentials or local paths.
+            logging.getLogger(__name__).warning('Capacity request requires durable reconciliation.')
+            result = capacity_denial_frame(frame, 'NEEDS_RECONCILIATION')
+        self._queue_capacity_reply(result)
 
     async def _request(self, frame, *, reply_type, request_id, validate=None, finish=None, fence_on_error=True, before_send=None):
         self._require_online()

@@ -170,8 +170,11 @@ class CoreRuntimeHost:
             self._ledger_gate = asyncio.Lock()
         async with self._ledger_gate:
             if self._ledger is None:
-                self._ledger = await asyncio.to_thread(
-                    SQLiteOwnedSlotLedger, self._ledger_path, max_slots=self.max_owned_slots)
+                def open_ledger():
+                    # A cold capacity reservation precedes any session journal.
+                    self._ledger_path.parent.mkdir(parents=True, exist_ok=True)
+                    return SQLiteOwnedSlotLedger(self._ledger_path, max_slots=self.max_owned_slots)
+                self._ledger = await asyncio.to_thread(open_ledger)
         return self._ledger
 
     def _runtime_for_capacity(self, session):
@@ -192,12 +195,14 @@ class CoreRuntimeHost:
                 if prior[1] is not authority:
                     raise CoreError('RESERVATION_CONFLICT', 'connector_capacity_owner')
                 return prior[0]
-            if prior:
-                await prior[0].aclose()
             service = ExecutionCapacity(ledger, authority=authority, boot_id=boot_id, clock=clock,
                 namespace=key, runtime_lookup=self._runtime_for_capacity)
             self._capacity_services[key] = (service, authority)
-            return service
+        # A cancelled/stuck observation in one namespace cannot hold the
+        # composition gate for another executor while its owner is retiring.
+        if prior:
+            await prior[0].aclose()
+        return service
 
     @property
     def ledger(self) -> SQLiteOwnedSlotLedger:
