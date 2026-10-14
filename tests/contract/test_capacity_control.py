@@ -16,6 +16,50 @@ from tests.contract.test_r4_connection import Socket, STATE, BASE, CHANNEL, SCOP
 CAPS = (CAPACITY_CONTRACT_REVISION,)
 
 
+async def test_reader_can_cancel_absent_reservation_while_acquisition_is_delayed(tmp_path):
+    from nexus_connector_core import capacity_reservation_id
+    socket, entered, deliver = CapacitySocket(), asyncio.Event(), asyncio.Event()
+    ledger = SQLiteOwnedSlotLedger(tmp_path / 'slots.db', max_slots=1)
+
+    class Authority:
+        async def check_capacity_scope(self, request, *, action):
+            return 'AVAILABLE'
+
+    service = ExecutionCapacity(ledger, authority=Authority(), runtime_lookup=lambda _: None, boot_id='boot')
+
+    async def handler(frame):
+        if frame['type'] == 'capacity.reserve':
+            entered.set()
+            await deliver.wait()
+        return await execute_capacity_control(service, frame)
+
+    owner = R4Connection(socket, replace(STATE, control_capabilities=CAPS), boot_id='boot',
+        capacity_handler=handler, max_capacity_requests=1)
+    owner.start()
+    reserve = request_frame()
+    req = CapacityRequest.from_dict(reserve['request'])
+    try:
+        await socket.capacity(reserve)
+        await asyncio.wait_for(entered.wait(), 2)
+        await socket.capacity(reserve | dict(type='capacity.release', request_id='cancel',
+            reservation_id=capacity_reservation_id(req), reason='CANCELLED'))
+        cancelled = await asyncio.wait_for(socket.outgoing.get(), 2)
+        assert cancelled['request_id'] == 'cancel'
+        assert cancelled['result']['state'] == 'RELEASED'
+        assert cancelled['result']['consumption'] is None
+        assert not (await ledger.owned_slot_page()).reservations
+        deliver.set()
+        late = await asyncio.wait_for(socket.outgoing.get(), 2)
+        assert late['request_id'] == reserve['request_id']
+        assert late['result'] == cancelled['result']
+        assert owner.online and not (await ledger.owned_slot_page()).reservations
+    finally:
+        deliver.set()
+        await owner.close()
+        await service.aclose()
+        ledger.close()
+
+
 class CapacitySocket(Socket):
     async def send(self, raw):
         frame = decode_control_frame(raw.encode(), capabilities=CAPS)

@@ -102,6 +102,28 @@ async def test_reservation_checks_real_lane_and_consent_without_launch_or_secret
 
 
 @pytest.mark.parametrize('selection', [True], indirect=True)
+async def test_revoked_lane_can_cancel_an_absent_attempt_without_native_or_provider_effect(lifecycle):
+    from nexus_connector_core import capacity_reservation_id
+    owner, _, store, frame, native, _, _, keys = lifecycle
+    owner.host.capacity_enabled = True
+    await owner.sync()
+    req = request(owner, frame)
+    before = list(keys)
+    store.update(lambda state: setattr(state.execution_bindings[0], 'state', 'REVOKED'))
+    assert await owner.check_capacity_scope(req, action='reserve') != 'AVAILABLE'
+    missing = await owner.capacity_control(control(owner, frame, req, 'capacity.get'))
+    assert missing['result_type'] == 'not_found'
+    retired = await owner.capacity_control(control(owner, frame, req, 'capacity.release',
+        reservation_id=capacity_reservation_id(req), reason='CANCELLED'))
+    assert retired['result']['state'] == 'RELEASED' and retired['result']['consumption'] is None
+    found = await owner.capacity_control(control(owner, frame, req, 'capacity.get'))
+    assert found['result'] == retired['result']
+    assert not native.opened and keys == before
+    ledger = await owner.host.ensure_ledger()
+    assert not (await ledger.owned_slot_page()).reservations
+
+
+@pytest.mark.parametrize('selection', [True], indirect=True)
 @pytest.mark.parametrize('field,value', [('server_id', 'other'), ('executor_id', 'other'),
     ('binding_id', 'other'), ('agent_id', 'other'), ('workspace_id', 'other'),
     ('workspace_binding_id', 'other'), ('binding_revision', 99), ('credential_epoch', 99),
