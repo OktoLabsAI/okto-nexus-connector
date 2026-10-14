@@ -19,7 +19,7 @@ from typing import Mapping
 
 from nexus_connector_core import (
     InstallationCandidate, LocalRuntimeCore, SQLiteOwnedSlotLedger,
-    create_runtime,
+    create_runtime, ExecutionCapacity, CoreError,
 )
 from nexus_connector_core.environment import child_environment
 from nexus_connector_core.harness_config import HarnessHTTPTemplate
@@ -108,10 +108,15 @@ def make_environment(resolver: LaunchSecretResolver, overlay: LaunchOverlay):
 class CoreRuntimeHost:
     """Builds and owns Core runtime instances for the daemon."""
 
-    def __init__(self, root: Path, vault, *, max_owned_slots: int = 64):
+    def __init__(self, root: Path, vault, *, max_owned_slots: int = 64, capacity_enabled: bool = False):
         if type(max_owned_slots) is not int or max_owned_slots <= 0:
             raise ValueError('Invalid host capacity.')
         self.max_owned_slots = max_owned_slots
+        if type(capacity_enabled) is not bool:
+            raise ValueError('Capacity support must be a boolean.')
+        self.capacity_enabled = capacity_enabled
+        self._capacity_services = {}
+        self._capacity_gate = asyncio.Lock()
         self.root = root
         self._vault = vault
         self._journal_path = paths.journal_path(root)
@@ -168,6 +173,31 @@ class CoreRuntimeHost:
                 self._ledger = await asyncio.to_thread(
                     SQLiteOwnedSlotLedger, self._ledger_path, max_slots=self.max_owned_slots)
         return self._ledger
+
+    def _runtime_for_capacity(self, session):
+        matches = [runtime for key, runtime in self._runtimes.items()
+            if isinstance(key, ExecutionRuntimeKey) and (key.server_id, key.executor_id, key.session_id)
+                == (session.server_id, session.executor_id, session.session_id)]
+        return matches[0] if len(matches) == 1 else None
+
+    async def capacity_service(self, *, server_id, executor_id, boot_id, authority, clock=None):
+        """One Core facade per authenticated owner, sharing the physical ledger."""
+        if not self.capacity_enabled:
+            raise CoreError('CAPACITY_PROTOCOL_UNSUPPORTED', 'connector_capacity')
+        ledger = await self.ensure_ledger()
+        key = (server_id, executor_id)
+        async with self._capacity_gate:
+            prior = self._capacity_services.get(key)
+            if prior and prior[0].boot_id == boot_id:
+                if prior[1] is not authority:
+                    raise CoreError('RESERVATION_CONFLICT', 'connector_capacity_owner')
+                return prior[0]
+            if prior:
+                await prior[0].aclose()
+            service = ExecutionCapacity(ledger, authority=authority, boot_id=boot_id, clock=clock,
+                namespace=key, runtime_lookup=self._runtime_for_capacity)
+            self._capacity_services[key] = (service, authority)
+            return service
 
     @property
     def ledger(self) -> SQLiteOwnedSlotLedger:
@@ -348,6 +378,7 @@ class CoreRuntimeHost:
             candidates={selection.candidate.adapter_id: replace(selection.candidate, trust='selected')},
             workspace_roots={selection.workspace_id: selection.workspace_root},
             native_factory=factory, owned_slot_ledger=ledger,
+            capacity_enabled=self.capacity_enabled,
             native_approvals_from_lease=True,
             pi_native_action=native_launch if native_action_factory is not None else None)
         if native_action_factory is not None:
@@ -393,7 +424,7 @@ class CoreRuntimeHost:
             candidates={binding.adapter_id: candidate},
             workspace_roots={binding.workspace_id: binding.workspace_root},
             native_factory=factory,
-            owned_slot_ledger=ledger)
+            owned_slot_ledger=ledger, capacity_enabled=self.capacity_enabled)
         self._runtimes[key] = runtime
         return runtime
 
@@ -480,6 +511,10 @@ class CoreRuntimeHost:
         """
         from nexus_connector_core import ShutdownPolicy
 
+        for key, (service, _) in list(self._capacity_services.items()):
+            if _scope is None or key == _scope:
+                await service.aclose()
+                self._capacity_services.pop(key, None)
         outcomes: list[tuple[str, str]] = []
         any_pending = False
         for key, runtime in list(self._runtimes.items()):
@@ -516,7 +551,7 @@ class CoreRuntimeHost:
             # survives; with everything resolved, close through the
             # Core's public async lifecycle.
             pass
-        if not self._runtimes:
+        if not self._runtimes and not self._capacity_services:
             if self._journal is not None:
                 await self._journal.aclose()
                 self._journal = None
