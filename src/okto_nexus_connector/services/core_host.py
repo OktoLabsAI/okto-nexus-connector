@@ -476,6 +476,7 @@ class CoreRuntimeHost:
         This is observation only: no lease is renewed and no runtime is
         recreated. An explicit daemon stop can proceed to normal shutdown.
         Storage/inspection failures propagate while ownership stays retained.
+        The execution owner must stop and join its operation producers first.
         """
         from nexus_connector_core import SessionKey
 
@@ -491,9 +492,25 @@ class CoreRuntimeHost:
             for snapshot in snapshots:
                 if isinstance(snapshot, BaseException):
                     raise snapshot
-            if not any(snapshot.lease_state not in ("EXPIRED", "REVOKED", "CLOSED")
-                       and snapshot.ownership != "released"
-                       for snapshot in snapshots):
+            waiting = False
+            for (key, runtime), snapshot in zip(selected, snapshots):
+                if snapshot.lease_state in ('EXPIRED', 'REVOKED', 'CLOSED') or snapshot.ownership == 'released':
+                    continue
+                session = SessionKey(key.server_id, key.executor_id, key.session_id)
+                resources = getattr(runtime, 'shutdown_resources', None)
+                if (snapshot.lease_state == 'UNKNOWN' and snapshot.ownership == 'unknown'
+                        and snapshot.process_state == 'UNKNOWN' and callable(resources) and session not in resources()):
+                    journal = await self.ensure_history_journal()
+                    if await journal.get_session_claim(session) is None:
+                        # The execution owner has already joined its producers.
+                        # A constructed runtime with no opening/claim has no
+                        # native lease to await. Shutdown disposes that empty
+                        # runtime; it does not release the capacity placeholder
+                        # or resolve its publication. New-owner reconciliation
+                        # must still fence the original operation durably.
+                        continue
+                waiting = True
+            if not waiting:
                 return
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=0.1)

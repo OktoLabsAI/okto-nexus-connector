@@ -20,9 +20,11 @@ from nexus_connector_core import (
     prepare_r4_receipt_binding, SessionKey, OperationKey, OperationNotAdmitted,
     OperationCapacityDeferred, CapacityRetryWaiter, CAPACITY_CONTRACT_REVISION,
     project_r4_bound_receipt,
+    prepare_r4_lease_refusal, persist_r4_lease_refusal,
 )
 
 from ..errors import ConnectorError
+from ..transport.lease_denial import LeaseRequestDenied
 from ..storage.r4_publications import R4PublicationStore
 from .core_host import ExecutionRuntimeKey
 
@@ -89,6 +91,10 @@ class _Session:
     stopped: asyncio.Event = field(default_factory=asyncio.Event)
     deadline: float = 0
     renewal: asyncio.Task | None = None
+    containment_error: Exception | None = None
+    contained: bool = False
+    release_accepted: bool = False
+    denial: dict | None = None
 
 
 class R4ExecutionOwner:
@@ -142,6 +148,14 @@ class R4ExecutionOwner:
         self._receipt_monitor = None
         self.failure = None
         self.execution_errors = {}
+        from .r4_session_release import R4SessionReleaseReporter, R4SessionReleasePublisher
+        from ..storage.r4_session_releases import R4SessionReleaseStore
+        self.session_releases = R4SessionReleasePublisher(
+            R4SessionReleaseStore.for_state(store), R4SessionReleaseReporter(store, host),
+            self._publish_session_release)
+
+    async def _publish_session_release(self, request, *, stop_event):
+        return await self.connection.publish_session_release(request, stop_event=stop_event)
 
     @property
     def pending_count(self):
@@ -302,7 +316,7 @@ class R4ExecutionOwner:
     async def _produce(self, item):
         try:
             await asyncio.to_thread(self.publications.reserve, self.connection.require_current(item))
-            receipt = await self._execute_with_capacity_wait(item)
+            receipt = await self._execute_with_recorded_outcome(item)
             if receipt is None:
                 return
             self._record_execution_outcome(receipt)
@@ -337,6 +351,28 @@ class R4ExecutionOwner:
             self._prepared_openings.pop(item.token, None)
             self.connection.release_operation(item)
 
+    async def _execute_with_recorded_outcome(self, item):
+        try:
+            return await self._execute_with_capacity_wait(item)
+        except Exception:
+            # Core may have durably classified a native exception before
+            # raising it. Publish that exact uncertain fact instead of taking
+            # unrelated bindings offline. No operation is invoked again and
+            # no physical slot is released by this observation.
+            binding = self._capacity_bindings.get(item.token)
+            if binding is None:
+                raise
+            source = item.frame
+            key = OperationKey(source['server_id'], source['executor_id'], source['operation_id'])
+            journal = await self.host.ensure_history_journal()
+            fact = await journal.get_receipt(key)
+            if (fact is None or fact.stage != 'OUTCOME_UNKNOWN'
+                    or not fact.possible_effect or fact.retry_safe):
+                raise
+            # The public Core projector verifies namespace, operation, intent
+            # and the previously persisted binding; a mismatched fact fails.
+            return project_r4_bound_receipt(binding, fact, key=key, receipt_revision=1)
+
     async def _renew_session(self, session, source):
         async def current():
             if self._stopping or session.stopped.is_set() or not self.connection.online:
@@ -362,15 +398,33 @@ class R4ExecutionOwner:
                         if snapshot.ownership == "released" or snapshot.lease_state == "CLOSED":
                             return
                         await current()
-                        applied = await self.connection.apply_lease(session.runtime,
-                            scope={k:source[k] for k in _SCOPE}, grant_id=source["grant_id"], purpose="renew",
-                            require_current=current, fence_on_error=False)
+                        try:
+                            applied = await self.connection.apply_lease(session.runtime,
+                                scope={k:source[k] for k in _SCOPE}, grant_id=source["grant_id"], purpose="renew",
+                                require_current=current, fence_on_error=False)
+                        except LeaseRequestDenied as error:
+                            if self._scoped_denial(error, source, 'renew'):
+                                # Latch the fence before releasing the renewal
+                                # gate. Already-queued work cannot overtake it.
+                                session.denial = error.request
+                                session.stopped.set()
+                            raise
                         await current()
                         if applied.context.lease_deadline_monotonic <= session.deadline:
                             raise CoreError("STALE_GENERATION", "r4_renewal")
                         session.deadline = applied.context.lease_deadline_monotonic
         except Exception as error:
-            if self._stopping or session.stopped.is_set():
+            if self._stopping:
+                return
+            if isinstance(error, LeaseRequestDenied):
+                # The transport correlated this exact request before raising.
+                # Recheck the supplied port's proof against the retained owner;
+                # neither another scope nor an uncorrelated link failure can
+                # be converted into a successful scoped cleanup.
+                if self._scoped_denial(error, source, 'renew'):
+                    await self._contain_denied_session(session, source)
+                    return
+            if session.stopped.is_set():
                 return
             try:
                 snapshot = await session.runtime.inspect(SessionKey(
@@ -382,6 +436,67 @@ class R4ExecutionOwner:
             if self.failure is None:
                 self.failure = error
             await self.connection.close()
+
+    @staticmethod
+    def _scoped_denial(error, source, purpose):
+        request = error.request if isinstance(error, LeaseRequestDenied) else None
+        return (type(request) is dict and request.get('scope') == {k: source[k] for k in _SCOPE}
+            and request.get('grant_id') == source['grant_id'] and request.get('purpose') == purpose
+            and all(request.get(k) == source[k] for k in ('connection_id','connection_generation')))
+
+    async def _refuse_denied_operation(self, item, request):
+        from nexus_connector_core.lease_denial import lease_denial_frame
+        frame = self.connection.require_current(item)
+        refusal = prepare_r4_lease_refusal(frame, lease_denial_frame(request))
+        binding = refusal['binding']
+        # Persist the association first; recovery can finish either side of
+        # the Core journal admission/terminal-receipt cut without a new effect.
+        await asyncio.to_thread(self.publications.bind, binding, refusal=refusal)
+        journal = await self.host.ensure_history_journal()
+        receipt = await persist_r4_lease_refusal(journal, refusal)
+        return project_r4_bound_receipt(binding, receipt,
+            key=OperationKey(frame['server_id'], frame['executor_id'], frame['operation_id']), receipt_revision=1)
+
+    async def _contain_denied_session(self, session, source, *, publish_release=True):
+        """Retain one stop producer, retrying only this session's resources.
+
+        The renewal task already belongs to this owner and is joined on stop.
+        Physical release does not settle canonical work or fabricate a close
+        receipt. Its original journal/publication obligations remain retained.
+        """
+        from nexus_connector_core import ShutdownPolicy
+        from nexus_connector_core.session_release import SESSION_RELEASE_REVISION
+        key = ExecutionRuntimeKey(source['server_id'], source['executor_id'],
+                                  source['binding_id'], source['session_id'])
+        session.stopped.set()
+        while not self._stopping and self.connection.online and self._sessions.get(key) is session:
+            try:
+                if not session.contained:
+                    report = await session.runtime.shutdown(ShutdownPolicy(5, 5))
+                    resources = session.runtime.shutdown_resources()
+                    if (any(value not in {'graceful', 'forced', 'already_closed'}
+                            for value in report.session_outcomes.values())
+                            or any(value['process_state'] != 'STOPPED' or value['release_pending']
+                                   for value in resources.values())):
+                        raise CoreError('RECONCILIATION_REQUIRED', 'r4_session_containment')
+                    if not await self.host.close_native_actions(key, timeout_seconds=5):
+                        raise CoreError('RECONCILIATION_REQUIRED', 'r4_session_native_actions')
+                    session.contained = True
+                if publish_release and SESSION_RELEASE_REVISION in self.connection.state.control_capabilities:
+                    session.release_accepted = await self.session_releases.run(
+                        scope={k: source[k] for k in _SCOPE}, connection_id=source['connection_id'],
+                        connection_generation=source['connection_generation'], stop_event=self._receipt_stop)
+                session.containment_error = None
+                return
+            except Exception as error:
+                # Keep the exact runtime, journal and physical ownership.
+                # A failed observation/stop never grants spare capacity and
+                # never stops an unrelated session sharing the same channel.
+                session.containment_error = error
+                try:
+                    await asyncio.wait_for(self._receipt_stop.wait(), 2)
+                except TimeoutError:
+                    pass
 
     async def _execute(self, item):
         frame = self.connection.require_current(item)
@@ -408,6 +523,12 @@ class R4ExecutionOwner:
             all(frame["payload"].get(k) is None for k in ("response", "response_ref", "response_digest")))
         if session is not None and not containment:
             async with session.gate.operation():
+                if session.stopped.is_set():
+                    # A request already queued behind renewal must not enter
+                    # native work while its owner is being contained.
+                    if session.denial is not None:
+                        return await self._refuse_denied_operation(item, session.denial)
+                    raise CoreError('AGENT_REVOKED', 'r4_execution')
                 return await self._execute_owned(item)
         if session is not None and frame["action"] == "runtime.close":
             session.stopped.set()
@@ -466,8 +587,19 @@ class R4ExecutionOwner:
             self.connection.require_current(item)
             session = _Session(runtime, frame['intent_hash'], 'stream_' + secrets.token_hex(16))
             self._sessions[key] = session
-            applied = await self.connection.apply_lease(runtime, scope={k: frame[k] for k in _SCOPE},
-                                               grant_id=frame['grant_id'])
+            try:
+                applied = await self.connection.apply_lease(runtime, scope={k: frame[k] for k in _SCOPE},
+                                                   grant_id=frame['grant_id'])
+            except LeaseRequestDenied as error:
+                if not self._scoped_denial(error, frame, 'initial'):
+                    raise
+                session.denial = error.request
+                session.stopped.set()
+                receipt = await self._refuse_denied_operation(item, error.request)
+                # No native opening was admitted. Drain this runtime/its tool
+                # resources, without fabricating an opening release proof.
+                await self._contain_denied_session(session, frame, publish_release=False)
+                return receipt
             session.deadline = applied.context.lease_deadline_monotonic
             if self.require_authority is not None:
                 session.renewal = asyncio.create_task(self._renew_session(session, dict(frame)),

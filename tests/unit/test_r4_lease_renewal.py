@@ -43,14 +43,16 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None,
         owner.clock = clock.monotonic
     entered, release = asyncio.Event(), asyncio.Event()
     calls = []
-    last_request_at = clock.now if clock is not None else None
+    last_request_at = {}
     async def lease(runtime, *, scope, grant_id, purpose="initial", require_current=None, fence_on_error=True):
-        nonlocal last_request_at
         if clock is not None and purpose == "renew":
             # Advance to the next request time, preserving explicit advances
             # made by expiry/boundary tests instead of adding host latency.
-            clock.now = max(clock.now, last_request_at + .8)
-            last_request_at = clock.now
+            clock.now = max(clock.now, last_request_at[scope['session_id']] + .8)
+        if clock is not None:
+            # Concurrent sessions renew at the same logical instant; counting
+            # each request as another elapsed interval falsely expires peers.
+            last_request_at[scope['session_id']] = clock.now
         if require_current is not None:
             await require_current()
         attempt = await runtime.begin_r4_lease_request(scope=scope, grant_id=grant_id,
@@ -61,7 +63,12 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None,
             entered.set()
             if hold:
                 await release.wait()
-            if refuse:
+            if refuse == 'scoped':
+                if scope['session_id'] == frame['session_id']:
+                    from nexus_connector_core import r4_lease_renew_frame
+                    from okto_nexus_connector.transport.lease_denial import LeaseRequestDenied
+                    raise LeaseRequestDenied(r4_lease_renew_frame(attempt))
+            elif refuse:
                 raise ConnectorError("AGENT_AUTH_REQUIRED", "test_lease", "Renewal was refused.")
         if require_current is not None:
             await require_current()

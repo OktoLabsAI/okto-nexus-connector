@@ -16,6 +16,47 @@ from tests.contract.test_r4_connection import Socket, STATE, BASE, CHANNEL, SCOP
 CAPS = (CAPACITY_CONTRACT_REVISION,)
 
 
+async def test_reader_retires_consumed_unstarted_capacity_and_replays_original_history(tmp_path):
+    from nexus_connector_core import CapacityConsumption
+    socket = CapacitySocket()
+    ledger = SQLiteOwnedSlotLedger(tmp_path / 'slots.db', max_slots=1)
+
+    class Authority:
+        async def check_capacity_scope(self, request, *, action):
+            return 'AVAILABLE'
+
+    service = ExecutionCapacity(ledger, authority=Authority(), runtime_lookup=lambda _: None, boot_id='boot')
+
+    async def handler(frame):
+        return await execute_capacity_control(service, frame)
+
+    owner = R4Connection(socket, replace(STATE, control_capabilities=CAPS), boot_id='boot', capacity_handler=handler)
+    owner.start()
+    reserve = request_frame()
+    try:
+        await socket.capacity(reserve)
+        held = (await asyncio.wait_for(socket.outgoing.get(), 2))['result']
+        consumption = CapacityConsumption('unstarted-turn', 'sha256:' + '1' * 64,
+                                          'unstarted-open', 'sha256:' + '2' * 64)
+        await socket.capacity(reserve | dict(type='capacity.consume', request_id='consume',
+            reservation_id=held['reservation_id'], consumption=consumption.to_dict()))
+        assert (await asyncio.wait_for(socket.outgoing.get(), 2))['result']['state'] == 'CONSUMED'
+        await socket.capacity(reserve | dict(type='capacity.release', request_id='release',
+            reservation_id=held['reservation_id'], reason='CANCELLED'))
+        released = await asyncio.wait_for(socket.outgoing.get(), 2)
+        assert released['result']['state'] == 'RELEASED'
+        assert released['result']['consumption'] == consumption.to_dict()
+        assert not (await ledger.owned_slot_page()).reservations
+        await socket.capacity(reserve | dict(type='capacity.get', request_id='after-reconnect'))
+        restored = await asyncio.wait_for(socket.outgoing.get(), 2)
+        assert restored['result'] == released['result']
+        assert owner.online and socket.peak_readers == 1
+    finally:
+        await owner.close()
+        await service.aclose()
+        ledger.close()
+
+
 async def test_reader_can_cancel_absent_reservation_while_acquisition_is_delayed(tmp_path):
     from nexus_connector_core import capacity_reservation_id
     socket, entered, deliver = CapacitySocket(), asyncio.Event(), asyncio.Event()

@@ -164,6 +164,54 @@ async def observed(queue, owner):
             + pending_task_locations()) from error
 
 
+@pytest.mark.parametrize('fact_mode', ['durable', 'missing', 'wrong_hash'])
+async def test_native_unknown_reply_uses_only_exact_durable_fact_and_preserves_connection(execution, monkeypatch, fact_mode):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    owner, connection, factory, receipts, opening = execution
+    await connection.emit(opening)
+    await observed(receipts, owner)
+    original_send = factory.native.send
+
+    async def lost_reply(*args, **kwargs):
+        await original_send(*args, **kwargs)
+        raise OSError('Native write happened, but its reply was lost')
+
+    monkeypatch.setattr(factory.native, 'send', lost_reply)
+    if fact_mode != 'durable':
+        journal = await owner.host.ensure_history_journal()
+        async def read(key):
+            fact = await journal.get_receipt(key)
+            return None if fact_mode == 'missing' else replace(fact, intent_hash='0' * 64)
+        async def unavailable_history():
+            return SimpleNamespace(get_receipt=read)
+        monkeypatch.setattr(owner.host, 'ensure_history_journal', unavailable_history)
+    turn = operation(opening, 'turn.submit', {'text': 'One potentially effective write'})
+    await connection.emit(turn)
+    if fact_mode != 'durable':
+        async with asyncio.timeout(15):
+            while owner.failure is None:
+                await asyncio.sleep(.01)
+        assert not connection.online and receipts.empty()
+        assert len(factory.native.sent) == 1
+        return
+    unknown = await observed(receipts, owner)
+    assert unknown['operation_id'] == turn['operation_id']
+    assert unknown['stage'] == 'OUTCOME_UNKNOWN' and unknown['possible_effect'] and not unknown['retry_safe']
+    assert owner.failure is None and connection.online and not factory.native.stopped
+    # Recovery queries the original journal; the R4 transport intentionally
+    # refuses resubmission of an already published operation.
+    from nexus_connector_core import OperationKey
+    journal = await owner.host.ensure_history_journal()
+    fact = await journal.get_receipt(OperationKey(turn['server_id'], turn['executor_id'], turn['operation_id']))
+    assert fact.stage == 'OUTCOME_UNKNOWN' and fact.possible_effect and not fact.retry_safe
+    assert len(factory.native.sent) == 1
+    monkeypatch.setattr(factory.native, 'send', original_send)
+    await connection.emit({**opening, 'operation_id': 'healthy-open', 'session_id': 'healthy-session'})
+    assert (await observed(receipts, owner))['stage'] == 'SUBMITTED'
+    assert owner.failure is None and connection.online
+
+
 @pytest.mark.parametrize('warm_count', [2, 4, 8])
 async def test_parallel_openings_do_not_block_ready_session_or_controls(execution, warm_count):
     owner, connection, factory, receipts, opening = execution

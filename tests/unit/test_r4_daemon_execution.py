@@ -295,6 +295,43 @@ async def test_unknown_lease_observation_does_not_authorize_early_cleanup(tmp_pa
         await waiter
 
 
+@pytest.mark.parametrize('evidence', ['empty', 'opening', 'claimed', 'active'])
+async def test_lease_wait_distinguishes_empty_runtime_from_admitted_or_opening_work(tmp_path, evidence):
+    from nexus_connector_core import RuntimeSnapshot, SessionKey, OperationKey
+    host = CoreRuntimeHost(tmp_path, None)
+    journal = await host.ensure_history_journal()
+    session = SessionKey('srv', 'exe', 'session')
+    if evidence == 'claimed':
+        await journal.admit(OperationKey('srv', 'exe', 'original'), 'intent', session.session_id,
+                            claim_session=True, effect_imminent=True)
+    entered = asyncio.Event()
+    class Runtime:
+        async def inspect(self, key):
+            assert key == session
+            entered.set()
+            if evidence == 'active':
+                return RuntimeSnapshot(key.session_id, 'RUNNING', 'IDLE', 'owned', 0, 'ACTIVE')
+            return RuntimeSnapshot(key.session_id, 'UNKNOWN', 'UNKNOWN', 'unknown', 0, 'UNKNOWN')
+        def shutdown_resources(self):
+            return {session: {'process_state': 'UNKNOWN', 'release_pending': True}} if evidence == 'opening' else {}
+    host._runtimes[ExecutionRuntimeKey('srv', 'exe', 'binding', session.session_id)] = Runtime()
+    stop = asyncio.Event()
+    waiter = asyncio.create_task(host.wait_executor_leases(server_id='srv', executor_id='exe', stop_event=stop))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if evidence == 'empty':
+            await asyncio.wait_for(waiter, 2)
+        else:
+            await asyncio.sleep(.15)
+            assert not waiter.done()
+        assert len(host._runtimes) == 1  # Observation never discards ownership.
+        assert (await journal.get_session_claim(session) is not None) == (evidence == 'claimed')
+    finally:
+        stop.set()
+        await waiter
+        await journal.aclose()
+
+
 async def test_failed_inspection_keeps_other_started_inspections_owned(tmp_path):
     host = CoreRuntimeHost(tmp_path, None)
     entered, release = asyncio.Event(), asyncio.Event()

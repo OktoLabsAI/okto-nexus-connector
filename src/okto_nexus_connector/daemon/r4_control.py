@@ -302,7 +302,7 @@ class R4DaemonControl:
     async def _reconcile(self, request):
         from ..services.r4_reconciliation import R4ReconciliationReporter
         if self._reporter is None:
-            self._reporter = R4ReconciliationReporter(self.store, self.host, self.server_id, self.executor_id)
+            self._reporter = R4ReconciliationReporter(self.store, self.host, self.server_id, self.executor_id, boot_id=self.boot_id)
         report = await self._reporter.report(request)
         self._recovery_error = 'RECONCILIATION_REQUIRED' if self._reporter.blocked else None
         return report
@@ -315,6 +315,11 @@ class R4DaemonControl:
             self._recovery_error = code if type(code) is str and code in _STATUS_ERRORS else 'JOURNAL_UNAVAILABLE'
             self.error_code = self._recovery_error
             raise
+
+    async def _reconciliation_accepted(self, ack):
+        if self._reporter is None:
+            raise ConnectorError('RECONCILIATION_REQUIRED', 'session_release', 'No original report is retained.')
+        await self._reporter.accepted(ack)
 
     async def _capacity_control(self, frame):
         from nexus_connector_core import capacity_denial_frame
@@ -389,6 +394,7 @@ class R4DaemonControl:
                     management_revision=protocol.management_revision,
                     snapshot_format=protocol.executor_snapshot_format, boot_id=self.boot_id,
                     report_reconciliation=self._report_reconciliation,
+                    reconciliation_accepted=self._reconciliation_accepted,
                     recover_before_report=recover_events,
                     **({'capacity_handler': self._capacity_control} if self.host.capacity_enabled else {})), min(30, remaining))
             finally:
