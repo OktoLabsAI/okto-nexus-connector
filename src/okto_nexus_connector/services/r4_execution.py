@@ -101,7 +101,7 @@ class R4ExecutionOwner:
     def __init__(self, connection, store, host, *, candidate_provider,
                  launch_provider=None, publish_receipt, native_factory=None,
                  response_resolver=None, max_sessions=64, native_tools=None,
-                 require_current=None, clock=time.monotonic):
+                 require_current=None, clock=time.monotonic, capacity_provider=None):
         if type(max_sessions) is not int or max_sessions <= 0:
             raise ValueError('Invalid execution session capacity.')
         self.connection, self.store, self.host = connection, store, host
@@ -115,6 +115,7 @@ class R4ExecutionOwner:
                 raise ValueError('Native tools require the default approved launch provider.')
         self.native_tools = native_tools
         self.require_authority, self.clock = require_current, clock
+        self.capacity_provider = capacity_provider
         self._renewal_slots = asyncio.Semaphore(8)
         # The transport retains bounded item/byte reservations until _produce
         # releases them. Separate worker budgets keep slow opens from occupying
@@ -246,6 +247,9 @@ class R4ExecutionOwner:
                                **({'stream_epoch': options['stream_epoch']} if 'stream_epoch' in options else {}))
         if 'stream_epoch' in options:
             await asyncio.to_thread(self.events.store.register,{**item.frame,'stream_epoch':options['stream_epoch']})
+        if self.capacity_provider is not None and binding['action'] in ('runtime.open', 'turn.submit'):
+            capacity = await self.capacity_provider()
+            await capacity.bind_admitted_capacity_operation(binding)
         # Persistence can yield while the lane, link or lease is superseded.
         return self._context(item, runtime)
 

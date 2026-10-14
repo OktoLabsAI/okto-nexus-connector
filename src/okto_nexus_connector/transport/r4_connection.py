@@ -133,6 +133,31 @@ class R4Connection:
                 self._fence(error)
                 raise
 
+    async def publish_capacity_change(self, *, binding_id, boot_id, revision, reason, valid_for_ms):
+        """Publish a scoped hint through the existing bounded socket writer."""
+        if self._capacity_handler is None:
+            raise CoreError('CAPACITY_PROTOCOL_UNSUPPORTED', 'capacity_publication')
+        self._require_online()
+        lane = self._lanes.get(binding_id)
+        if lane is None or time.monotonic() >= lane.deadline_monotonic:
+            raise CoreError('NOT_AUTHORIZED', 'capacity_publication')
+        s = self.state
+        frame = dict(contract_revision=CAPACITY_CONTRACT_REVISION, type='capacity.changed',
+            server_id=s.server_id, executor_id=s.executor_id, connection_id=s.connection_id,
+            connection_generation=s.connection_generation, binding_id=binding_id, boot_id=boot_id,
+            capacity_revision=revision, reason=reason, valid_for_ms=valid_for_ms)
+        await self.send(encode_capacity_frame(frame).decode())
+
+    async def publish_capacity_dispatch_state(self, item, frame):
+        if self._capacity_handler is None:
+            raise CoreError('CAPACITY_PROTOCOL_UNSUPPORTED', 'capacity_dispatch')
+        original = self.require_current(item)
+        if frame['type'] != 'capacity.dispatch_state' or any(frame[k] != original[k] for k in (
+                'server_id', 'executor_id', 'connection_id', 'connection_generation', 'binding_id',
+                'agent_id', 'session_id', 'operation_id', 'intent_hash', 'action')):
+            raise CoreError('SCOPE_MISMATCH', 'capacity_dispatch')
+        await self.send(encode_capacity_frame(frame).decode())
+
     def _fence(self, error):
         if self._closed:
             return

@@ -1,10 +1,68 @@
 """Capacity uses the same approved lane, identity and local consent as opens."""
 from dataclasses import replace
+import asyncio
 
 import pytest
 from nexus_connector_core import CAPACITY_CONTRACT_REVISION, CapacityRequest, CapacityScope
 
 from tests.unit.test_r4_daemon_execution import lifecycle, selection
+
+
+@pytest.mark.parametrize('selection', [True], indirect=True)
+async def test_owner_publishes_scoped_revision_without_starting_native_or_resolving_provider(lifecycle):
+    from okto_nexus_connector.daemon.r4_execution import R4DaemonExecution
+    owner, http, _, frame, native, _, _, keys = lifecycle
+    owner.host.capacity_enabled = True
+    owner.connection.state = replace(owner.connection.state, control_capabilities=(CAPACITY_CONTRACT_REVISION,))
+    emitted = asyncio.Queue()
+    async def emit(**item):
+        await emitted.put(item)
+    owner.connection.publish_capacity_change = emit
+    publishing = R4DaemonExecution(owner.control, http, native_factory=native)
+    try:
+        await publishing.sync()
+        initial = await asyncio.wait_for(emitted.get(), 2)
+        assert initial['binding_id'] == frame['binding_id'] and initial['reason'] == 'STALE_OBSERVATION'
+        baseline = list(keys)
+        req = request(publishing, frame)
+        reserved = await publishing.capacity_control(control(publishing, frame, req))
+        publishing.capacity_publisher._next_poll = 0
+        await publishing.sync()
+        changed = await asyncio.wait_for(emitted.get(), 2)
+        assert changed['revision'] > initial['revision']
+        assert changed['boot_id'] == initial['boot_id'] == publishing.capacity_boot_id
+        assert not native.opened and keys == baseline
+        await publishing.capacity_control(control(publishing, frame, req, 'capacity.release',
+            reservation_id=reserved['result']['reservation_id'], reason='LOST'))
+    finally:
+        await publishing.close()
+
+
+@pytest.mark.parametrize('selection', [True], indirect=True)
+async def test_reserved_open_and_first_turn_use_the_existing_daemon_dispatch_binding(lifecycle):
+    from nexus_connector_core import CapacityConsumption, r4_submit_intent_hash
+    from tests.unit.test_r4_execution import operation, observed
+    owner, _, _, frame, native, _, published, _ = lifecycle
+    owner.host.capacity_enabled = True
+    await owner.sync()
+    opening = dict(frame, intent_hash=r4_submit_intent_hash(frame))
+    turn = operation(opening, 'turn.submit', {'text': 'Reserved first turn'}, operation_id='reserved-turn')
+    turn['intent_hash'] = r4_submit_intent_hash(turn)
+    req = request(owner, opening)
+    service = await owner.execution_capacity()
+    held = await service.try_reserve_capacity(req)
+    assert held.state == 'HELD' and not native.opened
+    await service.consume_capacity(req, held.reservation_id,
+        CapacityConsumption(turn['operation_id'], turn['intent_hash'], opening['operation_id'], opening['intent_hash']))
+    await owner.connection.emit(opening)
+    assert (await observed(published, owner.owner))['operation_id'] == opening['operation_id']
+    await owner.connection.emit(turn)
+    assert (await observed(published, owner.owner))['operation_id'] == turn['operation_id']
+    assert native.native.sent == [('send_turn', {'text': 'Reserved first turn'}, 'reserved-turn', None)]
+    assert len(native.opened) == 1 and owner.owner.failure is None and owner.connection.online
+    assert (await service.get_capacity_reservation(req)).state == 'CONSUMED'
+    ledger = await owner.host.ensure_ledger()
+    assert len((await ledger.owned_slot_page()).reservations) == 1
 
 
 def request(owner, frame):

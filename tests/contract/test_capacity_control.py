@@ -42,6 +42,36 @@ async def until(predicate):
             await asyncio.sleep(0)
 
 
+async def test_capacity_change_publication_requires_negotiation_and_current_lane():
+    socket = CapacitySocket()
+    async def handler(frame):
+        return capacity_denial_frame(frame, 'RECOVERING')
+    owner = R4Connection(socket, replace(STATE, control_capabilities=CAPS), boot_id='boot', capacity_handler=handler)
+    owner.start()
+    hint = dict(binding_id='binding', boot_id='capacity-clock', revision=7,
+                reason='STALE_OBSERVATION', valid_for_ms=30000)
+    try:
+        with pytest.raises(CoreError, match='NOT_AUTHORIZED'):
+            await owner.publish_capacity_change(**hint)
+        await attach(owner, socket)
+        await owner.publish_capacity_change(**hint)
+        frame = await socket.outgoing.get()
+        assert frame['type'] == 'capacity.changed' and frame['capacity_revision'] == 7
+        assert frame['connection_id'] == STATE.connection_id
+        assert frame['boot_id'] == 'capacity-clock'
+        assert set(frame) == {'type', 'contract_revision', 'server_id', 'executor_id', 'connection_id',
+            'connection_generation', 'binding_id', 'boot_id', 'capacity_revision', 'reason', 'valid_for_ms'}
+    finally:
+        await owner.close()
+    legacy = R4Connection(CapacitySocket(), STATE, boot_id='boot')
+    legacy.start()
+    try:
+        with pytest.raises(CoreError, match='CAPACITY_PROTOCOL_UNSUPPORTED'):
+            await legacy.publish_capacity_change(**hint)
+    finally:
+        await legacy.close()
+
+
 async def test_busy_capacity_does_not_block_control_operations_or_other_requests():
     socket, entered, release = CapacitySocket(), asyncio.Event(), asyncio.Event()
     async def handler(frame):
