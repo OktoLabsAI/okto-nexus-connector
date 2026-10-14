@@ -106,6 +106,36 @@ async def test_busy_capacity_does_not_block_control_operations_or_other_requests
         await owner.close()
 
 
+async def test_dispatch_wait_uses_current_retained_operation_and_never_releases_transport_credit():
+    socket = CapacitySocket()
+    async def handler(frame):
+        return capacity_denial_frame(frame, 'RECOVERING')
+    owner = R4Connection(socket, replace(STATE, control_capabilities=CAPS), boot_id='boot', capacity_handler=handler)
+    owner.start()
+    try:
+        await attach(owner, socket)
+        await socket.emit(operation(action='turn.submit'))
+        item = await asyncio.wait_for(owner.receive_operation(), 2)
+        source = owner.require_current(item)
+        frame = {k: source[k] for k in ('server_id', 'executor_id', 'connection_id', 'connection_generation',
+            'binding_id', 'agent_id', 'session_id', 'operation_id', 'intent_hash', 'action')} | dict(
+                contract_revision=CAPACITY_CONTRACT_REVISION, type='capacity.dispatch_state', state='WAITING', sequence=1)
+        for field, value in (('operation_id', 'other'), ('binding_id', 'other'), ('connection_generation', 999)):
+            with pytest.raises(CoreError, match='SCOPE_MISMATCH'):
+                await owner.publish_capacity_dispatch_state(item, dict(frame, **{field: value}))
+        await owner.publish_capacity_dispatch_state(item, frame)
+        assert await asyncio.wait_for(socket.outgoing.get(), 2) == frame
+        assert owner.require_current(item) == source  # Still retained, no ACK/receipt.
+        await owner.publish_capacity_dispatch_state(item, dict(frame, state='RUNNING', sequence=2))
+        assert (await asyncio.wait_for(socket.outgoing.get(), 2))['state'] == 'RUNNING'
+        owner.release_operation(item)
+        with pytest.raises(CoreError, match='STALE_GENERATION'):
+            await owner.publish_capacity_dispatch_state(item, dict(frame, sequence=3))
+        assert socket.outgoing.empty() and owner.online
+    finally:
+        await owner.close()
+
+
 @pytest.mark.parametrize('failure', ['unnegotiated', 'foreign_host', 'stale_generation'])
 async def test_reader_rejects_unnegotiated_or_cross_connection_capacity(failure):
     socket, calls = CapacitySocket(), []

@@ -109,6 +109,42 @@ async def test_renewal_starts_while_native_open_is_still_pending(lifecycle, monk
     assert len(native.opened) == 1 and owner.owner.failure is None
 
 
+@pytest.mark.parametrize('selection', [True], indirect=True)
+async def test_capacity_waiting_open_renews_without_repeating_preparation(lifecycle, monkeypatch):
+    from nexus_connector_core import OperationKey, CAPACITY_CONTRACT_REVISION
+    from dataclasses import replace
+    from tests.unit.test_r4_capacity_wait import matching
+    daemon = lifecycle[0]
+    daemon.host.capacity_enabled = True
+    daemon.host.max_owned_slots = 1
+    daemon.connection.state = replace(daemon.connection.state, control_capabilities=(CAPACITY_CONTRACT_REVISION,))
+    flow = asyncio.Queue()
+    async def publish(item, frame):
+        await flow.put(frame)
+    async def change(**kwargs):
+        pass
+    daemon.connection.publish_capacity_dispatch_state = publish
+    daemon.connection.publish_capacity_change = change
+    ledger = await daemon.host.ensure_ledger()
+    occupied = OperationKey('other-server', 'other-executor', 'open')
+    await ledger.reserve_owned_slot(occupied, 'occupied')
+    owner, _, _, native, published, session, renewed, _, calls = await setup(
+        lifecycle, monkeypatch, clock=LeaseClock(), wait_open=False)
+    try:
+        await matching(flow, owner.owner, lambda item: item['state'] == 'WAITING')
+        await renewal_entered(owner, renewed)
+        async with asyncio.timeout(3):
+            while session.deadline <= calls[0].sent_at_monotonic + 1.6:
+                await asyncio.sleep(.01)
+        assert not native.opened and published.empty()
+        assert len([call for call in calls if call.purpose == 'initial']) == 1
+    finally:
+        await ledger.release_owned_slot(occupied, 'occupied')
+    receipt = await observed(published, owner.owner)
+    assert receipt['stage'] in ('SUCCEEDED', 'SUBMITTED')
+    assert len(native.opened) == 1 and owner.owner.failure is None
+
+
 @pytest.mark.parametrize("selection",[True],indirect=True)
 @pytest.mark.parametrize("scheduling_delay", [0, 1.7], ids=["normal", "delayed-loop"])
 async def test_automatic_renewal_keeps_the_same_runtime_past_its_initial_deadline(lifecycle,monkeypatch,scheduling_delay):

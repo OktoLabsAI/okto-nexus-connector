@@ -18,6 +18,8 @@ from nexus_connector_core import (
     project_r4_interrupt_receipt, project_r4_close_receipt,
     project_r4_decision_receipt, r4_close_operation, r4_native_decision_operation,
     prepare_r4_receipt_binding, SessionKey, OperationKey, OperationNotAdmitted,
+    OperationCapacityDeferred, CapacityRetryWaiter, CAPACITY_CONTRACT_REVISION,
+    project_r4_bound_receipt,
 )
 
 from ..errors import ConnectorError
@@ -116,6 +118,9 @@ class R4ExecutionOwner:
         self.native_tools = native_tools
         self.require_authority, self.clock = require_current, clock
         self.capacity_provider = capacity_provider
+        self.capacity_waiter = CapacityRetryWaiter(self._capacity_revision)
+        self._capacity_bindings = {}
+        self._prepared_openings = {}
         self._renewal_slots = asyncio.Semaphore(8)
         # The transport retains bounded item/byte reservations until _produce
         # releases them. Separate worker budgets keep slow opens from occupying
@@ -163,6 +168,7 @@ class R4ExecutionOwner:
 
     async def stop(self):
         self._stopping = True
+        self.capacity_waiter.stop()
         self._receipt_stop.set()
         for session in self._sessions.values():
             session.stopped.set()
@@ -180,6 +186,7 @@ class R4ExecutionOwner:
             # Retain a publication already in progress through shutdown.
             await asyncio.shield(self._receipt_monitor)
         await self.events.stop()
+        await self.capacity_waiter.aclose()
         for task in tuple(self._producers):
             if task.done():
                 self._observe(task)
@@ -228,13 +235,51 @@ class R4ExecutionOwner:
                 self.failure = error
 
     async def _produce_independently(self, item):
+        await self._produce(item)
+
+    async def _capacity_revision(self):
+        ledger = await self.host.ensure_ledger()
+        return await ledger.capacity_revision()
+
+    async def _capacity_flow(self, item, state, sequence):
+        # Older links keep their original bounded transport accounting. The
+        # new flow-control hint is sent only under explicit negotiation.
+        if CAPACITY_CONTRACT_REVISION in self.connection.state.control_capabilities:
+            from nexus_connector_core.capacity_codec import capacity_dispatch_state
+            frame = capacity_dispatch_state(self._capacity_bindings[item.token],
+                                             state=state, sequence=sequence)
+            await self.connection.publish_capacity_dispatch_state(item, frame)
+
+    async def _execute_with_capacity_wait(self, item):
         action = item.frame['action']
         lane = 'opening' if action == 'runtime.open' else 'regular' if action == 'turn.submit' else 'control'
-        async with self._operation_slots[lane]:
-            if self._stopping:
-                self.connection.release_operation(item)
-                return
-            await self._produce(item)
+        deferred, sequence = None, 0
+        while True:
+            version = self.capacity_waiter.version
+            async with self._operation_slots[lane]:
+                if deferred is not None:
+                    frame = item.frame
+                    key = ExecutionRuntimeKey(frame['server_id'], frame['executor_id'],
+                                              frame['binding_id'], frame['session_id'])
+                    session = self._sessions.get(key)
+                    if self._stopping or session is None or session.stopped.is_set():
+                        return project_r4_bound_receipt(self._capacity_bindings[item.token],
+                            deferred.stopped_receipt(), key=deferred.key, receipt_revision=1)
+                    sequence += 1
+                    await self._capacity_flow(item, 'RUNNING', sequence)
+                elif self._stopping:
+                    return None
+                try:
+                    return await self._execute(item)
+                except OperationCapacityDeferred as error:
+                    error.require_binding(self._capacity_bindings[item.token])
+                    deferred = error
+                    sequence += 1
+                    await self._capacity_flow(item, 'WAITING', sequence)
+            # The same producer retains transport ownership and prepared
+            # identity. Neither a worker slot nor a session/renewal gate is
+            # held across this shared change observation.
+            await self.capacity_waiter.wait(version)
 
     def _context(self, item, runtime):
         return runtime.r4_operation_context(self.connection.require_current(item),
@@ -245,6 +290,7 @@ class R4ExecutionOwner:
         binding = prepare_r4_receipt_binding(item.frame, context, **options)
         await asyncio.to_thread(self.publications.bind, binding,
                                **({'stream_epoch': options['stream_epoch']} if 'stream_epoch' in options else {}))
+        self._capacity_bindings[item.token] = binding
         if 'stream_epoch' in options:
             await asyncio.to_thread(self.events.store.register,{**item.frame,'stream_epoch':options['stream_epoch']})
         if self.capacity_provider is not None and binding['action'] in ('runtime.open', 'turn.submit'):
@@ -256,7 +302,9 @@ class R4ExecutionOwner:
     async def _produce(self, item):
         try:
             await asyncio.to_thread(self.publications.reserve, self.connection.require_current(item))
-            receipt = await self._execute(item)
+            receipt = await self._execute_with_capacity_wait(item)
+            if receipt is None:
+                return
             self._record_execution_outcome(receipt)
             # Once Core has produced a fact, loss of lane/link does not undo
             # it. Publish that same fact; never fabricate a second operation.
@@ -285,6 +333,8 @@ class R4ExecutionOwner:
             await self.connection.close()
             raise
         finally:
+            self._capacity_bindings.pop(item.token, None)
+            self._prepared_openings.pop(item.token, None)
             self.connection.release_operation(item)
 
     async def _renew_session(self, session, source):
@@ -338,11 +388,13 @@ class R4ExecutionOwner:
         key = ExecutionRuntimeKey(frame["server_id"], frame["executor_id"], frame["binding_id"], frame["session_id"])
         session = self._sessions.get(key)
         if frame['action'] == 'runtime.open':
+            prepared = self._prepared_openings.get(item.token)
+            resuming = prepared is not None and prepared[0] is session
             # Reserve before the first await: concurrent preparations must not
             # overbook the host or open the same identity twice.
-            if key in self._opening_sessions or key in self._sessions:
+            if key in self._opening_sessions or (key in self._sessions and not resuming):
                 raise CoreError('OPERATION_CONFLICT', 'r4_execution')
-            if len(set(self._sessions) | self._opening_sessions) >= self.max_sessions:
+            if not resuming and len(set(self._sessions) | self._opening_sessions) >= self.max_sessions:
                 raise ConnectorError('CAPACITY_EXCEEDED', 'r4_execution',
                                      'The execution session capacity is exhausted.')
             self._opening_sessions.add(key)
@@ -376,7 +428,8 @@ class R4ExecutionOwner:
                                   frame['binding_id'], frame['session_id'])
         action, payload = frame['action'], frame['payload']
         session = self._sessions.get(key)
-        if action == 'runtime.open':
+        retained = self._prepared_openings.get(item.token)
+        if action == 'runtime.open' and retained is None:
             # Server recovery, not a repeated bootstrap, resolves an opening
             # whose effect may already exist in the host or durable journal.
             if session is not None:
@@ -425,6 +478,12 @@ class R4ExecutionOwner:
                 auth_refs=setup.auth_refs,
                 mcp_preset=tuple(payload.get('mcp_preset', [])),
                 harness_settings=validate_harness_settings(payload['adapter_id'], payload.get('harness_settings', {}))), context)
+            self._prepared_openings[item.token] = (session, prepared)
+        if action == 'runtime.open':
+            retained_session, prepared = self._prepared_openings[item.token]
+            if session is not retained_session or session.stopped.is_set():
+                raise CoreError('SESSION_UNKNOWN', 'r4_execution')
+            runtime = session.runtime
             # prepare and environment discovery may yield. The current lane
             # and installed authority are checked again before open.
             context = self._context(item, runtime)
@@ -433,6 +492,8 @@ class R4ExecutionOwner:
             try:
                 receipt = await runtime.open(OpenOperation(frame['operation_id'], frame['session_id'],
                                                            session.stream_epoch, prepared), context)
+            except OperationCapacityDeferred:
+                raise
             except CoreError:
                 # Publish a durable failure fact rather than taking unrelated
                 # bindings offline. Unknown effects still require reconciliation.
