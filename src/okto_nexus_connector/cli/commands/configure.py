@@ -15,6 +15,7 @@ from ..wizard_prompts import text, choice, preferences
 from .identity import run_identity, _vault
 from .harness_config import read_configuration_file
 from .connection_config import apply_configuration
+from .workspace_selection import select_workspace
 
 
 def template():
@@ -80,6 +81,8 @@ async def _run_configure(args, output, root):
             return await http._request(method,path,key=key,json_body=body)
         # Check operator authority before collecting configuration that cannot be applied.
         await call('GET',f'/v1/connections/setup/{quote(args.agent,safe="")}')
+        args.workspace_id, args.workspace_label = await select_workspace(
+            args, output, http, key, choice=choice, text=text)
         rows=[]
         cursor=None
         while True:

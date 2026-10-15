@@ -164,6 +164,118 @@ async def observed(queue, owner):
             + pending_task_locations()) from error
 
 
+@pytest.mark.parametrize('fact_mode', ['durable', 'missing', 'wrong_hash'])
+async def test_native_unknown_reply_uses_only_exact_durable_fact_and_preserves_connection(execution, monkeypatch, fact_mode):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    owner, connection, factory, receipts, opening = execution
+    await connection.emit(opening)
+    await observed(receipts, owner)
+    original_send = factory.native.send
+
+    async def lost_reply(*args, **kwargs):
+        await original_send(*args, **kwargs)
+        raise OSError('Native write happened, but its reply was lost')
+
+    monkeypatch.setattr(factory.native, 'send', lost_reply)
+    if fact_mode != 'durable':
+        journal = await owner.host.ensure_history_journal()
+        async def read(key):
+            fact = await journal.get_receipt(key)
+            return None if fact_mode == 'missing' else replace(fact, intent_hash='0' * 64)
+        async def unavailable_history():
+            return SimpleNamespace(get_receipt=read)
+        monkeypatch.setattr(owner.host, 'ensure_history_journal', unavailable_history)
+    turn = operation(opening, 'turn.submit', {'text': 'One potentially effective write'})
+    await connection.emit(turn)
+    if fact_mode != 'durable':
+        async with asyncio.timeout(15):
+            while owner.failure is None:
+                await asyncio.sleep(.01)
+        assert not connection.online and receipts.empty()
+        assert len(factory.native.sent) == 1
+        return
+    unknown = await observed(receipts, owner)
+    assert unknown['operation_id'] == turn['operation_id']
+    assert unknown['stage'] == 'OUTCOME_UNKNOWN' and unknown['possible_effect'] and not unknown['retry_safe']
+    assert owner.failure is None and connection.online and not factory.native.stopped
+    # Recovery queries the original journal; the R4 transport intentionally
+    # refuses resubmission of an already published operation.
+    from nexus_connector_core import OperationKey
+    journal = await owner.host.ensure_history_journal()
+    fact = await journal.get_receipt(OperationKey(turn['server_id'], turn['executor_id'], turn['operation_id']))
+    assert fact.stage == 'OUTCOME_UNKNOWN' and fact.possible_effect and not fact.retry_safe
+    assert len(factory.native.sent) == 1
+    monkeypatch.setattr(factory.native, 'send', original_send)
+    await connection.emit({**opening, 'operation_id': 'healthy-open', 'session_id': 'healthy-session'})
+    assert (await observed(receipts, owner))['stage'] == 'SUBMITTED'
+    assert owner.failure is None and connection.online
+
+
+@pytest.mark.parametrize('warm_count', [2, 4, 8])
+async def test_parallel_openings_do_not_block_ready_session_or_controls(execution, warm_count):
+    owner, connection, factory, receipts, opening = execution
+    await connection.emit(opening)
+    await observed(receipts, owner)
+    entered, release = asyncio.Event(), asyncio.Event()
+    blocked = []
+
+    async def slow(prepared, session_id, context, *, stream_epoch):
+        blocked.append(session_id)
+        if len(blocked) == warm_count:
+            entered.set()
+        await release.wait()
+        return Native()
+
+    factory.open = slow
+    try:
+        for index in range(warm_count):
+            await connection.emit({**opening, 'operation_id': f'open-{index}', 'session_id': f'cold-{index}'})
+        await asyncio.wait_for(entered.wait(), 15)
+        await connection.emit(operation(opening, 'turn.submit', {'text': 'Ready while replenishing'}))
+        receipt = await observed(receipts, owner)
+        assert receipt['operation_id'] == 'turn.submit'
+        assert receipt['stage'] == 'SUBMITTED'
+        assert not release.is_set() and len(factory.native.sent) == 1
+        await connection.emit(operation(opening, 'turn.interrupt', {'reason': 'Independent control'}))
+        assert (await observed(receipts, owner))['operation_id'] == 'turn.interrupt'
+        assert owner.failure is None
+    finally:
+        release.set()
+    for _ in range(warm_count):
+        assert (await observed(receipts, owner))['operation_id'].startswith('open-')
+
+
+async def test_preparing_sessions_count_against_host_capacity(execution, monkeypatch):
+    from okto_nexus_connector.errors import ConnectorError
+    owner, connection, _, _, opening = execution
+    owner.max_sessions = 1
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def preparing(item):
+        entered.set()
+        await release.wait()
+        return 'prepared'
+
+    monkeypatch.setattr(owner, '_execute_owned', preparing)
+    monkeypatch.setattr(connection, 'require_current', lambda item: item.frame)
+    first = ReceivedOperation('a', encode_r4_frame(opening), False, 'lane')
+    second_frame = {**opening, 'session_id': 'another', 'operation_id': 'another'}
+    second_frame['intent_hash'] = r4_submit_intent_hash(second_frame)
+    second = ReceivedOperation('b', encode_r4_frame(second_frame), False, 'lane')
+    producer = asyncio.create_task(owner._execute(first))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        with pytest.raises(ConnectorError, match='capacity'):
+            await owner._execute(second)
+        with pytest.raises(CoreError, match='OPERATION_CONFLICT'):
+            await owner._execute(first)
+    finally:
+        release.set()
+        assert await producer == 'prepared'
+    assert not owner._opening_sessions
+
+
 async def failed(owner):
     try:
         # Includes cold journal/ledger initialization before the injected
@@ -247,7 +359,13 @@ async def test_control_and_cancelled_stop_do_not_abandon_receipt_producer(execut
     owner.publish_receipt = publish
     try:
         await connection.emit(operation(opening, 'turn.submit', {'text': 'Hello'}))
-        await asyncio.wait_for(entered.wait(), 3)
+        # This gate follows durable admission, like observed(); it is a test
+        # watchdog, not the runtime's cancellation/lease deadline.
+        async with asyncio.timeout(15):
+            while not entered.is_set():
+                if owner.failure is not None:
+                    raise owner.failure
+                await asyncio.sleep(.01)
         await connection.emit(operation(opening, 'turn.interrupt', {'reason': 'Operator requested stop.'}))
         assert (await observed(receipts, owner))['operation_id'] == 'turn.interrupt'
         # Publication callback completion precedes the durable local ACK.
@@ -312,11 +430,14 @@ async def test_frozen_open_selection_and_typed_control_projection(execution):
         return await candidates(frame)
     owner.candidate_provider = mutating
     opening['payload']['model'] = 'approved-model'
+    opening['payload']['mcp_preset'] = [dict(name='docs', enabled=True, transport='http',
+        url='https://example.test/mcp', header_refs={})]
     opening['payload']['harness_settings'] = {'effort':'low', 'approval_policy':'on-request', 'user_input':'enabled'}
     await connection.emit(opening)
     assert (await observed(receipts, owner))['operation_id'] == 'open'
     assert factory.opened[0].intent.mode == 'managed'
     assert factory.opened[0].intent.model == 'approved-model'
+    assert list(factory.opened[0].intent.mcp_preset) == opening['payload']['mcp_preset']
     assert factory.opened[0].intent.harness_settings.effort == 'low'
     assert factory.opened[0].intent.harness_settings.approval_policy == 'on-request'
     assert factory.opened[0].intent.harness_settings.user_input == 'enabled'

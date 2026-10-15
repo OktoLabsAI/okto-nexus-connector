@@ -25,6 +25,7 @@ from ..wizard_prompts import text,choice,preferences
 from .identity import _vault
 from .connection_config import apply_configuration
 from .binding_conflicts import resolve_conflict
+from .workspace_selection import select_workspace
 
 
 async def ipc(root,method,body=None):
@@ -73,7 +74,12 @@ async def configure_local(args,output,root,store,identity,server,portable):
             (effective_installation_ref(c),f'{c.executable}'+(f' — {c.launch_script}' if c.launch_script else '')+f' ({c.version or "version check required"})') for c in matches])
         if not any(effective_installation_ref(c)==selected for c in matches):
             raise ConnectorError('BINARY_NOT_FOUND','configure','Choose an installation from this machine inventory.')
-        project=local_directory('4. Workspace folder',args.project,str(Path.cwd()))
+        if not args.workspace_id:
+            key = _vault(root, store).resolve(identity.secret_handle)
+            async with NexusHTTPClient(server) as http:
+                args.workspace_id, args.workspace_label = await select_workspace(
+                    args, output, http, key, choice=choice, text=text)
+        project=local_directory('Workspace folder on this machine',args.project,str(Path.cwd()))
         label=args.workspace_label or text('Workspace name',Path(project).name,required=True)
         home=local_directory('Provider login directory (optional)',args.provider_home,
             discover_provider_home(portable['adapter_id']) or '',optional=True)
@@ -83,7 +89,8 @@ async def configure_local(args,output,root,store,identity,server,portable):
             workspace_root=project,workspace_label=label,provider_home=home)
         output.heading('Review connection')
         output.table(['Setting', 'Value'], [('Agent', identity.agent_id), ('Server', server),
-                     ('Installation', selected), ('Workspace', project), ('Login directory', home or 'Harness default')])
+                     ('Installation', selected), ('Nexus workspace', f"{label} ({args.workspace_id or 'new'})"),
+                     ('Local folder', project), ('Login directory', home or 'Harness default')])
         output.line('Approve this connection and its requested execution limits once in Nexus. Setup will continue automatically.')
         if not choice('7. Finish local setup and submit this connection?',[(True,'Finish'),(False,'Cancel')],False):
             return {'saved':False,'canceled':True}

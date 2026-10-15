@@ -133,16 +133,7 @@ async def test_01_qualified_candidate_architecture_survives_binding_roundtrip(
 
 async def test_02_two_servers_same_binding_id_do_not_share_core_instance(
         tmp_path):
-    host = CoreRuntimeHost.__new__(CoreRuntimeHost)
-    host.root = tmp_path
-    host._vault = None
-    host._journal_path = paths.journal_path(tmp_path)
-    host._ledger_path = paths.owned_slot_ledger_path(tmp_path)
-    host._runtimes = {}
-    host._journal = None
-    host._ledger = None
-    host._journal_gate = None
-    host._ledger_gate = None
+    host = CoreRuntimeHost(tmp_path, None)
     binary = _exe(tmp_path / "codex.exe")
 
     def binding(server):

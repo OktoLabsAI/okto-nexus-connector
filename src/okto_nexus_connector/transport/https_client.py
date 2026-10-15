@@ -307,6 +307,13 @@ class NexusHTTPClient:
             await self._client.aclose()
             self._client = None
 
+    async def list_connection_workspaces(self, key: str, *, after_workspace_id=None):
+        from urllib.parse import urlencode
+        query = {'limit': 100}
+        if after_workspace_id is not None:
+            query['after_workspace_id'] = after_workspace_id
+        return await self._request('GET', '/v1/connections/workspaces?' + urlencode(query), key=key)
+
     # -- low level -------------------------------------------------------
 
     async def _request(self, method: str, path: str, *, key: str | None,

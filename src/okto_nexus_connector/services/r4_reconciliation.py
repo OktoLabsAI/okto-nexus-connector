@@ -2,14 +2,16 @@
 import asyncio
 import secrets
 
-from nexus_connector_core import EventCursor, OperationKey, project_r4_bound_receipt, project_r4_resource_release
+from nexus_connector_core import EventCursor, OperationKey, project_r4_bound_receipt, project_r4_resource_release, decode_r4_frame, encode_r4_frame
 
 from ..errors import ConnectorError
 from ..storage.r4_publications import R4PublicationStore
+from .r4_session_release import SessionReleaseRecoveryOutbox
 
 
 class R4ReconciliationReporter:
-    def __init__(self, store, host, server_id, executor_id):
+    def __init__(self, store, host, server_id, executor_id, *, release_outbox: SessionReleaseRecoveryOutbox | None = None,
+                 boot_id='reconciliation'):
         self.publications = R4PublicationStore.for_state(store)
         from ..storage.r4_events import R4EventStore
         self.event_store = R4EventStore.for_state(store)
@@ -20,6 +22,36 @@ class R4ReconciliationReporter:
         self.claims_done = False
         self.blocked = False
         self.requested_sessions, self.seen_sessions = set(), set()
+        if release_outbox is None:
+            from ..storage.r4_session_releases import R4SessionReleaseStore
+            release_outbox = R4SessionReleaseStore.for_state(store)
+        self.release_outbox = release_outbox
+        self._release_observations = {}
+        self._report_complete = False
+        self.boot_id = boot_id
+        self._preopen_reports, self._preopen_sent, self._preopen_after = [], {}, 0
+
+    async def accepted(self, ack):
+        """Called only after the authenticated transport validates this ACK."""
+        ack = decode_r4_frame(encode_r4_frame(ack))
+        if (ack['type'] != 'reconcile.accepted' or ack['recovery_remaining']
+                or (ack['server_id'], ack['executor_id']) != (self.server_id, self.executor_id)
+                or tuple(ack[k] for k in ('connection_id', 'connection_generation', 'reconcile_id')) != self.cycle
+                or not self._report_complete or self.blocked):
+            raise ConnectorError('RECONCILIATION_REQUIRED', 'session_release',
+                                 'The original complete reconciliation was not confirmed.')
+        for frame in self._preopen_sent.values():
+            await asyncio.to_thread(self.publications.acknowledge, frame)
+        after = 0
+        for _ in range(256):
+            next_after = await asyncio.to_thread(self.release_outbox.reconcile_page,
+                ack, self._release_observations, after=after)
+            if next_after is None:
+                return
+            if next_after <= after:
+                raise ConnectorError('JOURNAL_UNAVAILABLE', 'session_release', 'The recovery cursor did not advance.')
+            after = next_after
+        raise ConnectorError('RECONCILIATION_REQUIRED', 'session_release', 'Release recovery exceeded its page budget.')
 
     async def _fact(self, row, journal):
         if row is None or row['binding'] is None:
@@ -42,7 +74,8 @@ class R4ReconciliationReporter:
     async def report(self, request):
         if (request['server_id'], request['executor_id']) != (self.server_id, self.executor_id):
             raise ConnectorError('SCOPE_MISMATCH', 'r4_reconcile', 'The reconciliation scope changed.')
-        if await asyncio.to_thread(self.publications.pending, self.server_id, self.executor_id):
+        if request.get('preopen_refusal_supported') is not True and await asyncio.to_thread(
+                self.publications.pending, self.server_id, self.executor_id):
             raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile', 'Receipt publication must finish before reconciliation.')
         if request.get('stream_watermarks'):
             raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile', 'Event stream recovery is required.')
@@ -51,13 +84,35 @@ class R4ReconciliationReporter:
             self.cycle, self.cursor = cycle, None
             self.after, self.high, self.claims_done, self.blocked = 0, None, False, False
             self.requested_sessions, self.seen_sessions = set(), set()
+            self._release_observations = {}
+            self._report_complete = False
+            self._preopen_reports, self._preopen_sent, self._preopen_after = [], {}, 0
+            if request.get('preopen_refusal_supported') is True:
+                from .r4_preopen_recovery import recover_preopen_publications
+                self._preopen_reports = await recover_preopen_publications(
+                    self.publications, self.host, request, boot_id=self.boot_id)
         elif cycle != self.cycle or request['cursor'] != self.cursor:
             raise ConnectorError('STALE_GENERATION', 'r4_reconcile', 'The reconciliation cursor is stale.')
+        pending = self.publications.pending_unfenced if request.get('preopen_refusal_supported') is True else self.publications.pending
+        if await asyncio.to_thread(pending, self.server_id, self.executor_id):
+            raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile', 'Receipt publication must finish before reconciliation.')
+        self.seen_sessions.update(item['refusal']['source']['session_id'] for item in self._preopen_reports)
         self.requested_sessions.update(request['session_ids'])
         if len(self.requested_sessions) > 32768:
             raise ConnectorError('CAPACITY_EXCEEDED', 'r4_reconcile', 'The reconciliation session budget is exhausted.')
         journal = await self.host.ensure_history_journal()
         ledger = await self.host.ensure_ledger()
+        # The authenticated recovery channel supplies the replacement
+        # generation. Old HELD reservations are cancellable without a native
+        # process proof; consumed or uncertain records must still block below.
+        for _ in range(32):
+            released = await ledger.release_fenced_capacity_holds(self.server_id, self.executor_id,
+                connection_generation=request['connection_generation'], limit=128)
+            if released < 128:
+                break
+        else:
+            raise ConnectorError('RECONCILIATION_REQUIRED', 'capacity_reconcile',
+                                 'The capacity recovery scan requires another pass.')
         # Live/unreleased slots cannot be adopted as stopped resources.
         for source in (journal, ledger):
             after, high = 0, None
@@ -78,6 +133,11 @@ class R4ReconciliationReporter:
         for operation_id in request['operation_ids']:
             fact = await self._fact(rows.get(operation_id), journal)
             if fact is None:
+                if self._preopen_reports:
+                    # Only the Server can retire never-dispatched children of
+                    # these exact openings. Omit a missing fact; its canonical
+                    # checks must reject any other unexplained operation.
+                    continue
                 raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile', 'The requested operation has no verified Core receipt.')
             else:
                 receipts.append({k: fact[k] for k in ('operation_id', 'intent_hash', 'receipt_revision', 'stage')})
@@ -138,6 +198,11 @@ class R4ReconciliationReporter:
                         progress = await asyncio.to_thread(self.event_store.read,
                             {**opening['metadata'],'stream_epoch':epoch})
                         self.blocked |= progress['remote_acked'] != sequence or progress['core_applied'] != sequence
+                    if len(self._release_observations) >= 32768:
+                        raise ConnectorError('CAPACITY_EXCEEDED', 'session_release', 'The recovery fact budget is exhausted.')
+                    self._release_observations[(claim.key.session_id, generation)] = dict(
+                        opening=dict(opening['metadata']), claim=dict(claims[-1]),
+                        fact=dict(facts[-1]), watermark=dict(watermarks[-1]))
                 else:
                     self.blocked = True
             if page.next_after_rowid is None:
@@ -148,9 +213,27 @@ class R4ReconciliationReporter:
                 self.after = page.next_after_rowid
         if self.claims_done and self.requested_sessions - self.seen_sessions:
             raise ConnectorError('RECONCILIATION_REQUIRED', 'r4_reconcile', 'The requested session has no durable Core claim.')
-        complete = self.claims_done and len(request['operation_ids']) < 256 and len(request['session_ids']) < 256
+        # Leave wire budget for the ordinary receipt/claim page. Capacity and
+        # prior-binding evidence can make count-only pages exceed 1 MiB.
+        from nexus_connector_core.protocol import canonical_json
+        preopen_page, preopen_bytes = [], 0
+        for item in self._preopen_reports[self._preopen_after:self._preopen_after + 128]:
+            size = len(canonical_json(item)) + 1
+            if preopen_bytes + size > 384 * 1024:
+                if not preopen_page:
+                    raise ConnectorError('CAPACITY_EXCEEDED', 'r4_preopen', 'The recovery proof exceeds its page budget.')
+                break
+            preopen_page.append(item)
+            preopen_bytes += size
+        self._preopen_after += len(preopen_page)
+        for item in preopen_page:
+            self._preopen_sent[item['receipt']['operation_id']] = item['receipt']
+        complete = (self.claims_done and self._preopen_after == len(self._preopen_reports)
+                    and len(request['operation_ids']) < 256 and len(request['session_ids']) < 256)
+        self._report_complete = complete
         self.cursor = None if complete else 'page_' + secrets.token_hex(16)
         return {k: request[k] for k in ('protocol_major', 'contract_revision', 'server_id', 'executor_id',
             'connection_id', 'connection_generation', 'reconcile_id', 'cursor')} | dict(
                 type='reconcile.report', next_cursor=self.cursor, complete=complete,
-                receipts=receipts, claims=claims, ownership_facts=facts, stream_watermarks=watermarks)
+                receipts=receipts, claims=claims, ownership_facts=facts, stream_watermarks=watermarks) | (
+                    {'preopen_refusals': preopen_page} if preopen_page else {})

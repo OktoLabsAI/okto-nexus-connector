@@ -23,12 +23,16 @@ okto-nexus-connector configure --identity assistant --file connection.json
 1. Select/import an identity, then select a harness.
 2. Choose a connection name. Compatible existing bindings offer **Replace existing binding** or **Abort setup** (default). Pending or incompatible bindings are reported without overwriting them.
 3. Select the exact installation on this machine.
-4. Enter an existing absolute workspace path and optional provider login directory. Enter `-` to clear an optional default.
+4. Select an existing Nexus workspace (including one used by another remote harness), or choose **Create new workspace**. Then enter an existing absolute folder on this machine and optional provider login directory. Enter `-` to clear an optional default.
 5. Select harness preferences, session policy, Nexus tool access and requested execution limits.
 6. Review and Finish. The CLI registers the host, checks the installation, starts the daemon, publishes the workspace and submits the binding proposal.
 7. Approve in Nexus. For current requests, one approval covers the displayed configuration and limits. The daemon applies it and attaches in the background; no operator key or second approval is needed on this computer.
 
 Cancel before Finish to avoid submitting the binding. An identity explicitly imported earlier remains stored. Replacement preserves identity, harness and workspace; close active sessions first. The previous binding stays unchanged until replacement succeeds.
+
+The workspace is the shared logical identity in Nexus; its folder belongs to this connection. For example, two harnesses can share one workspace while using `C:\Work\Project` and `/home/agent/project` on their respective computers. Selection does not copy files or reuse another host's path. The review screen shows the workspace name/ID and local folder separately.
+
+Listing existing workspaces requires `workspaces.list` permission (or operator access). When listing is unavailable, the wizard offers an explicit choice to enter a known workspace ID or create a new workspace. `--workspace-id ID` selects it directly. Connection approval is still required; selecting a workspace does not grant execution access. Resuming a saved request preserves its workspace selection.
 
 The terminal can close after submission, but the daemon must remain running. `awaiting_inventory` means submission has not reached approval yet. `saved: true` means configuration was applied, not that a model-response test passed. Verify `status` and send a message in Meta-harness.
 

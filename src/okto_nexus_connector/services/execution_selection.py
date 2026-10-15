@@ -112,6 +112,36 @@ def revalidate_running_selection(store: StateStore, *, frame: dict, candidates,
                                         running=expected)
 
 
+def _approved_scope(state, scope):
+    """Shared administrative consent checks, independent of a native intent."""
+    binding = _unique((b for b in state.execution_bindings if b.server_id == scope['server_id'] and
+        b.executor_id == scope['executor_id'] and b.binding_id == scope['binding_id']),
+        'The approved execution binding is missing or ambiguous.')
+    if binding.state != 'APPROVED' or any(scope[key] != getattr(binding, key) for key in (
+            'agent_id', 'workspace_id', 'workspace_binding_id', 'binding_revision',
+            'authorization_revision', 'configuration_revision')):
+        raise ConnectorError('STALE_GENERATION', 'execution_selection', 'The operation differs from the approved binding.')
+    local = _local_for(state, binding)
+    if local.status != 'BOUND' or not _matches(local, binding) or _digest(local) != binding.realization_snapshot_digest:
+        raise ConnectorError('PROFILE_DRIFT', 'execution_selection', 'The approved local realization changed.')
+    return binding, local
+
+
+def validate_capacity_selection(store: StateStore, *, scope):
+    """Check consent/root availability without fabricating runtime.open.
+
+    A capacity observation does not qualify a provider build or grant a native
+    effect. Full candidate qualification remains at the existing open boundary.
+    """
+    binding, local = _approved_scope(store.load(), scope)
+    if (_root_digest(local, local.root_proof_nonce) != local.local_root_proof_digest
+            or str(Path(local.workspace_root).resolve(strict=True)) != local.workspace_root
+            or not Path(local.workspace_root).is_dir()
+            or not Path(local.candidate_executable).is_file()):
+        raise ConnectorError('PROFILE_DRIFT', 'capacity_selection', 'The approved local resources changed.')
+    return binding
+
+
 def _resolve_execution_selection(store: StateStore, *, frame: dict, candidates,
                                  running=None) -> ExecutionSelection:
     """Resolve only opaque references from a schema-validated opening envelope.
@@ -123,20 +153,11 @@ def _resolve_execution_selection(store: StateStore, *, frame: dict, candidates,
     if parsed['type'] != 'operation.submit' or parsed['action'] != 'runtime.open':
         raise ConnectorError('VALIDATION_ERROR', 'execution_selection', 'An opening operation is required.')
     state = store.load()
-    binding = _unique((b for b in state.execution_bindings if b.server_id == parsed['server_id'] and
-        b.executor_id == parsed['executor_id'] and b.binding_id == parsed['binding_id']),
-        'The approved execution binding is missing or ambiguous.')
-    if binding.state != 'APPROVED' or any(parsed[key] != getattr(binding, key) for key in (
-            'agent_id', 'workspace_id', 'workspace_binding_id', 'binding_revision',
-            'authorization_revision', 'configuration_revision')):
-        raise ConnectorError('STALE_GENERATION', 'execution_selection', 'The operation differs from the approved binding.')
+    binding, local = _approved_scope(state, parsed)
     payload = parsed['payload']
     if any(payload[key] != getattr(binding, key) for key in (
             'adapter_id', 'candidate_ref', 'inventory_revision', 'realization_ref', 'realization_revision')):
         raise ConnectorError('STALE_GENERATION', 'execution_selection', 'The opening selection differs from the approved binding.')
-    local = _local_for(state, binding)
-    if local.status != 'BOUND' or not _matches(local, binding) or _digest(local) != binding.realization_snapshot_digest:
-        raise ConnectorError('PROFILE_DRIFT', 'execution_selection', 'The approved local realization changed.')
     # The server revalidates the selected inventory evidence before dispatch.
     # Preserve the original binding/realization digests across inventory refresh;
     # the exact consented physical candidate is still checked below.

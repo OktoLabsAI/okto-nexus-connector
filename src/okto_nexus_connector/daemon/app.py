@@ -285,7 +285,9 @@ class DaemonApp:
             paths.vault_dir(root),
             approved_fallback=bool(state.preferences.get(
                 "vault.fallback_file.approved", False)))
-        self.host = CoreRuntimeHost(root, self.vault)
+        # Technical capacity participates in the same Core ledger as ordinary
+        # operations. The Server still negotiates support and authorizes work.
+        self.host = CoreRuntimeHost(root, self.vault, capacity_enabled=True)
         self.bridge = EventBridge(self._transport_for, self._core_ack,
                                   self._journal_page)
         self.runtimes = RuntimeManager(
@@ -300,6 +302,7 @@ class DaemonApp:
         self.started_at = time.time()
         self._stopped = asyncio.Event()
         self._draining = False
+        self._stream_watchers: set[asyncio.Task] = set()
         # CN3/G02: approvals keyed by (server_id, request_id); CN4-01
         # keeps a bounded terminal history so repeats consult the same
         # outcome instead of re-deciding; CN5 stores PendingApproval
@@ -373,6 +376,13 @@ class DaemonApp:
         await self.bridge.drain()
         for transport in self.transports.values():
             await transport.stop()
+        # These tasks only observe online transitions. Join them after stopping
+        # transport so the daemon cannot leave observers behind at loop teardown.
+        watchers = tuple(self._stream_watchers)
+        for watcher in watchers:
+            watcher.cancel()
+        if watchers:
+            await asyncio.gather(*watchers, return_exceptions=True)
         self.transports.clear()
         await self.ipc.stop()
         outcomes = defaultdict(int)
@@ -434,7 +444,13 @@ class DaemonApp:
                     self.bridge.transport_online_again(server_id)
                 was_online = online
                 await asyncio.sleep(0.5)
-        asyncio.create_task(_watch(), name=f"wake-{server_id}")
+        task = asyncio.create_task(_watch(), name=f"wake-{server_id}")
+        self._stream_watchers.add(task)
+        def finished(done):
+            self._stream_watchers.discard(done)
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(finished)
 
     def _start_transports(self) -> None:
         if self._draining:
