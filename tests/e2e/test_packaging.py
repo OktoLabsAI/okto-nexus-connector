@@ -3,7 +3,8 @@
 Builds the real wheel/sdist and installs them into a clean venv together
 with the pinned Core wheel, then verifies: the CLI imports and answers
 ``--version``, importing the package opens nothing (no daemon, no
-socket), and no Nexus Server / MCP dependencies sneak in.
+socket), and no Nexus Server or direct Connector MCP dependency sneaks in.
+Core's MCP client dependency supports runtime MCP presets, including Pi.
 """
 
 from __future__ import annotations
@@ -71,6 +72,8 @@ import okto_nexus_connector as connector
 import nexus_connector_core as core
 from importlib.metadata import requires
 assert f'okto-nexus-connector-core=={core.__version__}' in requires('okto-nexus-connector')
+assert not any(r.lower().startswith('mcp') for r in requires('okto-nexus-connector'))
+assert any(r.lower().startswith('mcp') for r in requires('okto-nexus-connector-core'))
 leaked = [m for m in sys.modules if m.split(".")[0] in
           ("okto_nexus",) and m != "okto_nexus_connector"]
 assert not leaked, leaked
@@ -89,14 +92,14 @@ print(connector.__version__)
     assert version.returncode == 0
     assert "okto-nexus-connector" in version.stdout
 
-    # dependency audit: no MCP SDK, no Nexus Server package
+    # Core owns the MCP client; Connector must not pull in Nexus Server.
     freeze = subprocess.run([str(python), "-I", "-m", "pip", "freeze"],
                             cwd=tmp_path, env=isolated_env,
                             capture_output=True, text=True, timeout=120)
     assert freeze.returncode == 0, freeze.stderr
     packages = freeze.stdout.lower()
-    assert "mcp" not in [line.split("==")[0] for line in
-                         freeze.stdout.splitlines()]
+    assert "mcp" in [line.split("==")[0] for line in
+                     freeze.stdout.splitlines()]
     assert "okto-nexus" not in packages.replace(
         "okto-nexus-connector", "")
 
