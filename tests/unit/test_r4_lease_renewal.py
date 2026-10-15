@@ -42,6 +42,10 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None,
         monkeypatch.setattr(core_host, "create_runtime", controlled_runtime)
         owner.clock = clock.monotonic
     entered, release = asyncio.Event(), asyncio.Event()
+    # Refusal scenarios exercise an already opened session. Initial host/store
+    # setup can exceed the renewal interval on CI; keep those earlier renewals
+    # valid and arm the injected refusal only after observing the open receipt.
+    refusal_armed = not wait_open
     calls = []
     last_request_at = {}
     async def lease(runtime, *, scope, grant_id, purpose="initial", require_current=None, fence_on_error=True):
@@ -63,12 +67,12 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None,
             entered.set()
             if hold:
                 await release.wait()
-            if refuse == 'scoped':
+            if refuse == 'scoped' and refusal_armed:
                 if scope['session_id'] == frame['session_id']:
                     from nexus_connector_core import r4_lease_renew_frame
                     from okto_nexus_connector.transport.lease_denial import LeaseRequestDenied
                     raise LeaseRequestDenied(r4_lease_renew_frame(attempt))
-            elif refuse:
+            elif refuse and refusal_armed:
                 raise ConnectorError("AGENT_AUTH_REQUIRED", "test_lease", "Renewal was refused.")
         if require_current is not None:
             await require_current()
@@ -83,8 +87,10 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None,
     await owner.connection.emit(frame)
     if wait_open:
         await observed(published,owner.owner)
+        refusal_armed = True
     else:
-        async with asyncio.timeout(3):
+        # This bounds filesystem/store setup, not the renewal deadline under test.
+        async with asyncio.timeout(15):
             while not owner.owner._sessions:
                 await asyncio.sleep(.01)
     session=next(iter(owner.owner._sessions.values()))
