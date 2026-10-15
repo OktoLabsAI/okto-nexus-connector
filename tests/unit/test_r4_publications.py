@@ -223,8 +223,12 @@ async def test_cancelled_shutdown_observer_retains_publication_commit(execution,
     monkeypatch.setattr(owner.publications, 'record', blocked)
     try:
         await connection.emit(opening)
-        async with asyncio.timeout(5):
+        # Observe durable Core admission and publication on loaded Windows
+        # runners before exercising cancellation; this is not a runtime SLA.
+        async with asyncio.timeout(15):
             while not entered.is_set():
+                if owner.failure is not None:
+                    raise owner.failure
                 await asyncio.sleep(.01)
         stopping = asyncio.create_task(owner.stop())
         await asyncio.sleep(0)

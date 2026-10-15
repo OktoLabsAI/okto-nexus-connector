@@ -359,7 +359,13 @@ async def test_control_and_cancelled_stop_do_not_abandon_receipt_producer(execut
     owner.publish_receipt = publish
     try:
         await connection.emit(operation(opening, 'turn.submit', {'text': 'Hello'}))
-        await asyncio.wait_for(entered.wait(), 3)
+        # This gate follows durable admission, like observed(); it is a test
+        # watchdog, not the runtime's cancellation/lease deadline.
+        async with asyncio.timeout(15):
+            while not entered.is_set():
+                if owner.failure is not None:
+                    raise owner.failure
+                await asyncio.sleep(.01)
         await connection.emit(operation(opening, 'turn.interrupt', {'reason': 'Operator requested stop.'}))
         assert (await observed(receipts, owner))['operation_id'] == 'turn.interrupt'
         # Publication callback completion precedes the durable local ACK.
