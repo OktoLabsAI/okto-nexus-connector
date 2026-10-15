@@ -290,6 +290,29 @@ class R4ExecutionOwner:
                     deferred = error
                     sequence += 1
                     await self._capacity_flow(item, 'WAITING', sequence)
+                except CoreError as error:
+                    # Close can finish while a deferred retry yields in flow
+                    # publication, binding persistence or Core admission. Its
+                    # pre-effect refusal belongs to this waiting operation;
+                    # it must not disconnect unrelated sessions on the host.
+                    if (deferred is None or error.possible_effect
+                            or (error.stage, error.code) not in {
+                                ('admission', 'SESSION_UNKNOWN'),
+                                ('admission', 'SESSION_CLOSED'),
+                                ('admission', 'SESSION_CLOSING'),
+                                ('admission', 'RUNTIME_DRAINING'),
+                                ('r4_execution', 'SESSION_UNKNOWN'),
+                                ('r4_execution', 'AGENT_REVOKED')}):
+                        raise
+                    if not (self._stopping or session is None or session.stopped.is_set()):
+                        raise
+                    binding = self._capacity_bindings[item.token]
+                    deferred.require_binding(binding)
+                    journal = await self.host.ensure_history_journal()
+                    if await journal.get_receipt(deferred.key) is not None:
+                        raise
+                    return project_r4_bound_receipt(binding, deferred.stopped_receipt(),
+                        key=deferred.key, receipt_revision=1)
             # The same producer retains transport ownership and prepared
             # identity. Neither a worker slot nor a session/renewal gate is
             # held across this shared change observation.

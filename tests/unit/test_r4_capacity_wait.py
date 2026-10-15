@@ -127,3 +127,52 @@ async def test_open_wait_reuses_prepared_identity_and_initial_lease(execution):
     assert receipt['stage'] in ('SUBMITTED', 'SUCCEEDED')
     assert len(factory.opened) == 1 and connection.lease_count == 1
     assert calls == ['inventory', 'launch'] and owner.failure is None
+
+
+@pytest.mark.parametrize('cut', ['flow', 'binding'])
+async def test_session_close_during_deferred_retry_preserves_connection(execution, monkeypatch, cut):
+    flow = enable(execution)
+    owner, connection, factory, receipts, opening = execution
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_flow, original_bind = owner._capacity_flow, owner._bind
+    retrying = False
+
+    async def publish(item, state, sequence):
+        nonlocal retrying
+        await original_flow(item, state, sequence)
+        if item.frame['operation_id'] == 'waiting' and state == 'RUNNING':
+            retrying = True
+            if cut == 'flow':
+                entered.set()
+                await release.wait()
+
+    async def bind(item, *args, **kwargs):
+        result = await original_bind(item, *args, **kwargs)
+        if cut == 'binding' and retrying and item.frame['operation_id'] == 'waiting':
+            entered.set()
+            await release.wait()
+        return result
+
+    monkeypatch.setattr(owner, '_capacity_flow', publish)
+    monkeypatch.setattr(owner, '_bind', bind)
+    try:
+        await connection.emit(opening)
+        await observed(receipts, owner)
+        await connection.emit(operation(opening, 'turn.submit', {'text': 'Active'}, operation_id='active'))
+        await observed(receipts, owner)
+        await connection.emit(operation(opening, 'turn.submit', {'text': 'Never sent'}, operation_id='waiting'))
+        await matching(flow, owner, lambda value: value['state'] == 'WAITING')
+        await asyncio.wait_for(entered.wait(), 15)
+        await connection.emit(operation(opening, 'runtime.close',
+            {'reason': 'Stop session', 'drain_seconds': 0, 'interrupt_seconds': 0}))
+        await matching(receipts, owner, lambda value: value['operation_id'] == 'runtime.close')
+        release.set()
+        receipt = await matching(receipts, owner, lambda value: value['operation_id'] == 'waiting')
+        assert receipt['stage'] == 'FAILED' and receipt['error_code'] == 'RUNTIME_DRAINING'
+        assert receipt['retry_safe'] and not receipt['possible_effect']
+        assert all(send[2] != 'waiting' for send in factory.native.sent)
+        stored = owner.publications.lookup(opening['server_id'], opening['executor_id'], ['waiting'])
+        assert stored['waiting']['receipt'] == receipt
+        assert connection.online and owner.failure is None
+    finally:
+        release.set()
