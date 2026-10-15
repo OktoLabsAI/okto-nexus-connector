@@ -23,8 +23,9 @@ async def test_scoped_lease_denial_retries_failed_stop_without_closing_sibling(l
         factory.opened.append(prepared)
         return factory.native
     monkeypatch.setattr(factory, 'open', independent_peer)
+    renewal_gate = asyncio.Event()
     daemon, store, frame, native, published, session, renewing, allow_denial, _ = await setup(
-        lifecycle, monkeypatch, hold=True, refuse='scoped', clock=LeaseClock())
+        lifecycle, monkeypatch, hold=True, refuse='scoped', clock=LeaseClock(), renewal_gate=renewal_gate)
     first_peer = native.native
     original_stop = session.runtime.shutdown
     entered, release = asyncio.Event(), asyncio.Event()
@@ -47,6 +48,9 @@ async def test_scoped_lease_denial_retries_failed_stop_without_closing_sibling(l
         receipt = await observed(published, daemon.owner)
         assert receipt['operation_id'] == 'sibling-open'
         sibling_peer = native.native
+        # Establish both executions before holding a renewal. Otherwise a
+        # slower host can correctly block original-work behind the held lease.
+        renewal_gate.set()
         await renewal_entered(daemon, renewing)
         allow_denial.set()
         await asyncio.wait_for(entered.wait(), 3)

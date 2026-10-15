@@ -32,7 +32,8 @@ async def renewal_entered(owner, entered):
         raise
 
 
-async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None, wait_open=True):
+async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None, wait_open=True,
+                renewal_gate=None):
     owner, _, store, frame, native, _, published, _ = lifecycle
     if clock is not None:
         from okto_nexus_connector.services import core_host
@@ -64,15 +65,17 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None,
             connection_generation=owner.connection.state.connection_generation, purpose=purpose)
         calls.append(attempt)
         if purpose == "renew":
-            entered.set()
-            if hold:
+            armed = refusal_armed and (renewal_gate is None or renewal_gate.is_set())
+            if renewal_gate is None or armed:
+                entered.set()
+            if hold and armed:
                 await release.wait()
-            if refuse == 'scoped' and refusal_armed:
+            if refuse == 'scoped' and armed:
                 if scope['session_id'] == frame['session_id']:
                     from nexus_connector_core import r4_lease_renew_frame
                     from okto_nexus_connector.transport.lease_denial import LeaseRequestDenied
                     raise LeaseRequestDenied(r4_lease_renew_frame(attempt))
-            elif refuse and refusal_armed:
+            elif refuse and armed:
                 raise ConnectorError("AGENT_AUTH_REQUIRED", "test_lease", "Renewal was refused.")
         if require_current is not None:
             await require_current()

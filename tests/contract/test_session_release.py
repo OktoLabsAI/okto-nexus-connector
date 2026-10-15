@@ -59,11 +59,14 @@ async def test_release_reply_is_correlated_without_interfering_with_other_work(d
 async def test_lost_ack_retries_identical_request_and_duplicate_reply_does_not_fence_link():
     socket = ReleaseSocket()
     owner = R4Connection(socket, replace(STATE, control_capabilities=(SESSION_RELEASE_REVISION,)),
-                         boot_id='boot', request_timeout=.03)
+                         boot_id='boot')
     owner.start()
     task = None
     try:
         await attach(owner, socket)
+        # Only release delivery loses its ACK. The binding handshake is setup,
+        # and must not inherit this deliberately tiny retry deadline.
+        owner.request_timeout = .03
         task = asyncio.create_task(owner.publish_session_release(request()))
         first = await asyncio.wait_for(socket.outgoing.get(), 2)
         assert await asyncio.wait_for(socket.outgoing.get(), 2) == first
