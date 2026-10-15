@@ -248,6 +248,16 @@ async def test_daemon_ready_ping_status(harness):
     assert result["daemon"]["version"]
     assert SERVER_ID in result["transports"]
     assert result["bindings"] >= 1
+    assert harness.app.host.capacity_enabled
+
+
+async def test_daemon_shutdown_joins_connection_observers(harness):
+    assert (await harness.call('ping'))['ok']
+    observers = tuple(harness.app._stream_watchers)
+    assert observers and any(not task.done() for task in observers)
+    await harness.stop()
+    assert all(task.done() for task in observers)
+    assert not harness.app._stream_watchers
 
 
 async def test_unauthenticated_ipc_denied(harness):

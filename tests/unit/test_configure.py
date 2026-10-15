@@ -101,6 +101,7 @@ def local_wizard(tmp_path,monkeypatch):
         def __init__(self,*a):pass
         async def __aenter__(self):return self
         async def __aexit__(self,*a):pass
+        async def list_connection_workspaces(self,*a,**k):return {'items':[],'has_more':False,'next_workspace_id':None}
         async def read_r4_inventory(self,*a,**k):return {'freshness':'FRESH','snapshot':{'inventory_revision':'revision'}}
     monkeypatch.setattr(local,'NexusHTTPClient',HTTP)
     gate={'approved':False}
@@ -143,6 +144,37 @@ async def test_local_wizard_resumes_approval_without_recreating_connection(local
     before=list(calls)
     assert await local.configure_local(args,output,root,store,identity,'http://127.0.0.1:8202',portable)==result
     assert calls==before
+
+
+async def test_local_wizard_reuses_remote_workspace_with_independent_folder(local_wizard, monkeypatch):
+    args,output,root,store,identity,portable,calls,gate=local_wizard
+    class HTTP:
+        def __init__(self,*a):pass
+        async def __aenter__(self):return self
+        async def __aexit__(self,*a):pass
+        async def list_connection_workspaces(self,*a,**k):
+            return {'items':[{'workspace_id':'ws_other_harness','display_name':'Shared project'}],
+                    'has_more':False,'next_workspace_id':None}
+        async def read_r4_inventory(self,*a,**k):return {'freshness':'FRESH','snapshot':{'inventory_revision':'revision'}}
+    monkeypatch.setattr(local,'NexusHTTPClient',HTTP)
+    bodies=[]
+    original=local.ipc
+    async def capture(root,method,body=None):
+        if method=='executor.realize':bodies.append(body)
+        return await original(root,method,body)
+    monkeypatch.setattr(local,'ipc',capture)
+    result=await local.configure_local(args,output,root,store,identity,'http://127.0.0.1:8202',portable)
+    assert result['status']=='awaiting_operator_approval'
+    assert bodies[0]['workspace_id']=='ws_other_harness'
+    assert bodies[0]['workspace_root']==str(root.resolve())
+    assert bodies[0]['workspace_label']=='Shared project'
+    saved=next(iter(store.load().preferences.values()))
+    assert saved['workspace_id']=='ws_other_harness'
+    # Resuming does not re-list or change the chosen workspace/path.
+    async def unexpected(*a,**kw):pytest.fail('catalog queried during resume')
+    monkeypatch.setattr(HTTP,'list_connection_workspaces',unexpected)
+    await local.configure_local(args,output,root,store,identity,'http://127.0.0.1:8202',portable)
+    assert len(bodies)==1
     assert 'secret-not-in-output' not in output.stream.getvalue()
 
 

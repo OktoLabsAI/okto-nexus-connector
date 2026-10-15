@@ -1,3 +1,23 @@
+# Current development dependency
+
+Core 0.0.11 is required by Nexus 0.3.0 and Connector 0.0.9.
+Shared wheel SHA-256: c475bc793605b6f375c4e88140764e90425f43d83b67dc96c86b2d95cc83f6d1.
+Built from feature/v0.0.11 with the local handoff capacity, recovery and
+Pi tool guidance, native launch lease renewal, streamed output batching and
+portable LF contract manifests. Both consumers use identical wheel bytes.
+The preopen recovery extension has its own versioned contract; base R4
+schema bytes remain unchanged. This is a local validation artifact, not
+a published release or independent-host qualification.
+
+## Historical dependency records
+
+# One-shot development dependency
+
+Connector 0.0.8 requires Core 0.0.10. Local wheel SHA-256:
+`d66b60df1db82fafd0f9f9da1a786f229a41e4fe15eacbf158ad836651fad73e`.
+Includes nonblocking Pi launch validation and safe stream-loss diagnostics.
+This development artifact is not published.
+
 # Current release dependency
 
 Core 0.0.8 is required by Nexus 0.2.2 and Connector 0.0.6.
@@ -104,9 +124,9 @@ Current: `nexus_connector_core-0.2.14.dev0-py3-none-any.whl`
 
 SHA-256: `759cdee946037ed5e215f901cdfb09b31baf350c7fde69e4d5f79bd41f515bee`
 
-Ã‰ o mesmo artefato usado pelo Nexus. Para instalar o Connector via pip antes
-de publicar o Core em um Ã­ndice, use `pip install --find-links vendor/wheels .`
-na raiz deste repositÃ³rio. O NXL ainda Ã© R3; o artefato nÃ£o habilita execuÃ§Ã£o
+ÃƒÆ’Ã¢â‚¬Â° o mesmo artefato usado pelo Nexus. Para instalar o Connector via pip antes
+de publicar o Core em um ÃƒÆ’Ã‚Â­ndice, use `pip install --find-links vendor/wheels .`
+na raiz deste repositÃƒÆ’Ã‚Â³rio. O NXL ainda ÃƒÆ’Ã‚Â© R3; o artefato nÃƒÆ’Ã‚Â£o habilita execuÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o
 remota R4. Os wheels 0.2.12 e 0.2.13 permanecem apenas para rastreabilidade.
 
 Current pinned artifact: `nexus_connector_core-0.2.18.dev0-py3-none-any.whl`,

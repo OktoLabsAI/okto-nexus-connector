@@ -32,7 +32,8 @@ async def renewal_entered(owner, entered):
         raise
 
 
-async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None):
+async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None, wait_open=True,
+                renewal_gate=None):
     owner, _, store, frame, native, _, published, _ = lifecycle
     if clock is not None:
         from okto_nexus_connector.services import core_host
@@ -42,15 +43,21 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None)
         monkeypatch.setattr(core_host, "create_runtime", controlled_runtime)
         owner.clock = clock.monotonic
     entered, release = asyncio.Event(), asyncio.Event()
+    # Refusal scenarios exercise an already opened session. Initial host/store
+    # setup can exceed the renewal interval on CI; keep those earlier renewals
+    # valid and arm the injected refusal only after observing the open receipt.
+    refusal_armed = not wait_open
     calls = []
-    last_request_at = clock.now if clock is not None else None
+    last_request_at = {}
     async def lease(runtime, *, scope, grant_id, purpose="initial", require_current=None, fence_on_error=True):
-        nonlocal last_request_at
         if clock is not None and purpose == "renew":
             # Advance to the next request time, preserving explicit advances
             # made by expiry/boundary tests instead of adding host latency.
-            clock.now = max(clock.now, last_request_at + .8)
-            last_request_at = clock.now
+            clock.now = max(clock.now, last_request_at[scope['session_id']] + .8)
+        if clock is not None:
+            # Concurrent sessions renew at the same logical instant; counting
+            # each request as another elapsed interval falsely expires peers.
+            last_request_at[scope['session_id']] = clock.now
         if require_current is not None:
             await require_current()
         attempt = await runtime.begin_r4_lease_request(scope=scope, grant_id=grant_id,
@@ -58,10 +65,17 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None)
             connection_generation=owner.connection.state.connection_generation, purpose=purpose)
         calls.append(attempt)
         if purpose == "renew":
-            entered.set()
-            if hold:
+            armed = refusal_armed and (renewal_gate is None or renewal_gate.is_set())
+            if renewal_gate is None or armed:
+                entered.set()
+            if hold and armed:
                 await release.wait()
-            if refuse:
+            if refuse == 'scoped' and armed:
+                if scope['session_id'] == frame['session_id']:
+                    from nexus_connector_core import r4_lease_renew_frame
+                    from okto_nexus_connector.transport.lease_denial import LeaseRequestDenied
+                    raise LeaseRequestDenied(r4_lease_renew_frame(attempt))
+            elif refuse and armed:
                 raise ConnectorError("AGENT_AUTH_REQUIRED", "test_lease", "Renewal was refused.")
         if require_current is not None:
             await require_current()
@@ -74,9 +88,77 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None)
     monkeypatch.setattr(owner.connection,"apply_lease",lease)
     await owner.sync()
     await owner.connection.emit(frame)
-    await observed(published,owner.owner)
+    if wait_open:
+        await observed(published,owner.owner)
+        refusal_armed = True
+    else:
+        # This bounds filesystem/store setup, not the renewal deadline under test.
+        async with asyncio.timeout(15):
+            while not owner.owner._sessions:
+                await asyncio.sleep(.01)
     session=next(iter(owner.owner._sessions.values()))
     return owner,store,frame,native,published,session,entered,release,calls
+
+
+@pytest.mark.parametrize("selection", [True], indirect=True)
+async def test_renewal_starts_while_native_open_is_still_pending(lifecycle, monkeypatch):
+    native = lifecycle[4]
+    entered_open, release_open = asyncio.Event(), asyncio.Event()
+    original = native.open
+    async def held(*args, **kwargs):
+        entered_open.set()
+        await release_open.wait()
+        return await original(*args, **kwargs)
+    monkeypatch.setattr(native, 'open', held)
+    owner, _, _, _, published, session, renewed, _, calls = await setup(
+        lifecycle, monkeypatch, clock=LeaseClock(), wait_open=False)
+    try:
+        await asyncio.wait_for(entered_open.wait(), 3)
+        await renewal_entered(owner, renewed)
+        async with asyncio.timeout(3):
+            while session.deadline <= calls[0].sent_at_monotonic + 1.6:
+                await asyncio.sleep(.01)
+        assert published.empty() and not native.opened
+    finally:
+        release_open.set()
+    await observed(published, owner.owner)
+    assert len(native.opened) == 1 and owner.owner.failure is None
+
+
+@pytest.mark.parametrize('selection', [True], indirect=True)
+async def test_capacity_waiting_open_renews_without_repeating_preparation(lifecycle, monkeypatch):
+    from nexus_connector_core import OperationKey, CAPACITY_CONTRACT_REVISION
+    from dataclasses import replace
+    from tests.unit.test_r4_capacity_wait import matching
+    daemon = lifecycle[0]
+    daemon.host.capacity_enabled = True
+    daemon.host.max_owned_slots = 1
+    daemon.connection.state = replace(daemon.connection.state, control_capabilities=(CAPACITY_CONTRACT_REVISION,))
+    flow = asyncio.Queue()
+    async def publish(item, frame):
+        await flow.put(frame)
+    async def change(**kwargs):
+        pass
+    daemon.connection.publish_capacity_dispatch_state = publish
+    daemon.connection.publish_capacity_change = change
+    ledger = await daemon.host.ensure_ledger()
+    occupied = OperationKey('other-server', 'other-executor', 'open')
+    await ledger.reserve_owned_slot(occupied, 'occupied')
+    owner, _, _, native, published, session, renewed, _, calls = await setup(
+        lifecycle, monkeypatch, clock=LeaseClock(), wait_open=False)
+    try:
+        await matching(flow, owner.owner, lambda item: item['state'] == 'WAITING')
+        await renewal_entered(owner, renewed)
+        async with asyncio.timeout(3):
+            while session.deadline <= calls[0].sent_at_monotonic + 1.6:
+                await asyncio.sleep(.01)
+        assert not native.opened and published.empty()
+        assert len([call for call in calls if call.purpose == 'initial']) == 1
+    finally:
+        await ledger.release_owned_slot(occupied, 'occupied')
+    receipt = await observed(published, owner.owner)
+    assert receipt['stage'] in ('SUCCEEDED', 'SUBMITTED')
+    assert len(native.opened) == 1 and owner.owner.failure is None
 
 
 @pytest.mark.parametrize("selection",[True],indirect=True)

@@ -13,7 +13,10 @@ import sqlite3
 from nexus_connector_core import (
     CoreError, R4ReceiptProjection, decode_r4_frame, encode_r4_frame,
     validate_r4_receipt_binding, reduce_r4_receipt,
+    validate_r4_lease_refusal,
+    project_r4_bound_receipt, OperationKey,
 )
+from nexus_connector_core.preopen_refusal_r4 import validate_r4_preopen_refusal
 from nexus_connector_core.protocol import canonical_json
 
 from ..errors import ConnectorError
@@ -46,7 +49,7 @@ class R4PublicationStore:
             connection.execute('PRAGMA max_page_count=65536')
             connection.execute('BEGIN IMMEDIATE')
             version = connection.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2, 3):
+            if version not in (0, 1, 2, 3, 4, 5):
                 raise ConnectorError('VERSION_INCOMPATIBLE', 'r4_publication',
                                      'The publication store requires a newer Connector.')
             connection.execute('CREATE TABLE IF NOT EXISTS publications ('
@@ -61,7 +64,12 @@ class R4PublicationStore:
                 for row in connection.execute('SELECT rowid,metadata FROM publications').fetchall():
                     connection.execute('UPDATE publications SET metadata_digest=? WHERE rowid=?',
                                        (hashlib.sha256(row['metadata'].encode()).hexdigest(), row['rowid']))
-            connection.execute('PRAGMA user_version=3')
+            if version < 4:
+                connection.execute('ALTER TABLE publications ADD COLUMN refusal_binding TEXT')
+            if version < 5:
+                connection.execute('ALTER TABLE publications ADD COLUMN preopen_refusal TEXT')
+                connection.execute('ALTER TABLE publications ADD COLUMN preopen_state TEXT')
+            connection.execute('PRAGMA user_version=5')
             connection.execute("CREATE INDEX IF NOT EXISTS publication_sessions ON publications "
                 "(server_id,executor_id,json_extract(metadata,'$.session_id'),json_extract(metadata,'$.action'))")
             yield connection
@@ -113,6 +121,8 @@ class R4PublicationStore:
             if any(stored['metadata'][k] != frame[k] for k in _PROVENANCE):
                 raise ConnectorError('OPERATION_CONFLICT', 'r4_publication',
                                      'The receipt does not match its publication obligation.')
+            if stored['preopen_state'] == 'FENCED' and stored['receipt'] != frame:
+                raise ConnectorError('OPERATION_CONFLICT', 'r4_publication', 'A fenced opening cannot acquire another outcome.')
             previous = stored['receipt']
             if previous == frame:
                 return
@@ -132,8 +142,12 @@ class R4PublicationStore:
             conn.execute('UPDATE publications SET receipt=?,digest=?,acknowledged=0 WHERE '
                          'server_id=? AND executor_id=? AND operation_id=?', (raw, digest, *key))
 
-    def bind(self, binding, *, stream_epoch=None):
+    def bind(self, binding, *, stream_epoch=None, refusal=None):
         binding = validate_r4_receipt_binding(binding)
+        refusal = validate_r4_lease_refusal(refusal) if refusal is not None else None
+        if refusal is not None and (refusal['binding'] != binding or stream_epoch is not None):
+            raise ValueError('Invalid refusal association.')
+        refusal_raw = canonical_json(refusal).decode() if refusal is not None else None
         source = binding['source']
         raw = canonical_json(binding).decode()
         with self._transaction() as conn:
@@ -143,11 +157,16 @@ class R4PublicationStore:
             stored = self._decode(row) if row is not None else None
             if (stored is None or stored['metadata']['action'] != binding['action'] or
                     any(stored['metadata'][k] != source[k] for k in _PROVENANCE) or
-                    row['projection_binding'] not in (None, raw)):
+                    stored['preopen_refusal'] is not None and binding != stored['binding'] or
+                    row['projection_binding'] not in (None, raw)
+                    or row['refusal_binding'] not in (None, refusal_raw)
+                    or refusal is not None and (
+                        stored['metadata']['session_owner_generation'] != refusal['scope']['session_owner_generation']
+                        or row['receipt'] is not None and row['refusal_binding'] != refusal_raw)):
                 raise ConnectorError('OPERATION_CONFLICT', 'r4_publication',
                                      'The Core receipt binding conflicts with its reserved operation.')
-            conn.execute('UPDATE publications SET projection_binding=? WHERE '
-                         'server_id=? AND executor_id=? AND operation_id=?', (raw, *key))
+            conn.execute('UPDATE publications SET projection_binding=?,refusal_binding=? WHERE '
+                         'server_id=? AND executor_id=? AND operation_id=?', (raw, refusal_raw, *key))
             if stream_epoch is not None:
                 if binding['action'] != 'runtime.open' or type(stream_epoch) is not str or not 1 <= len(stream_epoch) <= 160:
                     raise ValueError('Invalid opening stream epoch.')
@@ -166,7 +185,7 @@ class R4PublicationStore:
         with self._transaction() as conn:
             rows = conn.execute('SELECT * FROM publications '
                 'WHERE server_id=? AND executor_id=? AND operation_id>? AND receipt IS NULL '
-                'AND projection_binding IS NOT NULL ORDER BY operation_id LIMIT ?',
+                "AND projection_binding IS NOT NULL AND coalesce(preopen_state,'')<>'PREPARED' ORDER BY operation_id LIMIT ?",
                 (server_id, executor_id, after, limit)).fetchall()
             return [self._decode(row)['binding'] for row in rows]
 
@@ -202,7 +221,7 @@ class R4PublicationStore:
             raise ValueError('Invalid publication page size.')
         with self._transaction() as conn:
             rows = conn.execute('SELECT * FROM publications WHERE server_id=? '
-                'AND executor_id=? AND acknowledged=0 AND receipt IS NOT NULL ORDER BY operation_id LIMIT ?',
+                "AND executor_id=? AND acknowledged=0 AND receipt IS NOT NULL AND coalesce(preopen_state,'')<>'FENCED' ORDER BY operation_id LIMIT ?",
                 (server_id, executor_id, limit)).fetchall()
             return [self._decode(row)['receipt'] for row in rows]
 
@@ -210,6 +229,77 @@ class R4PublicationStore:
         with self._transaction() as conn:
             return conn.execute('SELECT 1 FROM publications WHERE server_id=? AND executor_id=? AND acknowledged=0 LIMIT 1',
                                 (server_id, executor_id)).fetchone() is not None
+
+    def pending_unfenced(self, server_id, executor_id):
+        with self._transaction() as conn:
+            return conn.execute("SELECT 1 FROM publications WHERE server_id=? AND executor_id=? "
+                "AND acknowledged=0 AND coalesce(preopen_state,'')<>'FENCED' LIMIT 1",
+                (server_id, executor_id)).fetchone() is not None
+
+    def preopen_page(self, server_id, executor_id, *, generation, after='', limit=128):
+        if type(generation) is not int or generation < 1 or type(after) is not str or type(limit) is not int or not 1 <= limit <= 128:
+            raise ValueError('Invalid preopening recovery page.')
+        with self._transaction() as conn:
+            rows = conn.execute("SELECT * FROM publications WHERE server_id=? AND executor_id=? "
+                "AND operation_id>? AND acknowledged=0 AND json_extract(metadata,'$.action')='runtime.open' "
+                "AND json_extract(metadata,'$.connection_generation')<? AND refusal_binding IS NULL "
+                "AND (receipt IS NULL OR preopen_state='FENCED') AND coalesce(preopen_state,'')<>'CONFLICT' "
+                "ORDER BY operation_id LIMIT ?", (server_id, executor_id, after, generation, limit)).fetchall()
+            return [self._decode(row) for row in rows]
+
+    def prepare_preopen(self, refusal):
+        refusal = validate_r4_preopen_refusal(refusal)
+        source = refusal['source']
+        raw = canonical_json(refusal).decode()
+        with self._transaction() as conn:
+            key = tuple(source[k] for k in _KEY)
+            row = conn.execute('SELECT * FROM publications WHERE server_id=? AND executor_id=? AND operation_id=?', key).fetchone()
+            stored = self._decode(row) if row is not None else None
+            if (stored is None or stored['metadata']['action'] != 'runtime.open'
+                    or any(stored['metadata'][k] != source[k] for k in _PROVENANCE)
+                    or stored['metadata']['session_owner_generation'] != refusal['session_owner_generation']
+                    or stored['refusal'] is not None or stored['preopen_state'] == 'CONFLICT'):
+                raise ConnectorError('OPERATION_CONFLICT', 'r4_preopen', 'The opening provenance changed.')
+            if stored['preopen_refusal'] is not None:
+                if stored['preopen_refusal'] != refusal:
+                    raise ConnectorError('OPERATION_CONFLICT', 'r4_preopen', 'The persisted recovery association changed.')
+                return
+            if stored['receipt'] is not None or stored['binding'] != refusal['prior_binding']:
+                raise ConnectorError('OPERATION_CONFLICT', 'r4_preopen', 'The opening already has another fact or binding.')
+            conn.execute("UPDATE publications SET preopen_refusal=?,preopen_state='PREPARED' WHERE "
+                         'server_id=? AND executor_id=? AND operation_id=?', (raw, *key))
+
+    def fence_preopen(self, refusal, fact):
+        refusal = validate_r4_preopen_refusal(refusal)
+        source = refusal['source']
+        key = tuple(source[k] for k in _KEY)
+        frame = project_r4_bound_receipt(refusal['binding'], fact, key=OperationKey(*key), receipt_revision=1)
+        if (frame['stage'] != 'FAILED' or frame['possible_effect'] or not frame['retry_safe']
+                or frame.get('native_id') is not None or frame.get('error_code') != 'PRE_EXECUTION_FENCED'):
+            raise ConnectorError('OPERATION_CONFLICT', 'r4_preopen', 'The Core fact is not a confirmed preopening refusal.')
+        with self._transaction() as conn:
+            row = conn.execute('SELECT * FROM publications WHERE server_id=? AND executor_id=? AND operation_id=?', key).fetchone()
+            stored = self._decode(row) if row is not None else None
+            if stored is None or stored['preopen_refusal'] != refusal or stored['preopen_state'] not in ('PREPARED', 'FENCED'):
+                raise ConnectorError('OPERATION_CONFLICT', 'r4_preopen', 'No matching recovery association was persisted.')
+            if stored['preopen_state'] == 'FENCED':
+                if stored['receipt'] != frame:
+                    raise ConnectorError('OPERATION_CONFLICT', 'r4_preopen', 'The refusal outcome changed.')
+                return frame
+            if stored['receipt'] is not None:
+                raise ConnectorError('OPERATION_CONFLICT', 'r4_preopen', 'A native outcome already exists.')
+            raw = canonical_json(frame).decode()
+            conn.execute("UPDATE publications SET projection_binding=?,receipt=?,digest=?,preopen_state='FENCED' "
+                'WHERE server_id=? AND executor_id=? AND operation_id=?',
+                (canonical_json(refusal['binding']).decode(), raw, hashlib.sha256(raw.encode()).hexdigest(), *key))
+            return frame
+
+    def conflict_preopen(self, refusal):
+        refusal = validate_r4_preopen_refusal(refusal)
+        with self._transaction() as conn:
+            conn.execute("UPDATE publications SET preopen_state='CONFLICT' WHERE server_id=? AND executor_id=? "
+                "AND operation_id=? AND preopen_state='PREPARED' AND preopen_refusal=?",
+                (*(refusal['source'][k] for k in _KEY), canonical_json(refusal).decode()))
 
     def _decode(self, row):
         if hashlib.sha256(row['metadata'].encode()).hexdigest() != row['metadata_digest']:
@@ -228,7 +318,31 @@ class R4PublicationStore:
         if binding is not None and (binding['action'] != metadata['action'] or
                 any(binding['source'][k] != metadata[k] for k in _PROVENANCE)):
             raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_publication', 'The Core association is inconsistent.')
-        return dict(metadata=metadata, receipt=receipt, binding=binding, acknowledged=bool(row['acknowledged']))
+        refusal = validate_r4_lease_refusal(json.loads(row['refusal_binding'])) if row['refusal_binding'] else None
+        if refusal is not None and (refusal['binding'] != binding or
+                refusal['scope']['session_owner_generation'] != metadata['session_owner_generation']):
+            raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_publication', 'The refusal association is inconsistent.')
+        preopen = validate_r4_preopen_refusal(json.loads(row['preopen_refusal'])) if row['preopen_refusal'] else None
+        preopen_state = row['preopen_state']
+        if (preopen is None) != (preopen_state is None) or preopen is not None and (
+                preopen_state not in ('PREPARED', 'FENCED', 'CONFLICT') or refusal is not None
+                or any(preopen['source'][k] != metadata[k] for k in _PROVENANCE)
+                or preopen['session_owner_generation'] != metadata['session_owner_generation']
+                or binding != (preopen['binding'] if preopen_state == 'FENCED' else preopen['prior_binding'])
+                or preopen_state == 'FENCED' and receipt is None):
+            raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_preopen', 'The stored preopening recovery association is inconsistent.')
+        return dict(metadata=metadata, receipt=receipt, binding=binding,
+                    acknowledged=bool(row['acknowledged']), refusal=refusal,
+                    preopen_refusal=preopen, preopen_state=preopen_state)
+
+    def refusal_page(self, server_id, executor_id, *, after='', limit=128):
+        if type(after) is not str or type(limit) is not int or not 1 <= limit <= 128:
+            raise ValueError('Invalid refusal page cursor.')
+        with self._transaction() as conn:
+            rows = conn.execute('SELECT * FROM publications WHERE server_id=? AND executor_id=? '
+                'AND operation_id>? AND refusal_binding IS NOT NULL AND receipt IS NULL '
+                'ORDER BY operation_id LIMIT ?', (server_id, executor_id, after, limit)).fetchall()
+            return [self._decode(row)['refusal'] for row in rows]
 
     def lookup(self, server_id, executor_id, operation_ids):
         if not isinstance(operation_ids, (tuple, list)) or len(operation_ids) > 256 or any(type(i) is not str for i in operation_ids):
@@ -250,4 +364,14 @@ class R4PublicationStore:
                 (server_id, executor_id, session_id)).fetchall()
             if len(rows) > 256:
                 raise ConnectorError('CAPACITY_EXCEEDED', 'r4_reconcile', 'Session reconciliation requires another history page.')
+            return [self._decode(row) for row in rows]
+
+    def session_page(self, server_id, executor_id, session_id, *, after='', limit=128):
+        """All actions for one session, with bounded memory and stable ordering."""
+        if type(after) is not str or type(limit) is not int or not 1 <= limit <= 256:
+            raise ValueError('Invalid session publication cursor.')
+        with self._transaction() as conn:
+            rows = conn.execute('SELECT * FROM publications WHERE server_id=? AND executor_id=? '
+                "AND json_extract(metadata,'$.session_id')=? AND operation_id>? ORDER BY operation_id LIMIT ?",
+                (server_id,executor_id,session_id,after,limit)).fetchall()
             return [self._decode(row) for row in rows]

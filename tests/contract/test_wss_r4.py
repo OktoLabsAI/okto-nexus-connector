@@ -72,6 +72,86 @@ class Peer:
         })
 
 
+@pytest.mark.parametrize('accepted', [(), ('nexus-lease-denial-v1',),
+    ('nexus-session-release-v1',), ('nexus-lease-denial-v1', 'nexus-session-release-v1')])
+async def test_handshake_advertises_scoped_containment_and_retains_only_accepted_extensions(accepted):
+    peer = Peer()
+    original_send = peer.send
+    async def send(raw):
+        await original_send(raw)
+        if json.loads(raw)['type'] == 'hello':
+            welcome, reconcile = await peer.inbox.get(), await peer.inbox.get()
+            welcome['control_capabilities'] = list(accepted)
+            await peer.inbox.put(welcome)
+            await peer.inbox.put(reconcile)
+    peer.send = send
+    async def report(request):
+        return dict(**BASE, **peer.connection, type='reconcile.report', reconcile_id=request['reconcile_id'],
+            cursor=None, next_cursor=None, complete=True, receipts=[], claims=[], stream_watermarks=[], ownership_facts=[])
+    state = await asyncio.wait_for(negotiate_r4_control(peer, server_id='srv', executor_id='exe',
+        management_revision=MANAGEMENT, snapshot_format=SNAPSHOT_FORMAT_VERSION,
+        boot_id='boot', report_reconciliation=report), 2)
+    assert {'nexus-lease-denial-v1', 'nexus-session-release-v1'} <= set(peer.sent[0]['control_capabilities'])
+    assert state.control_ready and state.control_capabilities == accepted
+
+
+@pytest.mark.parametrize('fault', ['none', 'wrong_cycle', 'wrong_channel', 'incomplete', 'commit_failure'])
+async def test_recovery_commit_requires_exact_complete_accepted_cycle(fault):
+    peer, commits = Peer(), []
+    async def report(request):
+        return dict(**BASE, **peer.connection, type='reconcile.report', reconcile_id=request['reconcile_id'],
+            cursor=request['cursor'], next_cursor='unfinished' if fault == 'incomplete' else None,
+            complete=fault != 'incomplete', receipts=[], claims=[], stream_watermarks=[], ownership_facts=[])
+    original_send = peer.send
+    async def send(raw):
+        await original_send(raw)
+        frame = json.loads(raw)
+        if frame['type'] == 'reconcile.report' and fault in ('wrong_cycle', 'wrong_channel'):
+            ack = await peer.inbox.get()
+            ack['reconcile_id' if fault == 'wrong_cycle' else 'connection_id'] = 'foreign'
+            await peer.inbox.put(ack)
+    peer.send = send
+    async def accepted(ack):
+        commits.append(ack)
+        if fault == 'commit_failure': raise OSError('durable commit failed')
+    coroutine = negotiate_r4_control(peer, server_id='srv', executor_id='exe',
+        management_revision=MANAGEMENT, snapshot_format=SNAPSHOT_FORMAT_VERSION,
+        boot_id='boot', report_reconciliation=report, reconciliation_accepted=accepted)
+    if fault == 'none':
+        assert (await asyncio.wait_for(coroutine, 2)).control_ready
+        assert len(commits) == 1 and commits[0]['reconcile_id'] == 'reconcile-1'
+    else:
+        with pytest.raises((CoreError, ValueError, OSError)):
+            await asyncio.wait_for(coroutine, 2)
+        assert len(commits) == (1 if fault == 'commit_failure' else 0)
+
+
+async def test_cancelled_negotiation_retains_ack_commit_before_releasing_owner():
+    peer, entered, release = Peer(), asyncio.Event(), asyncio.Event()
+    committed = []
+    async def report(request):
+        return dict(**BASE, **peer.connection, type='reconcile.report', reconcile_id=request['reconcile_id'],
+            cursor=None, next_cursor=None, complete=True, receipts=[], claims=[], stream_watermarks=[], ownership_facts=[])
+    async def accepted(ack):
+        entered.set()
+        await release.wait()
+        committed.append(ack)
+    task = asyncio.create_task(negotiate_r4_control(peer, server_id='srv', executor_id='exe',
+        management_revision=MANAGEMENT, snapshot_format=SNAPSHOT_FORMAT_VERSION,
+        boot_id='boot', report_reconciliation=report, reconciliation_accepted=accepted))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done() and not committed
+        release.set()
+        with pytest.raises(asyncio.CancelledError): await asyncio.wait_for(task, 2)
+        assert len(committed) == 1
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_r4_control_retries_journal_failure_without_false_report():
     peer = Peer()

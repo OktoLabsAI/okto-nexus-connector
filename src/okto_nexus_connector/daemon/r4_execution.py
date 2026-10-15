@@ -2,6 +2,9 @@
 import asyncio
 from dataclasses import asdict, dataclass, fields, replace
 import time
+import secrets
+
+from nexus_connector_core import execute_capacity_control, CAPACITY_CONTRACT_REVISION, CapacityChangePublisher
 
 from ..errors import ConnectorError
 from ..transport.https_client import R4BindingView
@@ -33,6 +36,73 @@ class R4DaemonExecution:
         self.owner = None
         self.closing = False
         self._close_task = None
+        self.capacity_boot_id = 'capacity_' + secrets.token_hex(16)
+        self.capacity_publisher = None
+        if (self.host.capacity_enabled and CAPACITY_CONTRACT_REVISION in
+                getattr(self.connection.state, 'control_capabilities', ())):
+            self.capacity_publisher = CapacityChangePublisher(boot_id=self.capacity_boot_id,
+                snapshot=self._capacity_snapshot, emit=self.connection.publish_capacity_change, clock=self.clock)
+
+    async def _capacity_snapshot(self):
+        service = await self.host.capacity_service(server_id=self.control.server_id,
+            executor_id=self.control.executor_id, boot_id=self.capacity_boot_id, authority=self)
+        await service.expire_unconsumed(limit=128)
+        revision = await service.observe_capacity_revision()
+        records = await asyncio.to_thread(self._bindings)
+        if self.closing or self.control.connection is not self.connection or not self.connection.online:
+            raise ConnectorError('CONTROL_DISCONNECTED', 'capacity_publication', 'The owner changed.')
+        # A fresh hint asks the Server to assess exact context. It never
+        # advertises every affinity as idle just because the link is ready.
+        bindings = {key: 'STALE_OBSERVATION' for key, lane in self.lanes.items()
+            if records.get(key) == (lane.binding, lane.identity) and self.clock() < lane.deadline}
+        return revision, bindings
+
+    async def check_capacity_scope(self, request, *, action):
+        """Core authority port backed by this authenticated execution owner.
+
+        Historical lookup/cancellation may outlive an agent's lane revocation;
+        neither grants native execution or access to a handoff payload. The
+        ledger requires the exact original request in this host namespace.
+        """
+        scope = request.scope
+        if (scope.server_id, scope.executor_id) != (self.control.server_id, self.control.executor_id):
+            return 'NOT_AUTHORIZED'
+        if self.closing or not self.connection.online or self.control.connection is not self.connection:
+            return 'RECOVERING'
+        if action in ('get', 'release'):
+            return 'AVAILABLE'
+        if scope.connection_generation != self.connection.state.connection_generation:
+            return 'STALE_OBSERVATION'
+        if not self.ready:
+            return 'RECOVERING'
+        projected = scope.to_dict() | {'connection_id': self.connection.state.connection_id}
+        try:
+            lane = await self._current(projected)
+            if (lane.identity.credential_epoch != scope.credential_epoch
+                    or not self.connection.is_attached(**{name: getattr(scope, name) for name in (
+                        'binding_id', 'agent_id', 'credential_epoch', 'authorization_revision', 'configuration_revision')})):
+                return 'NOT_AUTHORIZED'
+            from ..services.execution_selection import validate_capacity_selection
+            selected = await asyncio.to_thread(validate_capacity_selection, self.store, scope=scope.to_dict())
+            current = await self._current(projected)
+            if selected != current.binding or current != lane:
+                return 'STALE_OBSERVATION'
+        except ConnectorError as error:
+            if error.code in ('PROFILE_DRIFT', 'STALE_GENERATION'):
+                return 'STALE_OBSERVATION'
+            return 'NOT_AUTHORIZED'
+        except OSError:
+            return 'RECOVERING'
+        return 'AVAILABLE'
+
+    async def capacity_control(self, frame):
+        # The facade and productive gates must be enabled together in the host.
+        service = await self.execution_capacity()
+        return await execute_capacity_control(service, frame)
+
+    async def execution_capacity(self):
+        return await self.host.capacity_service(server_id=self.control.server_id,
+            executor_id=self.control.executor_id, boot_id=self.capacity_boot_id, authority=self)
 
     @property
     def ready(self):
@@ -189,8 +259,11 @@ class R4DaemonExecution:
             self.owner = R4ExecutionOwner(self.connection, self.store, self.host,
                 candidate_provider=self._candidates, launch_provider=self._launch,
                 publish_receipt=self._publish, native_factory=self.native_factory,
-                require_current=self._current, clock=self.clock)
+                require_current=self._current, clock=self.clock,
+                capacity_provider=self.execution_capacity if self.host.capacity_enabled else None)
             self.owner.start()
+        if self.capacity_publisher is not None:
+            self.capacity_publisher.tick()
 
     async def close(self, *, preserve_leases=False, stop_event=None):
         if self._close_task is None:
@@ -203,6 +276,8 @@ class R4DaemonExecution:
     async def _close(self, *, preserve_leases=False, stop_event=None):
         self.closing = True
         await self.connection.close()
+        if self.capacity_publisher is not None:
+            await self.capacity_publisher.aclose()
         if self.owner is not None:
             await self.owner.stop()
         await self.capabilities.close()

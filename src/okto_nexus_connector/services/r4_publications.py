@@ -81,6 +81,22 @@ async def recover_publications(store, vault, http, *, server_id, executor_id,
     """
     publications = R4PublicationStore.for_state(store)
     if journal is not None:
+        from nexus_connector_core import persist_r4_lease_refusal
+        after = ''
+        for _ in range(32):
+            await require_current()
+            refusals = await asyncio.to_thread(publications.refusal_page, server_id, executor_id, after=after)
+            if not refusals:
+                break
+            for refusal in refusals:
+                await require_current()
+                fact = await persist_r4_lease_refusal(journal, refusal)
+                binding = refusal['binding']
+                source = binding['source']
+                frame = project_r4_bound_receipt(binding, fact,
+                    key=OperationKey(server_id, executor_id, source['operation_id']), receipt_revision=1)
+                await asyncio.to_thread(publications.record, frame)
+                after = source['operation_id']
         after = ''
         for _ in range(32):
             await require_current()

@@ -90,10 +90,16 @@ def control(tmp_path):
             return []
         async def connect(self, url, ticket, **params):
             assert url == 'wss://nexus.test/v1/runtime/executors/executor/link'
+            connection = dict(connection_id='link_' + str(len(self.sockets) + 1),
+                              connection_generation=len(self.sockets) + 1)
             request = dict(protocol_major=1, contract_revision=R4_PREVIEW_REVISION,
-                server_id='srv', executor_id='executor', connection_id='link', connection_generation=1,
+                server_id='srv', executor_id='executor', **connection,
                 reconcile_id='reconcile', cursor=None, operation_ids=[], session_ids=[])
             self.report = await params['report_reconciliation'](request)
+            if params.get('reconciliation_accepted') is not None:
+                await params['reconciliation_accepted'](dict(protocol_major=1, contract_revision=R4_PREVIEW_REVISION,
+                    server_id='srv', executor_id='executor', **connection, type='reconcile.accepted',
+                    reconcile_id='reconcile', recovery_remaining=False, ready_lane_ids=[], session_lease_requirements=[]))
             socket = SimpleNamespace(online=True, state=SimpleNamespace(control_ready=True,
                 connection_generation=len(self.sockets) + 1, connection_id='link_' + str(len(self.sockets) + 1)))
             async def close(): socket.online = False
@@ -148,6 +154,23 @@ async def test_startup_reconnect_and_reboot_keep_executor_and_sequence(control):
             assert peer.publications[-1]['producer_instance_id'] != peer.publications[0]['producer_instance_id']
         finally:
             await reboot.stop()
+    finally:
+        await dispose(owner, host)
+
+
+async def test_failed_recovery_commit_prevents_inventory_and_execution_readiness(control, monkeypatch):
+    owner, peer, _, host, _ = control
+    entered = asyncio.Event()
+    async def failing(ack):
+        entered.set()
+        raise ConnectorError('JOURNAL_UNAVAILABLE', 'session_release', 'Local recovery commit failed.')
+    monkeypatch.setattr(owner, '_reconciliation_accepted', failing)
+    owner.start()
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await eventually(lambda: owner.status()['error_code'] == 'JOURNAL_UNAVAILABLE')
+        assert not peer.publications and not peer.sockets
+        assert not owner.status()['control_ready'] and not owner.status()['execution_ready']
     finally:
         await dispose(owner, host)
 

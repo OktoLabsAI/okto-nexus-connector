@@ -109,16 +109,8 @@ async def _core_session(tmp_path, *, generation=3, owner=1,
         candidates={"codex_app_server": _candidate(binary)},
         workspace_roots={"ws_a": str(tmp_path)},
         native_factory=factory)
-    host = CoreRuntimeHost.__new__(CoreRuntimeHost)
-    host.root = tmp_path
-    host._vault = None
-    host._journal_path = paths.journal_path(tmp_path)
-    host._ledger_path = paths.owned_slot_ledger_path(tmp_path)
-    host._runtimes = {}
+    host = CoreRuntimeHost(tmp_path, None)
     host._journal = journal
-    host._ledger = None
-    host._journal_gate = None
-    host._ledger_gate = None
     manager = RuntimeManager.__new__(RuntimeManager)
     manager._store = StateStore(tmp_path / "state.json")
     vault = RestrictedFileVault(tmp_path / "vault", approved=True)
@@ -447,16 +439,7 @@ async def test_d04_restart_reads_durable_receipt_without_prior_runtime(
     journal.close()  # the FIRST host dies completely.
 
     # Second host: same directory, NOTHING composed, journal closed.
-    host2 = CoreRuntimeHost.__new__(CoreRuntimeHost)
-    host2.root = tmp_path
-    host2._vault = None
-    host2._journal_path = paths.journal_path(tmp_path)
-    host2._ledger_path = paths.owned_slot_ledger_path(tmp_path)
-    host2._runtimes = {}
-    host2._journal = None     # cold: not open yet
-    host2._ledger = None
-    host2._journal_gate = None
-    host2._ledger_gate = None
+    host2 = CoreRuntimeHost(tmp_path, None)  # cold: journal not open yet
     vault = RestrictedFileVault(tmp_path / "vault", approved=True)
     manager2 = RuntimeManager(
         StateStore(tmp_path / "state.json"), vault, host2)

@@ -19,7 +19,7 @@ from typing import Mapping
 
 from nexus_connector_core import (
     InstallationCandidate, LocalRuntimeCore, SQLiteOwnedSlotLedger,
-    create_runtime,
+    create_runtime, ExecutionCapacity, CoreError,
 )
 from nexus_connector_core.environment import child_environment
 from nexus_connector_core.harness_config import HarnessHTTPTemplate
@@ -27,7 +27,7 @@ from nexus_connector_core.installation import (
     REF_AMBIGUOUS, REF_NOT_FOUND, effective_installation_ref,
     resolve_installation,
 )
-from nexus_connector_core.journal import SQLiteJournal, open_journal
+from nexus_connector_core.journal import JournalLimits, SQLiteJournal, open_journal
 from nexus_connector_core.ports import SecretResolver
 
 from ..errors import ConnectorError
@@ -108,7 +108,15 @@ def make_environment(resolver: LaunchSecretResolver, overlay: LaunchOverlay):
 class CoreRuntimeHost:
     """Builds and owns Core runtime instances for the daemon."""
 
-    def __init__(self, root: Path, vault):
+    def __init__(self, root: Path, vault, *, max_owned_slots: int = 64, capacity_enabled: bool = False):
+        if type(max_owned_slots) is not int or max_owned_slots <= 0:
+            raise ValueError('Invalid host capacity.')
+        self.max_owned_slots = max_owned_slots
+        if type(capacity_enabled) is not bool:
+            raise ValueError('Capacity support must be a boolean.')
+        self.capacity_enabled = capacity_enabled
+        self._capacity_services = {}
+        self._capacity_gate = asyncio.Lock()
         self.root = root
         self._vault = vault
         self._journal_path = paths.journal_path(root)
@@ -137,7 +145,7 @@ class CoreRuntimeHost:
         blocking schema setup never runs on the loop.
         """
         if self._journal is None:
-            self._journal = SQLiteJournal(self._journal_path)
+            self._journal = SQLiteJournal(self._journal_path, limits=JournalLimits(max_owned_slots=self.max_owned_slots))
         return self._journal
 
     async def ensure_journal(self) -> SQLiteJournal:
@@ -152,7 +160,7 @@ class CoreRuntimeHost:
             self._journal_gate = asyncio.Lock()
         async with self._journal_gate:
             if self._journal is None:
-                self._journal = await open_journal(self._journal_path)
+                self._journal = await open_journal(self._journal_path, limits=JournalLimits(max_owned_slots=self.max_owned_slots))
         return self._journal
 
     async def ensure_ledger(self) -> SQLiteOwnedSlotLedger:
@@ -162,14 +170,44 @@ class CoreRuntimeHost:
             self._ledger_gate = asyncio.Lock()
         async with self._ledger_gate:
             if self._ledger is None:
-                self._ledger = await asyncio.to_thread(
-                    SQLiteOwnedSlotLedger, self._ledger_path)
+                def open_ledger():
+                    # A cold capacity reservation precedes any session journal.
+                    self._ledger_path.parent.mkdir(parents=True, exist_ok=True)
+                    return SQLiteOwnedSlotLedger(self._ledger_path, max_slots=self.max_owned_slots)
+                self._ledger = await asyncio.to_thread(open_ledger)
         return self._ledger
+
+    def _runtime_for_capacity(self, session):
+        matches = [runtime for key, runtime in self._runtimes.items()
+            if isinstance(key, ExecutionRuntimeKey) and (key.server_id, key.executor_id, key.session_id)
+                == (session.server_id, session.executor_id, session.session_id)]
+        return matches[0] if len(matches) == 1 else None
+
+    async def capacity_service(self, *, server_id, executor_id, boot_id, authority, clock=None):
+        """One Core facade per authenticated owner, sharing the physical ledger."""
+        if not self.capacity_enabled:
+            raise CoreError('CAPACITY_PROTOCOL_UNSUPPORTED', 'connector_capacity')
+        ledger = await self.ensure_ledger()
+        key = (server_id, executor_id)
+        async with self._capacity_gate:
+            prior = self._capacity_services.get(key)
+            if prior and prior[0].boot_id == boot_id:
+                if prior[1] is not authority:
+                    raise CoreError('RESERVATION_CONFLICT', 'connector_capacity_owner')
+                return prior[0]
+            service = ExecutionCapacity(ledger, authority=authority, boot_id=boot_id, clock=clock,
+                namespace=key, runtime_lookup=self._runtime_for_capacity)
+            self._capacity_services[key] = (service, authority)
+        # A cancelled/stuck observation in one namespace cannot hold the
+        # composition gate for another executor while its owner is retiring.
+        if prior:
+            await prior[0].aclose()
+        return service
 
     @property
     def ledger(self) -> SQLiteOwnedSlotLedger:
         if self._ledger is None:
-            self._ledger = SQLiteOwnedSlotLedger(self._ledger_path)
+            self._ledger = SQLiteOwnedSlotLedger(self._ledger_path, max_slots=self.max_owned_slots)
         return self._ledger
 
     def journal_if_open(self):
@@ -345,6 +383,7 @@ class CoreRuntimeHost:
             candidates={selection.candidate.adapter_id: replace(selection.candidate, trust='selected')},
             workspace_roots={selection.workspace_id: selection.workspace_root},
             native_factory=factory, owned_slot_ledger=ledger,
+            capacity_enabled=self.capacity_enabled,
             native_approvals_from_lease=True,
             pi_native_action=native_launch if native_action_factory is not None else None)
         if native_action_factory is not None:
@@ -390,7 +429,7 @@ class CoreRuntimeHost:
             candidates={binding.adapter_id: candidate},
             workspace_roots={binding.workspace_id: binding.workspace_root},
             native_factory=factory,
-            owned_slot_ledger=ledger)
+            owned_slot_ledger=ledger, capacity_enabled=self.capacity_enabled)
         self._runtimes[key] = runtime
         return runtime
 
@@ -437,6 +476,7 @@ class CoreRuntimeHost:
         This is observation only: no lease is renewed and no runtime is
         recreated. An explicit daemon stop can proceed to normal shutdown.
         Storage/inspection failures propagate while ownership stays retained.
+        The execution owner must stop and join its operation producers first.
         """
         from nexus_connector_core import SessionKey
 
@@ -452,9 +492,25 @@ class CoreRuntimeHost:
             for snapshot in snapshots:
                 if isinstance(snapshot, BaseException):
                     raise snapshot
-            if not any(snapshot.lease_state not in ("EXPIRED", "REVOKED", "CLOSED")
-                       and snapshot.ownership != "released"
-                       for snapshot in snapshots):
+            waiting = False
+            for (key, runtime), snapshot in zip(selected, snapshots):
+                if snapshot.lease_state in ('EXPIRED', 'REVOKED', 'CLOSED') or snapshot.ownership == 'released':
+                    continue
+                session = SessionKey(key.server_id, key.executor_id, key.session_id)
+                resources = getattr(runtime, 'shutdown_resources', None)
+                if (snapshot.lease_state == 'UNKNOWN' and snapshot.ownership == 'unknown'
+                        and snapshot.process_state == 'UNKNOWN' and callable(resources) and session not in resources()):
+                    journal = await self.ensure_history_journal()
+                    if await journal.get_session_claim(session) is None:
+                        # The execution owner has already joined its producers.
+                        # A constructed runtime with no opening/claim has no
+                        # native lease to await. Shutdown disposes that empty
+                        # runtime; it does not release the capacity placeholder
+                        # or resolve its publication. New-owner reconciliation
+                        # must still fence the original operation durably.
+                        continue
+                waiting = True
+            if not waiting:
                 return
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=0.1)
@@ -477,6 +533,10 @@ class CoreRuntimeHost:
         """
         from nexus_connector_core import ShutdownPolicy
 
+        for key, (service, _) in list(self._capacity_services.items()):
+            if _scope is None or key == _scope:
+                await service.aclose()
+                self._capacity_services.pop(key, None)
         outcomes: list[tuple[str, str]] = []
         any_pending = False
         for key, runtime in list(self._runtimes.items()):
@@ -513,7 +573,7 @@ class CoreRuntimeHost:
             # survives; with everything resolved, close through the
             # Core's public async lifecycle.
             pass
-        if not self._runtimes:
+        if not self._runtimes and not self._capacity_services:
             if self._journal is not None:
                 await self._journal.aclose()
                 self._journal = None
