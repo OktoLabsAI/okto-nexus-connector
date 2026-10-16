@@ -26,6 +26,7 @@ from nexus_connector_core import (
 from .wss_client import validate_link_url
 from nexus_connector_core.lease_denial import LEASE_DENIAL_REVISION
 from nexus_connector_core.session_release import SESSION_RELEASE_REVISION
+from nexus_connector_core.event_artifacts import EVENT_ARTIFACT_REVISION
 
 
 ReconcileReporter = Callable[[dict], Awaitable[Mapping[str, object]]]
@@ -111,7 +112,7 @@ async def negotiate_r4_control(
         "supported_nxl": [R4_PREVIEW_REVISION],
         "snapshot_formats": [snapshot_format],
         "control_capabilities": ['connection_renewal_v1', 'heartbeat_ack_v1', 'connection_resume_v1',
-                                 LEASE_DENIAL_REVISION, SESSION_RELEASE_REVISION, PREOPEN_REFUSAL_REVISION],
+                                 LEASE_DENIAL_REVISION, SESSION_RELEASE_REVISION, PREOPEN_REFUSAL_REVISION, EVENT_ARTIFACT_REVISION],
     }
     if capacity_enabled:
         hello['control_capabilities'].append(CAPACITY_CONTRACT_REVISION)

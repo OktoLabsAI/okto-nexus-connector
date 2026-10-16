@@ -38,6 +38,34 @@ async def append(journal, count):
         await journal.record_event(RuntimeEvent("srv","exe","session","epoch",0,"text_delta",None,{"text":"Hello"}))
 
 
+async def test_large_event_upload_precedes_reference_and_retry_preserves_content(publisher):
+    from nexus_connector_core.event_artifacts import event_reference, hydrate_event
+    owner,journal,connection=publisher
+    content='ação🙂'*18000
+    await journal.record_event(RuntimeEvent('srv','exe','session','epoch',0,'tool_activity',None,{'text':content}))
+    await append(journal,1)
+    uploaded={}
+    attempts=0
+    async def upload(scope,event,raw):
+        nonlocal attempts
+        attempts+=1
+        assert owner.store.read(SCOPE)['remote_acked']==0
+        if attempts==1: raise OSError('lost upload ACK')
+        assert hydrate_event(event,raw)['payload']['text']==content
+        uploaded[event_reference(event)['artifact_id']]=raw
+    connection.publish_event_artifact=upload
+    original=connection.publish_events
+    async def publish(**values):
+        assert event_reference(values['events'][0])['artifact_id'] in uploaded
+        return await original(**values)
+    connection.publish_events=publish
+    with pytest.raises(OSError): await owner.step(SCOPE)
+    assert owner.store.read(SCOPE)['core_applied']==0
+    assert await owner.step(SCOPE)
+    assert owner.store.read(SCOPE)['core_applied']==2
+    assert len(connection.calls)==1
+
+
 @pytest.mark.parametrize("count",[0,1,127,128,129])
 async def test_finite_snapshot_does_not_wait_for_a_full_batch(publisher,count):
     owner,journal,_=publisher

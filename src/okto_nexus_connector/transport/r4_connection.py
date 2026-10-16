@@ -276,6 +276,19 @@ class R4Connection:
                     validate(frame)
                     if not future.done():
                         future.set_result(frame)
+                elif kind in ('event.artifact.ack','event.artifact.rejected'):
+                    pending = self._pending.get(('event.artifact.ack',frame['request_id']))
+                    # A late transfer ACK has no event/operation effect. It
+                    # must not disconnect healthy lanes after a timed-out upload.
+                    if pending is not None and not pending[0].done():
+                        future, validate = pending
+                        if kind == 'event.artifact.rejected':
+                            normalized = {k:v for k,v in frame.items() if k!='code'}
+                            validate(dict(normalized,type='event.artifact.ack'))
+                            future.set_exception(CoreError(frame['code'],'event_artifact',possible_effect=True))
+                        else:
+                            validate(frame)
+                            future.set_result(frame)
                 elif kind in ('lease.granted', 'lease.denied', 'binding.attached', 'connection.renewed'):
                     field = 'attach_request_id' if kind == 'binding.attached' else 'request_id'
                     pending = self._pending.get(('lease.granted' if kind == 'lease.denied' else kind, envelope[field]))
@@ -482,6 +495,27 @@ class R4Connection:
             request_id=request['release_id'], validate=validate, on_retire=retire,
             encode=encode_session_release, retry_timeouts=True, stop_event=stop_event,
             fence_on_error=False)
+
+    async def publish_event_artifact(self, scope, event, raw):
+        from nexus_connector_core.event_artifacts import EVENT_ARTIFACT_REVISION, artifact_chunks, artifact_ack, encode_event_artifact
+        if EVENT_ARTIFACT_REVISION not in self.state.control_capabilities:
+            raise CoreError('VERSION_INCOMPATIBLE','event_artifact')
+        def current():
+            self._require_online()
+            lane = self._lanes.get(scope['binding_id'])
+            if lane is None or lane.agent_id != scope['agent_id'] or time.monotonic() >= lane.deadline_monotonic:
+                raise CoreError('BINDING_NOT_AUTHORIZED','event_artifact')
+        base = dict(self._base(),binding_id=scope['binding_id'],agent_id=scope['agent_id'])
+        for chunk in artifact_chunks(base,event,raw):
+            current()
+            expected = artifact_ack(chunk)
+            def validate(reply):
+                current()
+                if reply != expected:
+                    raise CoreError('EVENT_CONFLICT','event_artifact_ack')
+                return True
+            await self._request(chunk,reply_type='event.artifact.ack',request_id=chunk['request_id'],
+                validate=validate,encode=encode_event_artifact,fence_on_error=False,before_send=current)
 
     async def publish_events(self, *, binding_id, agent_id, session_id, stream_epoch, events):
         self._require_online()

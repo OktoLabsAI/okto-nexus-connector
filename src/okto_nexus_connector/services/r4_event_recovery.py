@@ -28,7 +28,13 @@ async def recover_event_streams(store,vault,http,host,channel,*,require_current,
                     await journal.acknowledge_events(cursor,state["remote_acked"])
                     await asyncio.to_thread(publisher.store.advance,scope,core_applied=state["remote_acked"])
                     state["core_applied"]=state["remote_acked"]
-                if not await event_page(journal,scope,state["core_applied"]):
+                iterator = journal.events(EventCursor(server_id,executor_id,scope['session_id'],
+                    scope['stream_epoch'],state['core_applied']))
+                try:
+                    pending = await anext(iterator,None)
+                finally:
+                    await iterator.aclose()
+                if pending is None:
                     continue
                 binding,identity=await asyncio.to_thread(_binding,store,http,server_id,executor_id,scope)
                 authority=current_publication_authority(authorities,binding,identity,clock())
