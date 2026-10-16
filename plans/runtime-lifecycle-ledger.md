@@ -49,3 +49,11 @@ retains native recovery work while revoking the old attempt's authority.
 boundaries. Vendored Core is synchronized to M2e (`90b4ef6`); pin remains 0.0.12.
 See [`runtime-lifecycle-m2e.md`](runtime-lifecycle-m2e.md) for artifacts and scope.
 This checkpoint does not complete M2/M5 or qualify another physical host.
+
+## M3c — Shared original-owner containment (validated checkpoint)
+
+Vendored Core 0.0.12 now recovers failed planned launches without requiring an
+owner restart. **103 installed consumer tests passed**, with package byte checks
+and stable inputs. A scoped-denial test fixture now delays only its intended
+session. See [`runtime-lifecycle-m3c.md`](runtime-lifecycle-m3c.md) for the initial
+failure, final qualification and remaining renewal-isolation scope.

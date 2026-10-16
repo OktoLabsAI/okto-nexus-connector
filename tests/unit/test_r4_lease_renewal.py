@@ -68,7 +68,10 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None,
             armed = refusal_armed and (renewal_gate is None or renewal_gate.is_set())
             if renewal_gate is None or armed:
                 entered.set()
-            if hold and armed:
+            # A scoped denial holds only the selected session. Holding every
+            # sibling while the shared test clock advances injects unrelated
+            # late grants and invalidates the isolation scenario under load.
+            if hold and armed and (refuse != 'scoped' or scope['session_id'] == frame['session_id']):
                 await release.wait()
             if refuse == 'scoped' and armed:
                 if scope['session_id'] == frame['session_id']:
