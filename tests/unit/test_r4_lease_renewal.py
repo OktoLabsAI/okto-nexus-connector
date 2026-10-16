@@ -3,7 +3,7 @@ import asyncio
 import time
 
 import pytest
-from nexus_connector_core import R4_PREVIEW_REVISION, SessionKey
+from nexus_connector_core import CoreError, R4_PREVIEW_REVISION, SessionKey
 
 from okto_nexus_connector.errors import ConnectorError
 from tests.unit.test_execution_selection import selection
@@ -66,15 +66,19 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None,
         calls.append(attempt)
         if purpose == "renew":
             armed = refusal_armed and (renewal_gate is None or renewal_gate.is_set())
-            if renewal_gate is None or armed:
+            scoped = refuse in ('scoped', 'expired_scoped', 'revalidation_scoped')
+            if (renewal_gate is None or armed) and (not scoped or scope['session_id'] == frame['session_id']):
                 entered.set()
             # A scoped denial holds only the selected session. Holding every
             # sibling while the shared test clock advances injects unrelated
             # late grants and invalidates the isolation scenario under load.
-            if hold and armed and (refuse != 'scoped' or scope['session_id'] == frame['session_id']):
+            if hold and armed and (not scoped or scope['session_id'] == frame['session_id']):
                 await release.wait()
-            if refuse == 'scoped' and armed:
+            if scoped and armed:
                 if scope['session_id'] == frame['session_id']:
+                    if refuse != 'scoped':
+                        raise CoreError('LEASE_EXPIRED' if refuse == 'expired_scoped'
+                            else 'LEASE_REVALIDATION_REQUIRED', 'r4_lease_apply')
                     from nexus_connector_core import r4_lease_renew_frame
                     from okto_nexus_connector.transport.lease_denial import LeaseRequestDenied
                     raise LeaseRequestDenied(r4_lease_renew_frame(attempt))
@@ -237,9 +241,14 @@ async def test_interrupt_progresses_while_productive_work_waits_for_renewal(life
             clock.now = session.deadline
         release.set()
         if expire_before_reply:
-            await failed(owner.owner)
-            assert owner.owner.failure.code == "LEASE_EXPIRED"
-            assert [row[0] for row in native.native.sent] == ["interrupt"]
+            receipt = await observed(published, owner.owner)
+            assert receipt['operation_id'] == 'turn.submit' and receipt['stage'] == 'FAILED'
+            assert receipt['error_code'] == session.local_lease_failure
+            assert receipt['error_code'] in ('LEASE_EXPIRED', 'LEASE_REVALIDATION_REQUIRED')
+            assert not receipt['possible_effect']
+            await asyncio.wait_for(asyncio.shield(session.renewal), 8)
+            assert owner.owner.failure is None and owner.connection.online and session.contained
+            assert all(row[0] == 'interrupt' for row in native.native.sent)
             return
         receipt=await observed(published,owner.owner)
         assert receipt["operation_id"]=="turn.submit"
@@ -287,9 +296,10 @@ async def test_expired_lease_before_renewal_refuses_another_request(lifecycle,mo
     try:
         initial = session.deadline
         clock.now = initial
-        await failed(owner.owner)
-        assert owner.owner.failure.code == "LEASE_EXPIRED"
-        assert session.deadline == initial and not owner.connection.online
+        await asyncio.wait_for(asyncio.shield(session.renewal), 8)
+        assert owner.owner.failure is None and session.local_lease_failure == 'LEASE_EXPIRED'
+        assert session.deadline == initial and owner.connection.online and session.contained
+        assert native.native.stopped
         assert not entered.is_set() and len(calls) == 1
         assert len(native.opened) == 1
     finally:

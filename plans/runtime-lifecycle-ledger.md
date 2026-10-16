@@ -57,3 +57,9 @@ owner restart. **103 installed consumer tests passed**, with package byte checks
 and stable inputs. A scoped-denial test fixture now delays only its intended
 session. See [`runtime-lifecycle-m3c.md`](runtime-lifecycle-m3c.md) for the initial
 failure, final qualification and remaining renewal-isolation scope.
+
+## M3e — Scoped local lease failure (validated checkpoint)
+
+71 installed cases passed. See [runtime-lifecycle-m3e.md](runtime-lifecycle-m3e.md) for scope,
+artifact identities, initial test failures and remaining boundaries.
+No global rollout; M3/M5 remain in progress.

@@ -13,7 +13,7 @@ import sqlite3
 from nexus_connector_core import (
     CoreError, R4ReceiptProjection, decode_r4_frame, encode_r4_frame,
     validate_r4_receipt_binding, reduce_r4_receipt,
-    validate_r4_lease_refusal,
+    validate_r4_operation_refusal,
     project_r4_bound_receipt, OperationKey,
 )
 from nexus_connector_core.preopen_refusal_r4 import validate_r4_preopen_refusal
@@ -144,7 +144,7 @@ class R4PublicationStore:
 
     def bind(self, binding, *, stream_epoch=None, refusal=None):
         binding = validate_r4_receipt_binding(binding)
-        refusal = validate_r4_lease_refusal(refusal) if refusal is not None else None
+        refusal = validate_r4_operation_refusal(refusal) if refusal is not None else None
         if refusal is not None and (refusal['binding'] != binding or stream_epoch is not None):
             raise ValueError('Invalid refusal association.')
         refusal_raw = canonical_json(refusal).decode() if refusal is not None else None
@@ -318,7 +318,7 @@ class R4PublicationStore:
         if binding is not None and (binding['action'] != metadata['action'] or
                 any(binding['source'][k] != metadata[k] for k in _PROVENANCE)):
             raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_publication', 'The Core association is inconsistent.')
-        refusal = validate_r4_lease_refusal(json.loads(row['refusal_binding'])) if row['refusal_binding'] else None
+        refusal = validate_r4_operation_refusal(json.loads(row['refusal_binding'])) if row['refusal_binding'] else None
         if refusal is not None and (refusal['binding'] != binding or
                 refusal['scope']['session_owner_generation'] != metadata['session_owner_generation']):
             raise ConnectorError('JOURNAL_UNAVAILABLE', 'r4_publication', 'The refusal association is inconsistent.')

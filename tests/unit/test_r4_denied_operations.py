@@ -21,7 +21,8 @@ async def matching(queue, owner, operation_id):
 
 
 @pytest.mark.parametrize('selection', [True], indirect=True)
-async def test_queued_turn_is_refused_before_native_send_and_sibling_remains_available(lifecycle, monkeypatch):
+@pytest.mark.parametrize('refuse', ['scoped', 'expired_scoped', 'revalidation_scoped'])
+async def test_queued_turn_is_refused_before_native_send_and_sibling_remains_available(lifecycle, monkeypatch, refuse):
     daemon, _, store, opening, factory, _, _, _ = lifecycle
     daemon.connection.state = replace(daemon.connection.state, control_capabilities=(SESSION_RELEASE_REVISION,))
     async def peer(prepared, session_id, context, *, stream_epoch):
@@ -35,7 +36,7 @@ async def test_queued_turn_is_refused_before_native_send_and_sibling_remains_ava
         return session_release_accepted(report)
     daemon.connection.publish_session_release = publish_release
     daemon, _, frame, _, published, session, renewing, allow_denial, _ = await setup(
-        lifecycle, monkeypatch, hold=True, refuse='scoped', clock=LeaseClock())
+        lifecycle, monkeypatch, hold=True, refuse=refuse, clock=LeaseClock())
     first_peer = factory.native
     try:
         sibling = dict(frame, session_id='healthy', operation_id='healthy-open')
@@ -51,7 +52,8 @@ async def test_queued_turn_is_refused_before_native_send_and_sibling_remains_ava
         assert not first_peer.sent
         allow_denial.set()
         refusal = await matching(published, daemon.owner, 'queued')
-        assert refusal['stage'] == 'FAILED' and refusal['error_code'] == 'LEASE_REVALIDATION_REQUIRED'
+        assert refusal['stage'] == 'FAILED'
+        assert refusal['error_code'] == ('LEASE_EXPIRED' if refuse == 'expired_scoped' else 'LEASE_REVALIDATION_REQUIRED')
         assert refusal['retry_safe'] and not refusal['possible_effect'] and not first_peer.sent
         await daemon.connection.emit(operation(sibling, 'turn.submit', {'text': 'Still available'}, operation_id='healthy-turn'))
         assert (await matching(published, daemon.owner, 'healthy-turn'))['stage'] == 'SUBMITTED'
@@ -95,8 +97,9 @@ async def test_initial_lease_denial_does_not_open_provider_or_close_shared_chann
 
 @pytest.mark.parametrize('selection', [True], indirect=True)
 @pytest.mark.parametrize('cut', ['association', 'admission', 'terminal', 'publication'])
-async def test_restart_finishes_original_refusal_at_each_persistence_cut_without_provider(lifecycle, cut):
-    from nexus_connector_core import prepare_r4_lease_refusal, persist_r4_lease_refusal, project_r4_bound_receipt
+@pytest.mark.parametrize('kind', ['denial', 'stopped'])
+async def test_restart_finishes_original_refusal_at_each_persistence_cut_without_provider(lifecycle, cut, kind):
+    from nexus_connector_core import prepare_r4_lease_refusal, prepare_r4_stopped_refusal, persist_r4_operation_refusal, project_r4_bound_receipt
     from nexus_connector_core.lease_denial import lease_denial_frame
     from okto_nexus_connector.storage.r4_publications import R4PublicationStore
     from okto_nexus_connector.services.r4_publications import recover_publications
@@ -106,7 +109,15 @@ async def test_restart_finishes_original_refusal_at_each_persistence_cut_without
         scope={k: frame[k] for k in ('server_id','executor_id','binding_id','agent_id','workspace_id',
             'workspace_binding_id','session_id','session_owner_generation','authorization_revision',
             'configuration_revision','binding_revision','credential_epoch')})
-    proof = prepare_r4_lease_refusal(frame, lease_denial_frame(request))
+    if kind == 'stopped':
+        frame = operation(frame, 'turn.submit', {'text':'Never execute after this local fence'})
+        from nexus_connector_core import r4_submit_intent_hash
+        frame['intent_hash'] = r4_submit_intent_hash(frame)
+        proof = prepare_r4_stopped_refusal(frame, scope=request['scope'],
+            connection_id=frame['connection_id'], connection_generation=frame['connection_generation'],
+            error_code='LEASE_EXPIRED')
+    else:
+        proof = prepare_r4_lease_refusal(frame, lease_denial_frame(request))
     store = R4PublicationStore.for_state(state)
     store.reserve(frame)
     store.bind(proof['binding'], refusal=proof)
@@ -118,7 +129,7 @@ async def test_restart_finishes_original_refusal_at_each_persistence_cut_without
     if cut != 'association':
         await journal.admit(key, proof['binding']['core_intent_hash'], frame['session_id'])
     if cut in ('terminal', 'publication'):
-        fact = await persist_r4_lease_refusal(journal, proof)
+        fact = await persist_r4_operation_refusal(journal, proof)
         if cut == 'publication':
             store.record(project_r4_bound_receipt(proof['binding'], fact, key=key, receipt_revision=1))
     async def current(): pass
