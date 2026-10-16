@@ -299,17 +299,18 @@ class R4DaemonControl:
         self.inventory_revision = accepted.inventory_revision
         return self.clock() + max(0.5, accepted.fresh_for_ms / 1000 * 0.7)
 
-    async def _reconcile(self, request):
+    async def _reconcile(self, request, *, validate_authority=None, publish_receipts=None):
         from ..services.r4_reconciliation import R4ReconciliationReporter
         if self._reporter is None:
-            self._reporter = R4ReconciliationReporter(self.store, self.host, self.server_id, self.executor_id, boot_id=self.boot_id)
+            self._reporter = R4ReconciliationReporter(self.store, self.host, self.server_id, self.executor_id,
+                boot_id=self.boot_id, validate_authority=validate_authority, publish_receipts=publish_receipts)
         report = await self._reporter.report(request)
         self._recovery_error = 'RECONCILIATION_REQUIRED' if self._reporter.blocked else None
         return report
 
-    async def _report_reconciliation(self, request):
+    async def _report_reconciliation(self, request, **recovery):
         try:
-            return await self._reconcile(request)
+            return await self._reconcile(request, **recovery)
         except Exception as error:
             code = getattr(error, 'code', None)
             self._recovery_error = code if type(code) is str and code in _STATUS_ERRORS else 'JOURNAL_UNAVAILABLE'
@@ -376,9 +377,38 @@ class R4DaemonControl:
             self.phase = 'RECOVERING'
             from ..services.r4_event_recovery import recover_event_streams
             recovery_tasks = set()
+            recovery_active = threading.Event()
+            recovery_active.set()
+            recovery_channel = None
+            recovery_bootstrap = bootstrap
+
+            def verify_recovery(request=None):
+                channel = recovery_channel
+                if (not recovery_active.is_set() or self._stopped.is_set()
+                        or self._bootstrap is not recovery_bootstrap
+                        or self.clock() >= recovery_bootstrap.deadline_monotonic
+                        or channel is None or not channel.online or self._snapshot() != snapshot
+                        or request is not None and any(request[k] != getattr(channel.state, k)
+                            for k in ('server_id', 'executor_id', 'connection_id', 'connection_generation'))):
+                    raise ConnectorError('STALE_GENERATION', 'launch_recovery',
+                                         'The recovery channel no longer owns this attempt.')
+
+            async def require_recovery():
+                await asyncio.to_thread(verify_recovery)
+
+            async def publish_recovered():
+                await require_recovery()
+                await recover_publications(self.store, self.vault, http,
+                    server_id=self.server_id, executor_id=self.executor_id,
+                    require_current=require_recovery, clock=self.clock,
+                    journal=await self.host.ensure_history_journal(), authorities=recovered_lanes)
+                await require_recovery()
+
             async def recover_events(channel):
+                nonlocal recovery_channel
+                recovery_channel = channel
                 task = asyncio.create_task(recover_event_streams(self.store,self.vault,http,self.host,channel,
-                    require_current=lambda: self._require(snapshot),authorities=recovered_lanes,clock=self.clock),
+                    require_current=require_recovery,authorities=recovered_lanes,clock=self.clock),
                     name='r4-event-recovery')
                 recovery_tasks.add(task)
                 try:
@@ -387,17 +417,28 @@ class R4DaemonControl:
                     code = getattr(error,'code',None)
                     self._recovery_error = code if type(code) is str and code in _STATUS_ERRORS else 'JOURNAL_UNAVAILABLE'
                     raise
+
+            async def report_reconciliation(request):
+                # Cancelling negotiation cancels its observer, not the worker
+                # currently fencing a producer or stopping a native container.
+                task = asyncio.create_task(self._report_reconciliation(request,
+                    validate_authority=verify_recovery, publish_receipts=publish_recovered),
+                    name='r4-launch-recovery')
+                recovery_tasks.add(task)
+                return await asyncio.shield(task)
+
             try:
                 self.connection = await asyncio.wait_for(self.connect(
                     _link_url(profile, self.executor_id), bootstrap.ticket,
                     server_id=self.server_id, executor_id=self.executor_id,
                     management_revision=protocol.management_revision,
                     snapshot_format=protocol.executor_snapshot_format, boot_id=self.boot_id,
-                    report_reconciliation=self._report_reconciliation,
+                    report_reconciliation=report_reconciliation,
                     reconciliation_accepted=self._reconciliation_accepted,
                     recover_before_report=recover_events,
                     **({'capacity_handler': self._capacity_control} if self.host.capacity_enabled else {})), min(30, remaining))
             finally:
+                recovery_active.clear()
                 # Keep HTTP, vault and journal owners alive through a canceled
                 # negotiation observer and any already-started ACK write.
                 if recovery_tasks:

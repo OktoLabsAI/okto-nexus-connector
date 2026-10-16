@@ -39,3 +39,13 @@ of behavior on another physical machine. No new lifecycle milestone is installed
 
 Remaining: durable launch intent/fencing (M2), independent readiness (M3),
 incremental recovery (M4) and shared local/remote policies (M5).
+
+## M2e — Shared launch recovery (validated checkpoint)
+
+Connector now consumes the Core producer/container recovery proof and publishes
+never-started openings through the negotiated extension. Cancelled negotiation
+retains native recovery work while revoking the old attempt's authority.
+**103 installed tests passed**, including five real disposable Windows crash
+boundaries. Vendored Core is synchronized to M2e (`90b4ef6`); pin remains 0.0.12.
+See [`runtime-lifecycle-m2e.md`](runtime-lifecycle-m2e.md) for artifacts and scope.
+This checkpoint does not complete M2/M5 or qualify another physical host.

@@ -112,7 +112,8 @@ async def negotiate_r4_control(
         "supported_nxl": [R4_PREVIEW_REVISION],
         "snapshot_formats": [snapshot_format],
         "control_capabilities": ['connection_renewal_v1', 'heartbeat_ack_v1', 'connection_resume_v1',
-                                 LEASE_DENIAL_REVISION, SESSION_RELEASE_REVISION, PREOPEN_REFUSAL_REVISION, EVENT_ARTIFACT_REVISION],
+                                 LEASE_DENIAL_REVISION, SESSION_RELEASE_REVISION, PREOPEN_REFUSAL_REVISION, EVENT_ARTIFACT_REVISION,
+                                 'nexus-launch-recovery-v1'],
     }
     if capacity_enabled:
         hello['control_capabilities'].append(CAPACITY_CONTRACT_REVISION)
@@ -148,6 +149,8 @@ async def negotiate_r4_control(
             # retries. Liveness does not grant control readiness.
             continue
         if kind == "reconcile.request":
+            if frame.get('launch_recovery_supported') and 'nexus-launch-recovery-v1' not in welcome['control_capabilities']:
+                raise ValueError('Launch recovery was not negotiated.')
             if frame.get('preopen_refusal_supported') and PREOPEN_REFUSAL_REVISION not in welcome['control_capabilities']:
                 raise ValueError('Preopening recovery was not negotiated.')
             if frame['cursor'] is None:
