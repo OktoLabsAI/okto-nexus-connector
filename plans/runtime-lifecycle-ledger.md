@@ -20,3 +20,22 @@ baseline commit on this branch; the canonical ledger records its hash next.
 The new Core lifecycle behavior must be tested from an installed wheel and the
 vendored Core rebuilt when integrated. Loopback qualification is not evidence
 of behavior on another physical machine. No new lifecycle milestone is installed.
+
+## M1 — Consume early process-birth recording (validated)
+
+- Rebuilt and synchronized vendored Core 0.0.12 from Core commit `8520deb`.
+  Dependency pin remains 0.0.12. Wheel SHA256:
+  `d2799bb6249c28fca5e56d9e17862ca1b3f72b15a59c5f9e2d15d509a0d2da8f`.
+- Installed-package execution and daemon regressions: **43 passed** with the new
+  Core wheel, using the real Core journal and synthetic native peers.
+  Tests: `tests/unit/test_r4_execution.py`, `tests/unit/test_r4_daemon_execution.py`.
+  Local JUnit evidence: `build/runtime-lifecycle-m1-installed.xml`.
+- Core's opening callback is used through the existing host composition; no
+  duplicate process-birth implementation was introduced in Connector.
+- This is an isolated installation qualification. The user's running installation
+  was not updated, and no second physical host was qualified.
+- Breaking changes are authorized for subsequent shared contracts; all three
+  components may upgrade together instead of retaining old protocol paths.
+
+Remaining: durable launch intent/fencing (M2), independent readiness (M3),
+incremental recovery (M4) and shared local/remote policies (M5).
