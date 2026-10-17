@@ -177,3 +177,13 @@ Eight focused installed Core cases and one installed bridge case passed; the
 disposable UI trace that motivated the change is documented in the Core and
 Nexus M3o/M3n reports. Connector execution code is unchanged. Exact-wheel
 real UI and the separate Connector-host qualification remain pending.
+
+## M7a — Cold preparation dependency synchronization
+
+The vendored Core 0.0.12 wheel now has SHA-256
+`f0d6c9141ce59c04e01c419711b2b1e40f026ff99ba79c88c157f95da36ca457`
+from Core commit `680c677`. It defers one duplicate full Pi build hash from
+the non-effectful runtime preparation; admitted open still validates the full
+identity before capacity reservation and spawn. Core passed 88 source and 11
+selected installed cases. Connector execution code is unchanged; Connector
+host and UI-B qualification remain pending.
