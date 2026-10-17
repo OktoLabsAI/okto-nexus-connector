@@ -161,7 +161,14 @@ class R4PublicationStore:
             if (stored is None or stored['refusal'] != refusal
                     or stored['metadata']['action'] != 'runtime.open' or not row['startup_prelease']
                     or any(stored['metadata'][k] != frame[k] for k in _PROVENANCE)
-                    or row['startup_report'] not in (None, raw_report)
+                    or row['startup_report'] is not None and (
+                        stored['startup_report']['request_id'] != report['request_id']
+                        or stored['startup_report']['refusal'] != refusal
+                        or stored['startup_report']['receipt'] != frame
+                        or stored['startup_report']['capacity'] != report['capacity']
+                        or stored['startup_report']['connection_generation'] > report['connection_generation']
+                        or stored['startup_report']['connection_generation'] == report['connection_generation']
+                        and stored['startup_report']['connection_id'] != report['connection_id'])
                     or row['receipt'] not in (None, raw_receipt)):
                 raise ConnectorError('OPERATION_CONFLICT', 'r4_startup_refusal',
                     'The durable startup refusal changed.')
@@ -180,6 +187,28 @@ class R4PublicationStore:
                 'ORDER BY operation_id LIMIT ?',
                 (server_id, executor_id, connection_id, generation, limit)).fetchall()
             return [self._decode(row)['startup_report'] for row in rows]
+
+    def startup_recovery_page(self, server_id, executor_id, *, generation, after='', limit=128):
+        if type(generation) is not int or generation < 1 or type(after) is not str or not 1 <= limit <= 128:
+            raise ValueError('Invalid startup recovery page.')
+        with self._transaction() as conn:
+            rows = conn.execute('SELECT * FROM publications WHERE server_id=? AND executor_id=? '
+                "AND operation_id>? AND acknowledged=0 AND startup_prelease=1 "
+                "AND json_extract(metadata,'$.connection_generation')<? "
+                'ORDER BY operation_id LIMIT ?',
+                (server_id, executor_id, after, generation, limit)).fetchall()
+            return [self._decode(row) for row in rows]
+
+    def recovered_startup_sessions(self, server_id, executor_id, *, generation, session_ids):
+        if (not isinstance(session_ids, (tuple, list)) or len(session_ids) > 256
+                or any(type(value) is not str for value in session_ids)):
+            raise ValueError('Invalid recovered startup session page.')
+        with self._transaction() as conn:
+            return {session_id for session_id in session_ids if conn.execute(
+                "SELECT 1 FROM publications WHERE server_id=? AND executor_id=? "
+                "AND json_extract(metadata,'$.session_id')=? AND acknowledged=1 "
+                "AND startup_prelease=1 AND json_extract(metadata,'$.connection_generation')<? LIMIT 1",
+                (server_id, executor_id, session_id, generation)).fetchone() is not None}
 
     def bind(self, binding, *, stream_epoch=None, refusal=None, startup_prelease=False):
         binding = validate_r4_receipt_binding(binding)

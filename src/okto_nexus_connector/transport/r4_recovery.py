@@ -28,9 +28,26 @@ class R4RecoveryChannel:
         from nexus_connector_core.control_codec import decode_control_frame
         reply=decode_control_frame(raw.encode() if isinstance(raw,str) else raw,
                                   capabilities=getattr(self.state,'control_capabilities',()))
-        if any(reply.get(k)!=self._base()[k] for k in ("server_id","executor_id","connection_id","connection_generation")):
+        envelope = reply['request'] if reply['type'] in (
+            'startup.refuse.accepted', 'startup.refuse.deferred') else reply
+        if any(envelope.get(k)!=self._base()[k] for k in ("server_id","executor_id","connection_id","connection_generation")):
             raise CoreError("STALE_GENERATION","r4_recovery")
         return reply
+
+    async def publish_startup_refusal(self, report):
+        from nexus_connector_core.startup_refusal_link import (
+            STARTUP_REFUSAL_REVISION, encode_startup_refusal,
+        )
+        if STARTUP_REFUSAL_REVISION not in self.state.control_capabilities:
+            raise CoreError('VERSION_INCOMPATIBLE', 'startup_refusal_recovery')
+        if any(report[name] != getattr(self.state, name) for name in (
+                'server_id', 'executor_id', 'connection_id', 'connection_generation')):
+            raise CoreError('STALE_GENERATION', 'startup_refusal_recovery')
+        response = await self._exchange(report, encode_startup_refusal)
+        if response['request'] != report or response['type'] not in (
+                'startup.refuse.accepted', 'startup.refuse.deferred'):
+            raise CoreError('SCOPE_MISMATCH', 'startup_refusal_recovery')
+        return response['type'] == 'startup.refuse.accepted'
 
     async def attach_binding(self, *, binding_id, agent_id, ticket, credential_epoch,
                              authorization_revision, configuration_revision):

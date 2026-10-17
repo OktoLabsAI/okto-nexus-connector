@@ -133,7 +133,8 @@ async def negotiate_r4_control(
     generation = welcome["connection_generation"]
     from .r4_recovery import R4RecoveryChannel
     recovery = R4RecoveryChannel(websocket,
-        R4ControlState(server_id,executor_id,connection_id,generation,False),boot_id)
+        R4ControlState(server_id,executor_id,connection_id,generation,False,
+            tuple(welcome['control_capabilities'])),boot_id)
     pending: R4ReconcileAttempt | None = None
     attempts = 0
     report_complete = False

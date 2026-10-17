@@ -92,6 +92,11 @@ class R4ReconciliationReporter:
             self.cycle, self.cursor = cycle, None
             self.after, self.high, self.claims_done, self.blocked = 0, None, False, False
             self.requested_sessions, self.seen_sessions = set(), set()
+            self.seen_sessions.update(await asyncio.to_thread(
+                self.publications.recovered_startup_sessions,
+                self.server_id, self.executor_id,
+                generation=request['connection_generation'],
+                session_ids=request['session_ids']))
             self._release_observations = {}
             self._report_complete = False
             self._preopen_reports, self._preopen_sent, self._preopen_after = [], {}, 0

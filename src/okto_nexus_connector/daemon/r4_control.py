@@ -434,15 +434,24 @@ class R4DaemonControl:
             async def recover_events(channel):
                 nonlocal recovery_channel
                 recovery_channel = channel
-                task = asyncio.create_task(recover_event_streams(self.store,self.vault,http,self.host,channel,
-                    require_current=require_recovery,authorities=recovered_lanes,clock=self.clock),
-                    name='r4-event-recovery')
+                async def recover_owned_obligations():
+                    await recover_event_streams(self.store,self.vault,http,self.host,channel,
+                        require_current=require_recovery,authorities=recovered_lanes,clock=self.clock)
+                    from ..services.r4_startup_recovery import recover_startup_refusals
+                    await require_recovery()
+                    await recover_startup_refusals(self.store, self.host, channel,
+                        boot_id=self.boot_id, clock=self.clock)
+                    await require_recovery()
+                task = asyncio.create_task(recover_owned_obligations(),
+                    name='r4-control-recovery')
                 recovery_tasks.add(task)
                 try:
                     return await asyncio.shield(task)
                 except Exception as error:
                     code = getattr(error,'code',None)
                     self._recovery_error = code if type(code) is str and code in _STATUS_ERRORS else 'JOURNAL_UNAVAILABLE'
+                    logging.getLogger(__name__).warning('Runtime owned recovery deferred: code=%s stage=%s type=%s',
+                        self._recovery_error, getattr(error, 'stage', 'unknown'), type(error).__name__)
                     raise
 
             async def report_reconciliation(request):
