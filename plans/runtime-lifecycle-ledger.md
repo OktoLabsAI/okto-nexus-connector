@@ -90,3 +90,14 @@ and refresh frontiers. Installed artifact qualification passed 164 cases,
 with unchanged inputs, exact package/source byte verification and valid dependencies.
 See [runtime-lifecycle-m3i-producer.md](runtime-lifecycle-m3i-producer.md).
 This does not complete M3/M5 or the coordinated real UI gate.
+
+## M8 — Installed subprocess provenance (validated checkpoint)
+
+11 installed cases passed with no skips, unchanged inputs and exact package-byte
+verification. Children now use the parent's installed package; a poisoned inherited
+PYTHONPATH cannot replace it. The actual CLI starter exits while its daemon keeps
+answering authenticated IPC, and a forged client cannot stop it. Windows launcher
+PIDs are distinguished from daemon PIDs; cleanup drains the private daemon before
+joining starter handles and never erases evidence of a survivor. See
+[runtime-lifecycle-m8-process.md](runtime-lifecycle-m8-process.md).
+Product wheels and global installation are unchanged; M5/M8 remain incomplete.
