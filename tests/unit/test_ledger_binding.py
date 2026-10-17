@@ -79,6 +79,25 @@ async def test_journal_creation_advances_head_and_reanchors_without_readiness_ga
 
 
 @pytest.mark.asyncio
+async def test_forward_head_must_extend_stored_anchor_before_reanchoring(tmp_path, monkeypatch):
+    host, store = bound_host(tmp_path)
+    try:
+        ledger = await host.ensure_ledger()
+        binding = host._store_binding
+        first = await binding.stage_audit_anchor(ledger, paths.journal_path(tmp_path))
+        await host.ensure_journal()
+        async def forged_prefix(revision):
+            assert revision == first.revision
+            return 'f' * 64
+        monkeypatch.setattr(ledger, 'journal_digest_at_revision', forged_prefix)
+        with pytest.raises(ConnectorError, match='PROFILE_DRIFT'):
+            await binding.stage_audit_anchor(ledger, paths.journal_path(tmp_path))
+        assert binding.stored_audit_anchor(first.store_id) == first
+    finally:
+        await host.shutdown_all()
+
+
+@pytest.mark.asyncio
 async def test_same_identity_ledger_rollback_is_refused_before_ready(tmp_path):
     host, store = bound_host(tmp_path)
     ledger = await host.ensure_ledger()

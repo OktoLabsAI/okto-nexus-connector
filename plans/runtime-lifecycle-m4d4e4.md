@@ -28,3 +28,9 @@ same-identity Core ledger restored behind the independent Connector state is
 refused before IPC readiness. Ten focused source and ten installed binding
 cases passed. The final disposable Connector wheel SHA-256 is
 `a2288bf73f11caf008cfb1bf52427da326d714d0e35d2321ed3b19c9528452b6`.
+
+M4d4e6 converts Core's sparse digest index in bounded retained work before
+renewing a Connector token. An ahead Core head must extend the digest stored
+in Connector state. Eleven source and eleven installed binding cases passed,
+including deliberate prefix divergence. The final disposable Connector wheel
+SHA-256 is `de7e9f695bc8dc7a672fb33ace5eb79789f575c5f6dd2fb03ee5743ebe92e1ca`.

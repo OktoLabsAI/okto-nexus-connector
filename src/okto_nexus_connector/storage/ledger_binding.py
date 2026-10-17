@@ -86,7 +86,18 @@ class StateStoreLedgerBinding:
             await asyncio.sleep(0.01)
         else:
             return None
+        while stop is None or not stop.is_set():
+            if await ledger.advance_journal_extension_index(limit=128):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            return None
         stored = self.stored_audit_anchor(store_id)
+        if stored is not None:
+            prefix = await ledger.journal_digest_at_revision(stored.revision)
+            if prefix != stored.digest:
+                raise ConnectorError('PROFILE_DRIFT', 'connector_audit_anchor',
+                                     'The physical registry no longer extends the stored audit.')
         core_anchor = await ledger.journal_audit_anchor()
         if (stored is not None and stored == core_anchor
                 and stored.revision == head.revision and stored.digest == head.digest):
