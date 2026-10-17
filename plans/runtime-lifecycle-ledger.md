@@ -200,3 +200,14 @@ code and its Core version pin remain unchanged. Real Connector-host load and
 UI-B qualification remain pending.
 The Connector wheel was built and installed into a clean test environment
 with this exact vendored Core wheel; both packaging tests passed.
+
+## M4d4g — Mixed Core ledger budget
+
+Core commit `9b84aa4` measured 256,573,440 allocated bytes for 100,000
+physical registrations paired with terminal capacity records. The default
+slot-ledger growth ceiling is now 512 MiB rather than 64 MiB; it does not
+preallocate that space. Connector vendors the exact Core 0.0.12 wheel with
+SHA-256 `55b58a13f7112e63a44a08efb787ca5e43128f4d090fd639a7a9b307e5e43ecd`.
+Core passed 15 source and 15 installed-wheel tests, and both Connector
+packaging/installation tests passed with the new wheel. No Connector
+execution code changed. Real separate-host load and M4's UI gate remain open.
