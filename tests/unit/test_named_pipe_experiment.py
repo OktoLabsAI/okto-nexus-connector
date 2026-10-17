@@ -8,6 +8,14 @@ import pytest
 from okto_nexus_connector.ipc.protocol import encode_message, response_ok
 from okto_nexus_connector.ipc.server import IPCServer
 from okto_nexus_connector.ipc.named_pipe import _security_attributes
+from okto_nexus_connector.ipc.pipe_client import NamedPipeSocket
+
+
+def test_pipe_client_rejects_nonlocal_address_without_starting_worker():
+    client = NamedPipeSocket()
+    with pytest.raises(OSError, match='private local'):
+        client.connect(r'\\remote-host\pipe\okto-nexus-m6-test')
+    assert client._thread is None
 
 
 async def _connect(address):
