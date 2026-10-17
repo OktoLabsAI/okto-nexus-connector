@@ -83,8 +83,11 @@ owners or an additional permanent recovery path. Otherwise retain the shared
 Core library in the embedded host and record why this experiment did not improve
 the outcome. A local Connector is not a second physical machine qualification.
 
-## Pending
+## Checkpoint M6a and pending work
 
-Named-pipe adapter/prototype, separate-process M5 differential cases, installed
-comparison measurements and adoption decision are all still pending. This ADR
-does not claim a supervisor implementation or M6 completion.
+The opt-in Windows named-pipe adapter reached the actual daemon dispatcher and
+Core host in a disposable separate process; source and installed-wheel
+campaigns passed. See `runtime-lifecycle-m6a-named-pipe.md`. The synchronous
+CLI client, real Server reconnect/session comparison, separate-process M5
+differential cases, installed availability and cost measurements, UI gate and
+adoption decision remain pending. This ADR does not claim M6 completion.

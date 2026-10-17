@@ -211,3 +211,13 @@ SHA-256 `55b58a13f7112e63a44a08efb787ca5e43128f4d090fd639a7a9b307e5e43ecd`.
 Core passed 15 source and 15 installed-wheel tests, and both Connector
 packaging/installation tests passed with the new wheel. No Connector
 execution code changed. Real separate-host load and M4's UI gate remain open.
+
+## M6a — Opt-in Windows named-pipe experiment
+
+An explicit per-logon DACL, remote-client rejection, Proactor overlapped I/O
+and the existing IPC token gate now serve the real daemon dispatcher/Core
+host over a private named pipe. Eight source and eight installed-wheel tests
+passed, including a disposable separate daemon process. Default IPC remains
+unchanged. CLI support, real session/reconnect comparison, cost, containment
+and the UI gate remain pending. See
+[runtime-lifecycle-m6a-named-pipe.md](runtime-lifecycle-m6a-named-pipe.md).

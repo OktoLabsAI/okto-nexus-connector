@@ -277,8 +277,9 @@ class EventBridge:
 
 
 class DaemonApp:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, ipc_transport: str = 'auto'):
         self.root = root
+        self._ipc_transport = ipc_transport
         self.store = StateStore(paths.state_file(root))
         state = self.store.load()
         self.vault = open_vault(
@@ -338,7 +339,8 @@ class DaemonApp:
             # starting any Server control connection.
             await self.host.ensure_ledger()
             token = self.lock.ensure_token()
-            await self.ipc.start(paths.pid_dir(self.root), token)
+            await self.ipc.start(paths.pid_dir(self.root), token,
+                                 transport=self._ipc_transport)
             identity = _current_identity()
             self.lock.write_readiness(Readiness(
                 pid=identity.pid, birth_token=identity.birth_token,
