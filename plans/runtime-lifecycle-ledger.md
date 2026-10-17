@@ -166,3 +166,14 @@ disposable Nexus validated the real Pi connection, two Meta-harness turns and
 an automatic post-restart reply. See the Core M3 Pi probe report and Nexus
 `plans/runtime_lifecycle/m3n-pi-probe-ui.md`. Connector execution code is
 unchanged; a separate Connector-host UI gate remains pending under M5/UI-B.
+
+## M3o — Pi native-action lease renewal dependency synchronization
+
+The vendored Core 0.0.12 wheel now has SHA-256
+`95a6238deae20d1a98ea8c8a44dcb808c24e037eb01e0d38163265fc1dc72193`
+from Core commit `f5325af`. It accepts a new Pi native-action lease ID only
+with an advancing serial and unchanged authorized subject/grant/boot scope.
+Eight focused installed Core cases and one installed bridge case passed; the
+disposable UI trace that motivated the change is documented in the Core and
+Nexus M3o/M3n reports. Connector execution code is unchanged. Exact-wheel
+real UI and the separate Connector-host qualification remain pending.
