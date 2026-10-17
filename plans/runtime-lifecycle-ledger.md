@@ -129,3 +129,18 @@ skip, exact package bytes and unchanged inputs. See
 [runtime-lifecycle-m4d4b.md](runtime-lifecycle-m4d4b.md) and its results JSON.
 Core vendor is synchronized to the qualified `2afb894` artifact. The first
 audit frontier, M4/M5 completion and coordinated global rollout remain pending.
+
+## M5a — Shared refusal dependency qualification
+
+Core vendor synchronized to `19bb8f2`; wheel SHA-256
+`dfdfef2edeb9f8db8697e6b850c05a704698e692a3592ed6d9d827887235f816`.
+52 installed preopen/launch/execution cases passed with exact package-byte
+verification and unchanged inputs. See `runtime-lifecycle-m5a-results.json`.
+Nexus additionally qualified four separate-process preopen publication cases
+after updating its synthetic discovery callback to the per-adapter port.
+
+The new startup refusal API is not yet integrated into this host. A local
+preparation-failure reproduction still closes the shared control connection;
+its scoped recovery, canonical closure and capacity-release integration remain
+pending. This checkpoint changes the dependency, not Connector execution code,
+and does not claim completion of M5 or a production rollout.
