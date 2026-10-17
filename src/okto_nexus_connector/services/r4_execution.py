@@ -25,6 +25,7 @@ from nexus_connector_core import (
     prepare_r4_startup_refusal, persist_r4_startup_refusal,
 )
 from nexus_connector_core.native.adapter_types import NativeAdapterError
+from nexus_connector_core.startup_refusal_link import STARTUP_REFUSAL_REVISION
 
 from ..errors import ConnectorError
 from ..transport.lease_denial import LeaseRequestDenied
@@ -45,6 +46,12 @@ class R4LaunchSetup:
     environment: object
     auth_refs: tuple[str, ...] = ()
     native_action_factory: object | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _StartupRefusalOutcome:
+    receipt: dict
+    report: dict
 
 
 class _RenewalGate:
@@ -347,14 +354,19 @@ class R4ExecutionOwner:
     async def _produce(self, item):
         try:
             await asyncio.to_thread(self.publications.reserve, self.connection.require_current(item))
-            receipt = await self._execute_with_recorded_outcome(item)
+            outcome = await self._execute_with_recorded_outcome(item)
+            receipt = outcome.receipt if isinstance(outcome, _StartupRefusalOutcome) else outcome
             if receipt is None:
                 return
             self._record_execution_outcome(receipt)
             # Once Core has produced a fact, loss of lane/link does not undo
             # it. Publish that same fact; never fabricate a second operation.
-            await asyncio.to_thread(self.publications.record, receipt)
-            await self.publish_receipt(receipt)
+            if isinstance(outcome, _StartupRefusalOutcome):
+                await asyncio.to_thread(self.publications.record_startup, outcome.report)
+                await self._publish_startup_refusal(outcome.report)
+            else:
+                await asyncio.to_thread(self.publications.record, receipt)
+                await self.publish_receipt(receipt)
             await asyncio.to_thread(self.publications.acknowledge, receipt)
             if self._receipt_monitor is None and not self._stopping:
                 self._receipt_monitor = asyncio.create_task(self._observe_receipts(), name="r4-receipt-observer")
@@ -403,6 +415,17 @@ class R4ExecutionOwner:
             # The public Core projector verifies namespace, operation, intent
             # and the previously persisted binding; a mismatched fact fails.
             return project_r4_bound_receipt(binding, fact, key=key, receipt_revision=1)
+
+    async def _publish_startup_refusal(self, report):
+        while True:
+            reply = await self.connection.publish_startup_refusal(report,
+                stop_event=self._receipt_stop)
+            if reply['type'] == 'startup.refuse.accepted':
+                return
+            if self._stopping or not self.connection.online:
+                raise ConnectorError('PUBLICATION_INTERRUPTED', 'r4_startup_refusal',
+                    'The durable startup refusal remains pending.')
+            await asyncio.sleep(.5)
 
     async def _renew_session(self, session, source):
         async def current():
@@ -570,14 +593,17 @@ class R4ExecutionOwner:
                 except TimeoutError:
                     pass
 
-    async def _refuse_failed_preparation(self, item, session):
+    async def _refuse_failed_preparation(self, item, session, *, prelease=False):
         """Finish only an opening that never entered Core native admission."""
         frame = self.connection.require_current(item)
-        session.stopped.set()
-        if session.renewal is not None:
-            await asyncio.gather(session.renewal, return_exceptions=True)
-        await self._contain_session(session, frame, publish_release=False)
-        if not session.contained:
+        if session is not None:
+            session.stopped.set()
+            if session.renewal is not None:
+                await asyncio.gather(session.renewal, return_exceptions=True)
+            await self._contain_session(session, frame, publish_release=False)
+            if not session.contained:
+                raise CoreError('RECONCILIATION_REQUIRED', 'r4_startup_containment')
+        elif not prelease or STARTUP_REFUSAL_REVISION not in self.connection.state.control_capabilities:
             raise CoreError('RECONCILIATION_REQUIRED', 'r4_startup_containment')
         operation = OperationKey(frame['server_id'], frame['executor_id'], frame['operation_id'])
         session_key = SessionKey(frame['server_id'], frame['executor_id'], frame['session_id'])
@@ -588,8 +614,10 @@ class R4ExecutionOwner:
         binding = refusal['binding']
         # Persist the refusal association before touching capacity. A crash
         # before Core fencing leaves the original preopen recovery obligation.
-        await asyncio.to_thread(self.publications.bind, binding, refusal=refusal)
+        await asyncio.to_thread(self.publications.bind, binding, refusal=refusal,
+            startup_prelease=prelease)
         self._capacity_bindings[item.token] = binding
+        released_capacity = None
         if self.capacity_provider is not None:
             capacity = await self.capacity_provider()
             ledger = await self.host.ensure_ledger()
@@ -605,8 +633,18 @@ class R4ExecutionOwner:
                     reservation.reservation_id, 'ROLLBACK')
                 if released.state != 'RELEASED':
                     raise CoreError('RECONCILIATION_REQUIRED', 'r4_startup_capacity')
+                released_capacity = released.to_dict()
         receipt = await persist_r4_startup_refusal(journal, refusal)
-        return project_r4_bound_receipt(binding, receipt, key=operation, receipt_revision=1)
+        projected = project_r4_bound_receipt(binding, receipt, key=operation, receipt_revision=1)
+        if not prelease:
+            return projected
+        report = dict(contract_revision=STARTUP_REFUSAL_REVISION, type='startup.refuse',
+            request_id='startup_' + secrets.token_hex(16),
+            server_id=frame['server_id'], executor_id=frame['executor_id'],
+            connection_id=frame['connection_id'],
+            connection_generation=frame['connection_generation'], refusal=refusal,
+            receipt=projected, capacity=released_capacity, native_absent=True)
+        return _StartupRefusalOutcome(projected, report)
 
     async def _execute(self, item):
         frame = self.connection.require_current(item)
@@ -670,7 +708,14 @@ class R4ExecutionOwner:
             if len(self._sessions) >= self.max_sessions:
                 raise ConnectorError('CAPACITY_EXCEEDED', 'r4_execution',
                                      'The execution session capacity is exhausted.')
-            candidates = tuple(await self.candidate_provider(item.frame))
+            try:
+                candidates = tuple(await self.candidate_provider(item.frame))
+            except (NativeAdapterError, ConnectorError) as error:
+                if isinstance(error, ConnectorError) and error.code in (
+                        'STALE_GENERATION', 'CONTROL_DISCONNECTED', 'BINDING_NOT_AUTHORIZED',
+                        'RECONCILIATION_REQUIRED', 'JOURNAL_UNAVAILABLE'):
+                    raise
+                return await self._refuse_failed_preparation(item, None, prelease=True)
             self.connection.require_current(item)
             if self.launch_provider is not None:
                 setup = await self.launch_provider(item.frame)
