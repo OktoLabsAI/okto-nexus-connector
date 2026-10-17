@@ -288,8 +288,9 @@ class DaemonApp:
         # Technical capacity participates in the same Core ledger as ordinary
         # operations. The Server still negotiates support and authorizes work.
         from ..storage.ledger_binding import StateStoreLedgerBinding
+        self._audit_binding = StateStoreLedgerBinding(self.store)
         self.host = CoreRuntimeHost(root, self.vault, capacity_enabled=True,
-                                    store_binding=StateStoreLedgerBinding(self.store))
+                                    store_binding=self._audit_binding)
         self.bridge = EventBridge(self._transport_for, self._core_ack,
                                   self._journal_page)
         self.runtimes = RuntimeManager(
@@ -303,6 +304,8 @@ class DaemonApp:
         self.lock = InstanceLock(paths.pid_dir(root))
         self.started_at = time.time()
         self._stopped = asyncio.Event()
+        self._audit_stop = asyncio.Event()
+        self._audit_task: asyncio.Task | None = None
         self._draining = False
         self._stream_watchers: set[asyncio.Task] = set()
         # CN3/G02: approvals keyed by (server_id, request_id); CN4-01
@@ -342,12 +345,36 @@ class DaemonApp:
                 transport=self.ipc.transport, address=self.ipc.address,
                 started_at=_now(), connector_version=__version__))
             self._start_transports()
+            self._audit_task = asyncio.create_task(
+                self._stage_audit_anchor(), name='connector-audit-anchor')
             logger.info("daemon ready (ipc=%s)", self.ipc.address)
             await self._stopped.wait()
             return await self._shutdown()
         finally:
+            self._audit_stop.set()
+            if self._audit_task is not None:
+                await self._audit_task
             self.lock.clear_readiness()
             self.lock.release()
+
+    async def _stage_audit_anchor(self) -> None:
+        """Retained background evidence; it never gates connector readiness."""
+        attempts = 0
+        while not self._audit_stop.is_set():
+            try:
+                ledger = await self.host.ensure_ledger()
+                await self._audit_binding.stage_audit_anchor(
+                    ledger, paths.journal_path(self.root), stop=self._audit_stop)
+                return
+            except Exception as exc:
+                attempts += 1
+                logger.warning('Connector audit anchor pending: %s',
+                    getattr(exc, 'code', type(exc).__name__))
+            try:
+                await asyncio.wait_for(self._audit_stop.wait(),
+                    timeout=min(30, 2 ** min(attempts, 5)))
+            except asyncio.TimeoutError:
+                pass
 
     def request_stop(self) -> None:
         self._stopped.set()
@@ -356,6 +383,9 @@ class DaemonApp:
         # CN1/A08+CN-05.01: draining blocks NEW admissions at the edge
         # FIRST; queries and containment remain available.
         self._draining = True
+        self._audit_stop.set()
+        if self._audit_task is not None:
+            await self._audit_task
         self.runtimes.begin_drain()
         reports: list[dict[str, object]] = []
         # Startup owns HTTP/state producers. Join them before closing the

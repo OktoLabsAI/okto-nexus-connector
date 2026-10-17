@@ -22,8 +22,59 @@ async def test_daemon_composition_installs_the_binding_adapter(tmp_path):
     try:
         ledger = await app.host.ensure_ledger()
         assert app.store.load().core_store_id == await ledger.physical_store_id()
+        await app._stage_audit_anchor()
+        state = app.store.load()
+        core = await ledger.journal_audit_anchor()
+        assert (state.core_audit_nonce, state.core_audit_revision,
+                state.core_audit_digest) == (core.nonce, core.revision, core.digest)
     finally:
         await app.host.shutdown_all()
+
+
+@pytest.mark.asyncio
+async def test_audit_anchor_retries_after_core_commit_without_state_commit(tmp_path, monkeypatch):
+    host, store = bound_host(tmp_path)
+    binding = host._store_binding
+    ledger = await host.ensure_ledger()
+    original = store.update
+    calls = 0
+    def interrupted(mutate):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError('state commit interrupted')
+        return original(mutate)
+    monkeypatch.setattr(store, 'update', interrupted)
+    try:
+        with pytest.raises(OSError, match='interrupted'):
+            await binding.stage_audit_anchor(ledger, paths.journal_path(tmp_path))
+        assert await ledger.journal_audit_anchor() is not None
+        assert store.load().core_audit_nonce == ''
+        anchor = await binding.stage_audit_anchor(ledger, paths.journal_path(tmp_path))
+        assert binding.stored_audit_anchor(await ledger.physical_store_id()) == anchor
+        assert calls == 2
+        snapshot = store.load()
+        snapshot.core_audit_nonce = ''
+        with pytest.raises(ConnectorError, match='PROFILE_DRIFT'):
+            store.save(snapshot)
+    finally:
+        await host.shutdown_all()
+
+
+@pytest.mark.asyncio
+async def test_journal_creation_advances_head_and_reanchors_without_readiness_gate(tmp_path):
+    host, store = bound_host(tmp_path)
+    try:
+        ledger = await host.ensure_ledger()
+        binding = host._store_binding
+        first = await binding.stage_audit_anchor(ledger, paths.journal_path(tmp_path))
+        assert first.revision == 0
+        await host.ensure_journal()
+        second = await binding.stage_audit_anchor(ledger, paths.journal_path(tmp_path))
+        assert second.revision == 1 and second.digest != first.digest
+        assert binding.stored_audit_anchor(await ledger.physical_store_id()) == second
+    finally:
+        await host.shutdown_all()
 
 
 @pytest.mark.asyncio
