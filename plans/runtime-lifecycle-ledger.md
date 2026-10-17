@@ -70,3 +70,12 @@ No global rollout; M3/M5 remain in progress.
 byte-verified packages and unchanged inputs. See
 [runtime-lifecycle-m3h.md](runtime-lifecycle-m3h.md). Global rollout and
 per-harness readiness remain pending in the canonical Nexus plan.
+
+## M3i — Partial inventory selection foundation
+
+36 installed cases passed with Core's format-3 contract, byte-verified packages
+and unchanged inputs. Publication and exact selection accept the same partial
+coverage; the Core vendor is synchronized. See
+[runtime-lifecycle-m3i.md](runtime-lifecycle-m3i.md). Independent daemon workers,
+onboarding batch ownership, joint execution qualification and global rollout
+remain pending. The current live instance was not changed.

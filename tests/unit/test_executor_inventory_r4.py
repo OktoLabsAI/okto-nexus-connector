@@ -68,6 +68,26 @@ def test_remote_executor_resolves_exact_displayed_installation(tmp_path):
             candidate_ref=ref_b, expected_inventory_revision=revision)
 
 
+def test_partial_publication_selection_uses_the_exact_observation_batch(tmp_path):
+    from nexus_connector_core import get_runtime_catalog
+    candidate = InstallationCandidate('codex_app_server', str(tmp_path/'codex'),
+        'sha256:'+'a'*64, 'explicit', 'selected')
+    coverage = {row.adapter_id: dict(state='PENDING', observation_age_ms=None, error_code=None)
+                for row in get_runtime_catalog().runtimes if row.discoverable}
+    coverage[candidate.adapter_id] = dict(state='PRESENT', observation_age_ms=50, error_code=None)
+    snapshot = executor_inventory_snapshot((candidate,), server_id='server', executor_id='executor',
+        producer_instance_id='owner', publication_sequence=1, observations=coverage)
+    assert all(row['adapter_id'] == candidate.adapter_id for row in snapshot['availability']['availability'])
+    kwargs = dict(adapter_id=candidate.adapter_id, candidate_ref=snapshot['evidence'][0]['candidate_ref'],
+                  expected_inventory_revision=snapshot['inventory_revision'])
+    assert resolve_executor_installation((candidate,), observations=coverage, **kwargs) == candidate
+    # Reconstructing a full scan would falsely claim ABSENT for the pending
+    # harnesses and cannot stand in for the publication actually selected.
+    with pytest.raises(ConnectorError) as refused:
+        resolve_executor_installation((candidate,), **kwargs)
+    assert refused.value.code == 'STALE_GENERATION'
+
+
 @pytest.mark.parametrize("change", [None, "server", "executor", "revision", "freshness"])
 async def test_authenticated_inventory_view_checks_scope_and_core_evidence(change):
     import httpx
