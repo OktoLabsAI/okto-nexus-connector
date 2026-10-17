@@ -101,3 +101,12 @@ PIDs are distinguished from daemon PIDs; cleanup drains the private daemon befor
 joining starter handles and never erases evidence of a survivor. See
 [runtime-lifecycle-m8-process.md](runtime-lifecycle-m8-process.md).
 Product wheels and global installation are unchanged; M5/M8 remain incomplete.
+
+## M6 — Supervisor experiment design (implementation pending)
+
+[runtime-lifecycle-m6-supervisor-adr.md](runtime-lifecycle-m6-supervisor-adr.md)
+selects the existing daemon/Core host for the isolated experiment. Process
+independence is established by the M8 checkpoint, but control replacement still
+waits for retained leases and containment. Named-pipe IPC, the actual comparison
+and an adoption decision remain pending. No default lifecycle or authority fence
+was changed by this design checkpoint.
