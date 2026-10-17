@@ -155,3 +155,14 @@ receipt; the Connector released the original capacity. See
 [runtime-lifecycle-m5b.md](runtime-lifecycle-m5b.md) and its results JSON.
 This covers post-lease native preparation errors; M5 and UI qualification
 remain open.
+
+## M3n — Pi version-probe dependency synchronization
+
+The vendored Core 0.0.12 wheel now has SHA-256
+`004a9472140bf2b89c1820281ba7c4a9a658a924adc0fe1e4fcdec749059f8b5`.
+It extends only Pi's owned version observation from three to ten seconds.
+Three source and three isolated installed Core cases passed; an installed
+disposable Nexus validated the real Pi connection, two Meta-harness turns and
+an automatic post-restart reply. See the Core M3 Pi probe report and Nexus
+`plans/runtime_lifecycle/m3n-pi-probe-ui.md`. Connector execution code is
+unchanged; a separate Connector-host UI gate remains pending under M5/UI-B.
