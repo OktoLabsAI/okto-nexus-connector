@@ -108,7 +108,8 @@ def make_environment(resolver: LaunchSecretResolver, overlay: LaunchOverlay):
 class CoreRuntimeHost:
     """Builds and owns Core runtime instances for the daemon."""
 
-    def __init__(self, root: Path, vault, *, max_owned_slots: int = 64, capacity_enabled: bool = False):
+    def __init__(self, root: Path, vault, *, max_owned_slots: int = 64,
+                 capacity_enabled: bool = False, store_binding=None):
         if type(max_owned_slots) is not int or max_owned_slots <= 0:
             raise ValueError('Invalid host capacity.')
         self.max_owned_slots = max_owned_slots
@@ -121,6 +122,7 @@ class CoreRuntimeHost:
         self._vault = vault
         self._journal_path = paths.journal_path(root)
         self._ledger_path = paths.owned_slot_ledger_path(root)
+        self._store_binding = store_binding
         # CN1/A03: keyed by the typed BindingKey — two Servers with the
         # same textual binding id never share an instance.
         self._runtimes: dict[BindingKey | ExecutionRuntimeKey, LocalRuntimeCore] = {}
@@ -192,11 +194,22 @@ class CoreRuntimeHost:
         return ledger
 
     async def _open_ledger(self):
+        if self._store_binding is not None:
+            await asyncio.to_thread(self._store_binding.preflight,
+                                    self._ledger_path, self._journal_path)
         def open_ledger():
             # A cold capacity reservation precedes any session journal.
             self._ledger_path.parent.mkdir(parents=True, exist_ok=True)
             return SQLiteOwnedSlotLedger(self._ledger_path, max_slots=self.max_owned_slots)
-        self._ledger = await asyncio.to_thread(open_ledger)
+        ledger = await asyncio.to_thread(open_ledger)
+        try:
+            if self._store_binding is not None:
+                store_id = await ledger.physical_store_id()
+                await asyncio.to_thread(self._store_binding.bind, store_id)
+        except BaseException:
+            await asyncio.shield(ledger.aclose())
+            raise
+        self._ledger = ledger
         return self._ledger
 
     def _runtime_for_capacity(self, session):

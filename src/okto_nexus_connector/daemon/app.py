@@ -287,7 +287,9 @@ class DaemonApp:
                 "vault.fallback_file.approved", False)))
         # Technical capacity participates in the same Core ledger as ordinary
         # operations. The Server still negotiates support and authorizes work.
-        self.host = CoreRuntimeHost(root, self.vault, capacity_enabled=True)
+        from ..storage.ledger_binding import StateStoreLedgerBinding
+        self.host = CoreRuntimeHost(root, self.vault, capacity_enabled=True,
+                                    store_binding=StateStoreLedgerBinding(self.store))
         self.bridge = EventBridge(self._transport_for, self._core_ack,
                                   self._journal_page)
         self.runtimes = RuntimeManager(
@@ -329,6 +331,9 @@ class DaemonApp:
             raise ConnectorError("DAEMON_ALREADY_RUNNING", "lock",
                                  "lock is held by an unverifiable process")
         try:
+            # Prove the shared physical store before advertising readiness or
+            # starting any Server control connection.
+            await self.host.ensure_ledger()
             token = self.lock.ensure_token()
             await self.ipc.start(paths.pid_dir(self.root), token)
             identity = _current_identity()
