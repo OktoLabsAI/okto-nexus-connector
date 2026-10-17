@@ -110,3 +110,11 @@ independence is established by the M8 checkpoint, but control replacement still
 waits for retained leases and containment. Named-pipe IPC, the actual comparison
 and an adoption decision remain pending. No default lifecycle or authority fence
 was changed by this design checkpoint.
+
+## M4d3 — Released pre-open capacity dependency qualification
+
+Core vendor synchronized. 70 distinct installed cases qualified: 68 passed in
+the initial campaign; two timed-out cases passed unchanged on the focused retry.
+Exact artifacts and unchanged inputs verified in both runs. See
+[runtime-lifecycle-m4d3.md](runtime-lifecycle-m4d3.md). Connector source and global
+installation are unchanged; remaining M4/M5 criteria are not closed.
