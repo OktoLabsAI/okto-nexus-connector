@@ -229,3 +229,47 @@ async def test_r4_host_defers_native_capture_to_installed_lease(selection, tmp_p
         assert resolve_execution_selection(store, frame=frame, candidates=[candidate]).candidate == candidate
     finally:
         await host.shutdown_all()
+
+
+@pytest.mark.parametrize('shutdown', ['host', 'other_executor'])
+async def test_composition_after_store_wait_respects_storage_owner(selection, tmp_path, monkeypatch, shutdown):
+    import threading
+    from nexus_connector_core import CoreError
+    from okto_nexus_connector.services import execution_selection
+    store, candidate, binding, frame, *_ = selection
+    acknowledge_execution_binding(store, binding=binding)
+    host = CoreRuntimeHost(state_dir(tmp_path / 'lifetime'), None)
+    entered, release = threading.Event(), threading.Event()
+    original, calls = execution_selection.resolve_execution_selection, []
+    def resolve(*args, **kwargs):
+        result = original(*args, **kwargs)
+        calls.append(result)
+        if len(calls) == 2:
+            entered.set()
+            assert release.wait(20)
+        return result
+    monkeypatch.setattr(execution_selection, 'resolve_execution_selection', resolve)
+    async def environment(_):
+        raise AssertionError('Composition cannot launch a provider.')
+    task = asyncio.create_task(host.build_r4(store, frame=frame, candidates=[candidate], environment=environment))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        journal = host.journal_if_open()
+        assert journal is not None
+        if shutdown == 'host':
+            await host.shutdown_all()
+            assert host.journal_if_open() is None
+            release.set()
+            with pytest.raises(CoreError, match='RUNTIME_DRAINING'):
+                await task
+            assert not host._runtimes
+        else:
+            await host.shutdown_executor(server_id='other', executor_id='other')
+            assert host.journal_if_open() is journal
+            release.set()
+            assert await task is not None
+            assert len(host._runtimes) == 1
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await host.shutdown_all()

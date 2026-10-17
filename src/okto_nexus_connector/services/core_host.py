@@ -133,20 +133,21 @@ class CoreRuntimeHost:
         # stores under concurrent starts.
         self._journal_gate: asyncio.Lock | None = None
         self._ledger_gate: asyncio.Lock | None = None
+        self._journal_task = None
+        self._ledger_task = None
+        self._shutdown_task = None
+        self._stores_closing = False
 
     # -- shared installation stores -------------------------------------
 
-    @property
-    def journal(self) -> SQLiteJournal:
-        """Synchronous view of the shared journal (diagnostics/tests).
+    def _require_stores(self, *, journal=None, ledger=None):
+        if (self._stores_closing or (journal is not None and journal is not self._journal)
+                or (ledger is not None and ledger is not self._ledger)):
+            raise CoreError('RUNTIME_DRAINING', 'connector_store_owner', retry_safe=True)
 
-        The daemon's event-loop paths construct through ``ensure_journal``
-        (the Core's async ``open_journal`` entry, C2/PC01.06) so the
-        blocking schema setup never runs on the loop.
-        """
-        if self._journal is None:
-            self._journal = SQLiteJournal(self._journal_path, limits=JournalLimits(max_owned_slots=self.max_owned_slots))
-        return self._journal
+    @staticmethod
+    def _opening_failed(task):
+        return task is not None and task.done() and (task.cancelled() or task.exception() is not None)
 
     async def ensure_journal(self) -> SQLiteJournal:
         """Open (once) the shared journal off the event loop.
@@ -154,27 +155,48 @@ class CoreRuntimeHost:
         CN1/CN-05.05: creation is single-flight — two concurrent starts
         share exactly one store, never orphan workers.
         """
+        self._require_stores()
         if self._journal is not None:
             return self._journal
+        ledger = await self.ensure_ledger()
         if self._journal_gate is None:
             self._journal_gate = asyncio.Lock()
         async with self._journal_gate:
-            if self._journal is None:
-                self._journal = await open_journal(self._journal_path, limits=JournalLimits(max_owned_slots=self.max_owned_slots))
+            self._require_stores(ledger=ledger)
+            if self._journal_task is None or self._opening_failed(self._journal_task):
+                self._journal_task = asyncio.create_task(self._open_journal(ledger))
+            task = self._journal_task
+        journal = await asyncio.shield(task)
+        self._require_stores(journal=journal)
+        return journal
+
+    async def _open_journal(self, ledger):
+        from nexus_connector_core import JournalLocation
+        await ledger.register_journal_locations((JournalLocation(self._journal_path.name),))
+        self._journal = await open_journal(self._journal_path, limits=JournalLimits(max_owned_slots=self.max_owned_slots))
         return self._journal
 
     async def ensure_ledger(self) -> SQLiteOwnedSlotLedger:
+        self._require_stores()
         if self._ledger is not None:
             return self._ledger
         if self._ledger_gate is None:
             self._ledger_gate = asyncio.Lock()
         async with self._ledger_gate:
-            if self._ledger is None:
-                def open_ledger():
-                    # A cold capacity reservation precedes any session journal.
-                    self._ledger_path.parent.mkdir(parents=True, exist_ok=True)
-                    return SQLiteOwnedSlotLedger(self._ledger_path, max_slots=self.max_owned_slots)
-                self._ledger = await asyncio.to_thread(open_ledger)
+            self._require_stores()
+            if self._ledger_task is None or self._opening_failed(self._ledger_task):
+                self._ledger_task = asyncio.create_task(self._open_ledger())
+            task = self._ledger_task
+        ledger = await asyncio.shield(task)
+        self._require_stores(ledger=ledger)
+        return ledger
+
+    async def _open_ledger(self):
+        def open_ledger():
+            # A cold capacity reservation precedes any session journal.
+            self._ledger_path.parent.mkdir(parents=True, exist_ok=True)
+            return SQLiteOwnedSlotLedger(self._ledger_path, max_slots=self.max_owned_slots)
+        self._ledger = await asyncio.to_thread(open_ledger)
         return self._ledger
 
     def _runtime_for_capacity(self, session):
@@ -190,6 +212,7 @@ class CoreRuntimeHost:
         ledger = await self.ensure_ledger()
         key = (server_id, executor_id)
         async with self._capacity_gate:
+            self._require_stores(ledger=ledger)
             prior = self._capacity_services.get(key)
             if prior and prior[0].boot_id == boot_id:
                 if prior[1] is not authority:
@@ -203,12 +226,6 @@ class CoreRuntimeHost:
         if prior:
             await prior[0].aclose()
         return service
-
-    @property
-    def ledger(self) -> SQLiteOwnedSlotLedger:
-        if self._ledger is None:
-            self._ledger = SQLiteOwnedSlotLedger(self._ledger_path, max_slots=self.max_owned_slots)
-        return self._ledger
 
     def journal_if_open(self):
         """CN2/N04 (b10): the shared JOURNAL PORT (public) when already
@@ -358,6 +375,7 @@ class CoreRuntimeHost:
         ledger = await self.ensure_ledger()
         if await resolve() != selection:
             raise ConnectorError('PROFILE_DRIFT', 'runtime_composition', 'The approved execution selection changed.')
+        self._require_stores(journal=journal, ledger=ledger)
         existing = self._runtimes.get(key)
         if existing is not None:
             if (self._execution_selections.get(key) != selection
@@ -423,6 +441,7 @@ class CoreRuntimeHost:
         candidate = self.candidate_for(binding)
         journal = await self.ensure_journal()
         ledger = await self.ensure_ledger()
+        self._require_stores(journal=journal, ledger=ledger)
         runtime = create_runtime(
             journal=journal,
             environment=environment,
@@ -521,6 +540,22 @@ class CoreRuntimeHost:
         return await self.shutdown_all(_scope=(server_id, executor_id))
 
     async def shutdown_all(self, *, _scope=None) -> list[tuple[str, str]]:
+        if _scope is not None:
+            return await self._shutdown_all(_scope=_scope)
+        if self._shutdown_task is None or self._shutdown_task.done():
+            self._stores_closing = True
+            self._shutdown_task = asyncio.create_task(self._shutdown_host())
+        return await asyncio.shield(self._shutdown_task)
+
+    async def _shutdown_host(self):
+        # Cancellation of a shutdown observer cannot detach store creation.
+        tasks = tuple(task for task in (self._journal_task, self._ledger_task) if task is not None)
+        await asyncio.gather(*tasks, return_exceptions=True)
+        result = await self._shutdown_all()
+        self._stores_closing = False
+        return result
+
+    async def _shutdown_all(self, *, _scope=None) -> list[tuple[str, str]]:
         """Bounded shutdown; unknown outcomes are never discarded.
 
         CN1/A08+CN-05.03: an instance whose report leaves any session
@@ -573,16 +608,20 @@ class CoreRuntimeHost:
             # survives; with everything resolved, close through the
             # Core's public async lifecycle.
             pass
-        if not self._runtimes and not self._capacity_services:
+        # These stores belong to the installation, not a single connection.
+        # An executor reconnect must not close a sibling's pending composition.
+        if _scope is None and not self._runtimes and not self._capacity_services:
             if self._journal is not None:
                 await self._journal.aclose()
                 self._journal = None
+            self._journal_task = None
             if self._ledger is not None:
                 await self._ledger.aclose()
                 self._ledger = None
+            self._ledger_task = None
         return outcomes
 
-    def storage_status(self):
+    async def storage_status(self):
         """Journal-level storage observation (diagnostics only)."""
         from nexus_connector_core.discovery import fingerprint
         marker = self.root / ".user-private"
@@ -591,17 +630,13 @@ class CoreRuntimeHost:
         candidate = InstallationCandidate(
             "codex_app_server", str(marker), fingerprint(marker),
             "explicit", "selected")
+        journal = await self.ensure_history_journal()
         probe = create_runtime(
-            journal=self.journal, environment=_empty_environment,
+            journal=journal, environment=_empty_environment,
             candidates={"codex_app_server": candidate},
             workspace_roots={"probe": str(self.root)},
             native_factory=_RejectingFactory())
-        import asyncio
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(probe.storage_status())
-        finally:
-            loop.close()
+        return await probe.storage_status()
 
 
 def _composite_fingerprint(executable: Path,

@@ -1,0 +1,762 @@
+{
+  "checkpoint": "M4d4b",
+  "global_rollout": false,
+  "real_ui_gate": "NOT_RUN_FOR_THIS_TECHNICAL_CHECKPOINT",
+  "manifest": {
+    "artifacts": [
+      {
+        "module": "nexus_connector_core",
+        "sha256": "e93dc1e1cdcc5d0868265c36c0e1200a1ff048aa79371e410727b3dfe74cad3b",
+        "files": 160
+      },
+      {
+        "module": "okto_nexus_connector",
+        "sha256": "2e222043b889314a21492191a77b41b1ba890f1a8cc12b3885efecc651ce0893",
+        "files": 99
+      }
+    ],
+    "tests": [
+      "unit/test_host_journal_registration.py",
+      "unit/test_capacity_composition.py",
+      "unit/test_execution_selection.py",
+      "unit/test_r4_execution.py",
+      "unit/test_r4_daemon_execution.py",
+      "unit/test_core02_integration.py",
+      "regressoes/test_connector_audit_cn2.py"
+    ],
+    "exit_code": 0,
+    "changed_inputs": [],
+    "inputs_sha256": "ee377fb22136c88f8590cf6dc0fe0316fe86f6da4284b1e1e1281fbaed7a0297"
+  },
+  "junit": {
+    "name": "pytest",
+    "errors": "0",
+    "failures": "0",
+    "skipped": "1",
+    "tests": "119",
+    "time": "67.196",
+    "timestamp": "2026-10-17T08:07:45.712231-03:00",
+    "hostname": "Alienware_m15"
+  },
+  "junit_sha256": "398f26565ef36a2f913ddeeeef2cf5045eb10deb77c44f5cf235aad79a955672",
+  "isolated_interpreter": true,
+  "cases": [
+    {
+      "classname": "tests.unit.test_host_journal_registration",
+      "name": "test_shared_registration_precedes_open_and_survives_executor_reconnect",
+      "time": "0.286",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_host_journal_registration",
+      "name": "test_failed_open_retries_same_registration",
+      "time": "0.087",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_host_journal_registration",
+      "name": "test_cancelled_creation_and_shutdown_observers_do_not_abandon_stores[ledger]",
+      "time": "0.064",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_host_journal_registration",
+      "name": "test_cancelled_creation_and_shutdown_observers_do_not_abandon_stores[journal]",
+      "time": "0.080",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_host_journal_registration",
+      "name": "test_late_capacity_facade_cannot_publish_a_closed_store",
+      "time": "0.078",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_capacity_composition",
+      "name": "test_slow_retiring_observer_does_not_block_another_capacity_namespace",
+      "time": "0.062",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_capacity_composition",
+      "name": "test_connector_namespaces_share_budget_without_launch_or_cross_scope_release",
+      "time": "0.118",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_capacity_composition",
+      "name": "test_connector_reconnect_looks_up_original_hold_and_fences_old_facade",
+      "time": "0.103",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_capacity_composition",
+      "name": "test_connector_default_capacity_is_not_enabled",
+      "time": "0.009",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_capacity_composition",
+      "name": "test_reconciliation_cancels_fenced_holds_without_discarding_consumed_capacity[False]",
+      "time": "0.214",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_capacity_composition",
+      "name": "test_reconciliation_cancels_fenced_holds_without_discarding_consumed_capacity[True]",
+      "time": "0.141",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_unrelated_inventory_change_preserves_approved_and_running_selection",
+      "time": "1.174",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_approved_binding_roundtrip_does_not_downgrade_on_publication_replay",
+      "time": "0.186",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_cross_scope_or_stale_open_never_resolves[server_id]",
+      "time": "0.204",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_cross_scope_or_stale_open_never_resolves[executor_id]",
+      "time": "0.161",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_cross_scope_or_stale_open_never_resolves[agent_id]",
+      "time": "0.152",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_cross_scope_or_stale_open_never_resolves[workspace_id]",
+      "time": "0.152",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_cross_scope_or_stale_open_never_resolves[workspace_binding_id]",
+      "time": "0.136",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_cross_scope_or_stale_open_never_resolves[binding_revision]",
+      "time": "0.162",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_cross_scope_or_stale_open_never_resolves[authorization_revision]",
+      "time": "0.162",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_cross_scope_or_stale_open_never_resolves[configuration_revision]",
+      "time": "0.168",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_cross_scope_or_stale_open_never_resolves[candidate_ref]",
+      "time": "0.175",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_cross_scope_or_stale_open_never_resolves[realization_ref]",
+      "time": "0.204",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_cross_scope_or_stale_open_never_resolves[realization_revision]",
+      "time": "0.196",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_cross_scope_or_stale_open_never_resolves[inventory_revision]",
+      "time": "0.167",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_physical_or_persisted_drift_never_resolves[binary]",
+      "time": "0.276",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_physical_or_persisted_drift_never_resolves[root]",
+      "time": "0.204",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_physical_or_persisted_drift_never_resolves[local_configuration]",
+      "time": "0.162",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_physical_or_persisted_drift_never_resolves[local_candidate]",
+      "time": "0.245",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_physical_or_persisted_drift_never_resolves[duplicate_binding]",
+      "time": "0.215",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_physical_or_persisted_drift_never_resolves[inventory]",
+      "time": "0.238",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_publication_ack_rejects_concurrent_configuration_change",
+      "time": "0.164",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_pi_dependency_bytes_remain_part_of_approved_selection",
+      "time": "0.542",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_host_revalidates_after_shared_store_wait_and_before_cache_reuse",
+      "time": "0.655",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_r4_host_defers_native_capture_to_installed_lease[None]",
+      "time": "0.583",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_r4_host_defers_native_capture_to_installed_lease[discovered]",
+      "time": "0.614",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_composition_after_store_wait_respects_storage_owner[host]",
+      "time": "0.290",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_execution_selection",
+      "name": "test_composition_after_store_wait_respects_storage_owner[other_executor]",
+      "time": "0.392",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_native_unknown_reply_uses_only_exact_durable_fact_and_preserves_connection[durable]",
+      "time": "1.501",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_native_unknown_reply_uses_only_exact_durable_fact_and_preserves_connection[missing]",
+      "time": "0.950",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_native_unknown_reply_uses_only_exact_durable_fact_and_preserves_connection[wrong_hash]",
+      "time": "0.950",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_parallel_openings_do_not_block_ready_session_or_controls[2]",
+      "time": "2.384",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_parallel_openings_do_not_block_ready_session_or_controls[4]",
+      "time": "3.412",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_parallel_openings_do_not_block_ready_session_or_controls[8]",
+      "time": "4.918",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_preparing_sessions_count_against_host_capacity",
+      "time": "0.237",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_failed_native_open_keeps_connection_and_next_session_working[False]",
+      "time": "1.294",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_failed_native_open_keeps_connection_and_next_session_working[True]",
+      "time": "1.375",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_quota_refusals_are_durable_without_consuming_close_capacity",
+      "time": "2.455",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_control_and_cancelled_stop_do_not_abandon_receipt_producer",
+      "time": "1.416",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_lane_invalidated_during_launch_wait_never_opens",
+      "time": "0.312",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_publication_failure_fences_without_repeating_native_open",
+      "time": "0.695",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_frozen_open_selection_and_typed_control_projection",
+      "time": "1.430",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_duplicate_open_never_requests_a_second_lease",
+      "time": "0.891",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_cross_binding_control_cannot_borrow_a_runtime",
+      "time": "0.986",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_native_decision_uses_observed_request_and_same_receipt[approval.decide]",
+      "time": "1.224",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_native_decision_uses_observed_request_and_same_receipt[input.provide]",
+      "time": "1.189",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_native_factory_requires_pi_before_native_open",
+      "time": "0.343",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_close_fences_native_ingress_before_native_close",
+      "time": "1.173",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_close_owner_publishes_after_deadline_and_retains_commit_on_stop",
+      "time": "1.452",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_execution",
+      "name": "test_stream_registry_failure_prevents_native_open",
+      "time": "0.728",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_renewal_deadline_uses_earliest_lane_with_safety_margin",
+      "time": "0.002",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_automatic_lane_and_default_launch_publish_one_receipt[True]",
+      "time": "1.480",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_change_during_ticket_reply_never_attaches_or_opens[revoke-True]",
+      "time": "0.320",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_change_during_ticket_reply_never_attaches_or_opens[identity-True]",
+      "time": "0.336",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_change_during_ticket_reply_never_attaches_or_opens[origin-True]",
+      "time": "0.306",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_revoked_binding_and_wrong_connection_refuse_publication[True]",
+      "time": "0.456",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_executor_shutdown_preserves_other_runtime_owner[True]",
+      "time": "1.317",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_cancelled_cleanup_observer_keeps_pending_owner_alive[True]",
+      "time": "0.300",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_each_lane_uses_its_agent_identity_without_cross_server_fallback[True]",
+      "time": "0.402",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_disconnected_cleanup_preserves_the_installed_core_lease[expiry-True]",
+      "time": "1.284",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_disconnected_cleanup_preserves_the_installed_core_lease[explicit_stop-True]",
+      "time": "1.376",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_disconnected_cleanup_preserves_the_installed_core_lease[inspection_failure-True]",
+      "time": "1.472",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_lease_wait_observes_only_the_selected_executor",
+      "time": "0.008",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_unknown_lease_observation_does_not_authorize_early_cleanup",
+      "time": "0.122",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_lease_wait_distinguishes_empty_runtime_from_admitted_or_opening_work[empty]",
+      "time": "0.169",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_lease_wait_distinguishes_empty_runtime_from_admitted_or_opening_work[opening]",
+      "time": "0.269",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_lease_wait_distinguishes_empty_runtime_from_admitted_or_opening_work[claimed]",
+      "time": "0.376",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_lease_wait_distinguishes_empty_runtime_from_admitted_or_opening_work[active]",
+      "time": "0.355",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_failed_inspection_keeps_other_started_inspections_owned",
+      "time": "0.008",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_execution_uses_accepted_batch_and_revalidates_scope[False-True]",
+      "time": "1.819",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_execution_uses_accepted_batch_and_revalidates_scope[True-True]",
+      "time": "0.390",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_open_refuses_unusable_selected_observation_without_discovery[pending-True]",
+      "time": "0.389",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_open_refuses_unusable_selected_observation_without_discovery[failed-True]",
+      "time": "0.317",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_open_refuses_unusable_selected_observation_without_discovery[expired-True]",
+      "time": "0.352",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_open_refuses_unusable_selected_observation_without_discovery[missing-True]",
+      "time": "0.314",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_open_refuses_unusable_selected_observation_without_discovery[stopping-True]",
+      "time": "0.291",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_r4_daemon_execution",
+      "name": "test_open_uses_accepted_selected_candidate_while_sibling_pending[True]",
+      "time": "1.057",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_core02_integration",
+      "name": "test_known_shim_shape_resolves_passively",
+      "time": "0.013",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_core02_integration",
+      "name": "test_dynamic_shim_refused",
+      "time": "0.025",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_core02_integration",
+      "name": "test_shim_resolution_never_runs_outside_windows",
+      "time": "0.009",
+      "skipped": {
+        "type": "pytest.skip",
+        "message": "covered above"
+      }
+    },
+    {
+      "classname": "tests.unit.test_core02_integration",
+      "name": "test_candidate_carries_recorded_build_identity",
+      "time": "0.021",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_core02_integration",
+      "name": "test_build_identity_drift_detected",
+      "time": "0.025",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_core02_integration",
+      "name": "test_binding_without_build_identity_still_path_bound",
+      "time": "0.011",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_core02_integration",
+      "name": "test_containment_status_reports_backend",
+      "time": "0.002",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_core02_integration",
+      "name": "test_pi_release_layout_discovered_passively",
+      "time": "0.058",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_core02_integration",
+      "name": "test_select_explicit_returns_core_candidate",
+      "time": "0.016",
+      "skipped": null
+    },
+    {
+      "classname": "tests.unit.test_core02_integration",
+      "name": "test_pi_identity_root_consistent_between_selection_and_revalidation",
+      "time": "0.091",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b01_saturation_must_not_block_interrupt",
+      "time": "0.937",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_observation_scheduler_admits_300_waiters",
+      "time": "1.314",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b02_queued_operation_revalidates_detached_lane",
+      "time": "0.834",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b03_wire_namespace_matches_resolved_local_session",
+      "time": "0.074",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b03_positive_same_server",
+      "time": "0.077",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b04_sparse_event_batch_returns_without_waiting_for_future_events",
+      "time": "0.314",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b05_retry_replays_unacknowledged_batch",
+      "time": "0.528",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b05b_future_ack_does_not_advance_core_watermark",
+      "time": "0.076",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b05c_foreign_ack_not_associated_with_local_stream",
+      "time": "0.058",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_control_priority_queue_conserves_two_simultaneous_inputs",
+      "time": "0.003",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_control_invalid_agent_is_refused_at_receiver",
+      "time": "0.466",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b06_failed_reconciliation_does_not_mark_transport_ready",
+      "time": "1.530",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b10_reconcile_durable_receipt_does_not_require_current_binary",
+      "time": "0.110",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b07_stop_failure_before_effect_keeps_session_retryable",
+      "time": "0.060",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b07_stop_failure_before_effect_keeps_session_retryable_core",
+      "time": "0.058",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b08_approval_manager_reaches_public_core_api",
+      "time": "0.045",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b09_managed_mcp_start_configures_server_url_not_only_token",
+      "time": "1.164",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b11_bootstrap_ticket_key_matches_selected_binding_agent",
+      "time": "0.804",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b11b_lane_added_after_ready_is_actually_attached",
+      "time": "0.093",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b12_invalid_link_rejected_before_ticket_send[ftp://remote.example/link]",
+      "time": "0.004",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b12_invalid_link_rejected_before_ticket_send[ws:///link]",
+      "time": "0.004",
+      "skipped": null
+    },
+    {
+      "classname": "tests.regressoes.test_connector_audit_cn2",
+      "name": "test_b12_invalid_link_rejected_before_ticket_send[ws://user:password@remote.example/link]",
+      "time": "0.004",
+      "skipped": null
+    }
+  ]
+}

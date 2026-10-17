@@ -118,3 +118,14 @@ the initial campaign; two timed-out cases passed unchanged on the focused retry.
 Exact artifacts and unchanged inputs verified in both runs. See
 [runtime-lifecycle-m4d3.md](runtime-lifecycle-m4d3.md). Connector source and global
 installation are unchanged; remaining M4/M5 criteria are not closed.
+
+## M4d4b — Physical registry and retained shared-store lifetime
+
+Shared journal intent is registered through Core before creation. Retained
+open/shutdown tasks prevent cancelled observers from abandoning stores;
+executor reconnect preserves shared storage, and late compositions reject
+closed handles. Installed qualification passed 118 tests with one platform
+skip, exact package bytes and unchanged inputs. See
+[runtime-lifecycle-m4d4b.md](runtime-lifecycle-m4d4b.md) and its results JSON.
+Core vendor is synchronized to the qualified `2afb894` artifact. The first
+audit frontier, M4/M5 completion and coordinated global rollout remain pending.
