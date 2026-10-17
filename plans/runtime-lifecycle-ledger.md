@@ -63,3 +63,10 @@ failure, final qualification and remaining renewal-isolation scope.
 71 installed cases passed. See [runtime-lifecycle-m3e.md](runtime-lifecycle-m3e.md) for scope,
 artifact identities, initial test failures and remaining boundaries.
 No global rollout; M3/M5 remain in progress.
+
+## M3h — Shared parallel discovery (validated checkpoint)
+
+35 installed discovery/inventory cases passed with the updated Core wheel,
+byte-verified packages and unchanged inputs. See
+[runtime-lifecycle-m3h.md](runtime-lifecycle-m3h.md). Global rollout and
+per-harness readiness remain pending in the canonical Nexus plan.
