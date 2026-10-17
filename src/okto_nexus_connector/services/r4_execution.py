@@ -22,7 +22,9 @@ from nexus_connector_core import (
     project_r4_bound_receipt,
     prepare_r4_lease_refusal, persist_r4_lease_refusal,
     prepare_r4_stopped_refusal, persist_r4_operation_refusal,
+    prepare_r4_startup_refusal, persist_r4_startup_refusal,
 )
+from nexus_connector_core.native.adapter_types import NativeAdapterError
 
 from ..errors import ConnectorError
 from ..transport.lease_denial import LeaseRequestDenied
@@ -568,6 +570,44 @@ class R4ExecutionOwner:
                 except TimeoutError:
                     pass
 
+    async def _refuse_failed_preparation(self, item, session):
+        """Finish only an opening that never entered Core native admission."""
+        frame = self.connection.require_current(item)
+        session.stopped.set()
+        if session.renewal is not None:
+            await asyncio.gather(session.renewal, return_exceptions=True)
+        await self._contain_session(session, frame, publish_release=False)
+        if not session.contained:
+            raise CoreError('RECONCILIATION_REQUIRED', 'r4_startup_containment')
+        operation = OperationKey(frame['server_id'], frame['executor_id'], frame['operation_id'])
+        session_key = SessionKey(frame['server_id'], frame['executor_id'], frame['session_id'])
+        journal = await self.host.ensure_history_journal()
+        if await journal.get_session_claim(session_key) is not None:
+            raise CoreError('RECONCILIATION_REQUIRED', 'r4_startup_claim')
+        refusal = prepare_r4_startup_refusal(frame)
+        binding = refusal['binding']
+        # Persist the refusal association before touching capacity. A crash
+        # before Core fencing leaves the original preopen recovery obligation.
+        await asyncio.to_thread(self.publications.bind, binding, refusal=refusal)
+        self._capacity_bindings[item.token] = binding
+        if self.capacity_provider is not None:
+            capacity = await self.capacity_provider()
+            ledger = await self.host.ensure_ledger()
+            reservation = await ledger.capacity_for_operation(operation,
+                action='runtime.open', now=self.clock(), boot_id=capacity.boot_id)
+            if reservation is not None:
+                if reservation.request.unit != 'new_session' or any(
+                        getattr(reservation.request.scope, name) != frame[name]
+                        for name in ('server_id', 'executor_id', 'agent_id', 'binding_id',
+                            'session_id', 'connection_generation', 'session_owner_generation')):
+                    raise CoreError('SCOPE_MISMATCH', 'r4_startup_capacity')
+                released = await capacity.release_capacity(reservation.request,
+                    reservation.reservation_id, 'ROLLBACK')
+                if released.state != 'RELEASED':
+                    raise CoreError('RECONCILIATION_REQUIRED', 'r4_startup_capacity')
+        receipt = await persist_r4_startup_refusal(journal, refusal)
+        return project_r4_bound_receipt(binding, receipt, key=operation, receipt_revision=1)
+
     async def _execute(self, item):
         frame = self.connection.require_current(item)
         key = ExecutionRuntimeKey(frame["server_id"], frame["executor_id"], frame["binding_id"], frame["session_id"])
@@ -678,11 +718,14 @@ class R4ExecutionOwner:
                 session.renewal = asyncio.create_task(self._renew_session(session, dict(frame)),
                     name='r4-session-lease-renewal')
             context = self._context(item, runtime)
-            prepared = await runtime.prepare(LaunchIntent(frame['agent_id'], frame['workspace_id'],
-                payload['adapter_id'], mode=payload['mode'], model=payload.get('model'),
-                auth_refs=setup.auth_refs,
-                mcp_preset=tuple(payload.get('mcp_preset', [])),
-                harness_settings=validate_harness_settings(payload['adapter_id'], payload.get('harness_settings', {}))), context)
+            try:
+                prepared = await runtime.prepare(LaunchIntent(frame['agent_id'], frame['workspace_id'],
+                    payload['adapter_id'], mode=payload['mode'], model=payload.get('model'),
+                    auth_refs=setup.auth_refs,
+                    mcp_preset=tuple(payload.get('mcp_preset', [])),
+                    harness_settings=validate_harness_settings(payload['adapter_id'], payload.get('harness_settings', {}))), context)
+            except NativeAdapterError:
+                return await self._refuse_failed_preparation(item, session)
             self._prepared_openings[item.token] = (session, prepared)
         if action == 'runtime.open':
             retained_session, prepared = self._prepared_openings[item.token]

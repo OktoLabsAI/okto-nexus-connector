@@ -144,3 +144,14 @@ preparation-failure reproduction still closes the shared control connection;
 its scoped recovery, canonical closure and capacity-release integration remain
 pending. This checkpoint changes the dependency, not Connector execution code,
 and does not claim completion of M5 or a production rollout.
+
+## M5b — Scoped preparation failure
+
+54 selected installed cases passed with the current Core/Connector wheels and
+unchanged inputs. The remote preparation failure no longer closes the whole
+control connection; a separate Connector process demonstrated a failed first
+opening and successful subsequent handoff. Nexus accepted the scoped terminal
+receipt; the Connector released the original capacity. See
+[runtime-lifecycle-m5b.md](runtime-lifecycle-m5b.md) and its results JSON.
+This covers post-lease native preparation errors; M5 and UI qualification
+remain open.
