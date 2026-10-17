@@ -5,7 +5,7 @@ from dataclasses import replace
 import httpx
 import pytest
 
-from tests.unit.test_r4_daemon_control import control, eventually, dispose
+from tests.unit.test_r4_daemon_control import control, eventually, dispose, inventory_ready
 from okto_nexus_connector.errors import ConnectorError
 from okto_nexus_connector.transport.https_client import NexusHTTPClient, MANAGEMENT_REVISION
 from okto_nexus_connector.services.discovery_service import executor_inventory_snapshot
@@ -83,8 +83,8 @@ async def test_daemon_claims_before_discovery_and_recovers_lost_reply(control, m
         events.append(('claim', delivery))
         return delivery
     monkeypatch.setattr(peer, 'claim_inventory_refresh', claim, raising=False)
-    async def discover():
-        events.append(('discover', None))
+    async def discover(*, adapter_ids, cancel_requested):
+        events.append(('discover', adapter_ids[0]))
         return []
     owner.discover = discover
     original = peer.publish_inventory
@@ -99,15 +99,18 @@ async def test_daemon_claims_before_discovery_and_recovers_lost_reply(control, m
     owner.clock = lambda: time.monotonic() + offset
     owner.start()
     try:
-        await eventually(lambda: owner.status()['control_ready'], diagnostics=owner.status)
+        await eventually(lambda: inventory_ready(owner), diagnostics=owner.status)
         offset = 6
-        await eventually(lambda: len(published) >= (3 if lost_reply else 2) and owner.status()['control_ready'],
+        expected = 'delivery-3' if lost_reply else 'delivery-2'
+        await eventually(lambda: expected in published and inventory_ready(owner),
                          diagnostics=owner.status)
-        assert events[:6] == [('claim', None), ('discover', None), ('publish', None),
-                            ('claim', 'delivery-2'), ('discover', None), ('publish', 'delivery-2')]
+        assert events[0] == ('claim', None)
+        claim_index = events.index(('claim', 'delivery-2'))
+        publish_index = events.index(('publish', 'delivery-2'))
+        assert {value for kind, value in events[claim_index + 1:publish_index] if kind == 'discover'} == {
+            'codex_app_server', 'claude_stream', 'pi_rpc'}
         if lost_reply:
-            assert published[2] == 'delivery-3'
-            assert peer.publications[2]['producer_instance_id'] != peer.publications[1]['producer_instance_id']
+            assert peer.publications[published.index('delivery-3')]['producer_instance_id'] != peer.publications[published.index('delivery-2')]['producer_instance_id']
         assert [item['publication_sequence'] for item in peer.publications] == list(range(1, len(published) + 1))
         assert not owner.status()['execution_ready']
     finally:

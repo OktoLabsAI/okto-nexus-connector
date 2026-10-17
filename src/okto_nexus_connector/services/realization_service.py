@@ -54,7 +54,7 @@ def stage_local_realization(
     adapter_id: str, candidate_ref: str, inventory_revision: str,
     workspace_root: Path, workspace_id: str | None,
     workspace_label: str, configuration_digest: str,
-    local_consent_id: str,
+    local_consent_id: str, observations=None,
 ) -> LocalRealizationRecord:
     """Check local evidence and persist a recoverable publication intent."""
     for name, value in (
@@ -87,6 +87,7 @@ def stage_local_realization(
     selected = resolve_executor_installation(
         candidates, adapter_id=adapter_id, candidate_ref=candidate_ref,
         expected_inventory_revision=inventory_revision,
+        observations=observations,
     )
     try:
         observed_fingerprint = selected_fingerprint(selected)

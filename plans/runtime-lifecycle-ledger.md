@@ -79,3 +79,14 @@ coverage; the Core vendor is synchronized. See
 [runtime-lifecycle-m3i.md](runtime-lifecycle-m3i.md). Independent daemon workers,
 onboarding batch ownership, joint execution qualification and global rollout
 remain pending. The current live instance was not changed.
+
+## M3i — Independent daemon producer (validated checkpoint)
+
+The actual daemon now separates per-harness observation/publication from the
+control loop and consumes accepted batches for onboarding and session open.
+The revised source campaign passed 91 cases, including retained shutdown,
+connection renewal with Pi discovery held, partial selection, fresh evidence
+and refresh frontiers. Installed artifact qualification passed 164 cases,
+with unchanged inputs, exact package/source byte verification and valid dependencies.
+See [runtime-lifecycle-m3i-producer.md](runtime-lifecycle-m3i-producer.md).
+This does not complete M3/M5 or the coordinated real UI gate.

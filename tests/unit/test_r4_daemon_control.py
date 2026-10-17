@@ -84,7 +84,7 @@ def control(tmp_path):
                 self.lost = False
                 raise ConnectorError('OUTCOME_UNKNOWN', 'inventory', 'The reply was lost.')
             return InventoryAccepted('srv', executor_id, snapshot['publication_sequence'], snapshot['inventory_revision'], 120000)
-        async def discover(self):
+        async def discover(self, **kwargs):
             if self.after_discovery:
                 self.after_discovery()
             return []
@@ -133,24 +133,33 @@ async def dispose(owner, host):
     await host.shutdown_all()
 
 
+def inventory_ready(owner):
+    inventory = owner.inventory_owner
+    return (owner.status()['control_ready'] and inventory is not None
+            and inventory.published_batch is not None
+            and all(row.state in ('PRESENT', 'ABSENT') for row in inventory.published_batch.observations))
+
+
 async def test_startup_reconnect_and_reboot_keep_executor_and_sequence(control):
     owner, peer, store, host, vault = control
     owner.start()
     try:
-        await eventually(lambda: owner.status()['control_ready'])
+        await eventually(lambda: inventory_ready(owner))
         assert not owner.status()['execution_ready'] and peer.report['complete'] is True
         assert store.load().execution_executors[0].executor_id == 'executor'
         peer.sockets[0].online = False
-        await eventually(lambda: len(peer.sockets) == 2 and owner.status()['control_ready'])
-        assert [p['publication_sequence'] for p in peer.publications] == [1, 2]
+        await eventually(lambda: len(peer.sockets) == 2 and inventory_ready(owner))
+        sequences = [p['publication_sequence'] for p in peer.publications]
+        assert sequences == sorted(set(sequences)) and sequences[0] == 1
         assert 'nxt4_' not in store.path.read_text() and 'secret' not in str(owner.status())
         await owner.stop()
+        previous = store.load().execution_executors[0].inventory_publication_sequence
         reboot = R4DaemonControl(store, vault, host, 'srv', http_factory=owner.http_factory,
             connect=peer.connect, discover=peer.discover, retry_delays=(0.01,), poll_seconds=0.01)
         reboot.start()
         try:
-            await eventually(lambda: reboot.status()['control_ready'])
-            assert peer.publications[-1]['publication_sequence'] == 3
+            await eventually(lambda: inventory_ready(reboot))
+            assert peer.publications[-1]['publication_sequence'] > previous
             assert peer.publications[-1]['producer_instance_id'] != peer.publications[0]['producer_instance_id']
         finally:
             await reboot.stop()
@@ -180,8 +189,9 @@ async def test_lost_publication_reply_never_reuses_sequence(control):
     peer.lost = True
     owner.start()
     try:
-        await eventually(lambda: owner.status()['control_ready'], diagnostics=owner.status)
-        assert [p['publication_sequence'] for p in peer.publications] == [1, 2]
+        await eventually(lambda: peer.calls == 2 and inventory_ready(owner), diagnostics=owner.status)
+        sequences = [p['publication_sequence'] for p in peer.publications]
+        assert sequences == list(range(1, len(sequences) + 1)) and len(sequences) >= 2
         assert peer.calls == 2 and len(peer.sockets) == 2 and not peer.sockets[0].online
     finally:
         await dispose(owner, host)
@@ -308,6 +318,7 @@ async def test_local_change_during_discovery_fences_publication(control):
     owner.start()
     try:
         await eventually(lambda: owner.error_code is not None, diagnostics=owner.status)
+        await eventually(lambda: all(not socket.online for socket in peer.sockets))
         assert not peer.publications and all(not socket.online for socket in peer.sockets)
         assert store.load().execution_executors[0].inventory_publication_sequence == 0
     finally:
@@ -450,8 +461,8 @@ async def test_realization_outlives_cancelled_ipc_waiter_and_fences_bootstrap_ro
     monkeypatch.setattr(ExecutorOnboarding, "realize", realize)
     owner.start()
     try:
-        await eventually(lambda: owner.status()["control_ready"])
-        observer = asyncio.create_task(owner.realize())
+        await eventually(lambda: inventory_ready(owner))
+        observer = asyncio.create_task(owner.realize(adapter_id='codex_app_server'))
         await asyncio.wait_for(entered.wait(), 3)
         observer.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -462,7 +473,7 @@ async def test_realization_outlives_cancelled_ipc_waiter_and_fences_bootstrap_ro
         assert peer.calls == 1 and not applications
         release.set()
         await eventually(lambda: peer.calls == 2 and owner.status()["control_ready"])
-        assert applications == ["nxt4_synthetic_1"]
+        assert not applications  # Retained work cannot publish after its inventory owner is fenced.
         assert not owner._onboarding_tasks
     finally:
         release.set()
@@ -481,7 +492,7 @@ async def test_realization_refreshes_only_its_stale_administrative_ticket(contro
     monkeypatch.setattr(ExecutorOnboarding, "realize", realize)
     owner.start()
     try:
-        await eventually(lambda: owner.status()["control_ready"])
+        await eventually(lambda: inventory_ready(owner))
         original = owner._bootstrap
         connection = owner.connection
         async def me(key):
@@ -491,7 +502,7 @@ async def test_realization_refreshes_only_its_stale_administrative_ticket(contro
             return replace(original, authorization_revision=3, ticket="fresh-administrative-ticket")
         monkeypatch.setattr(peer, "me", me)
         monkeypatch.setattr(owner.registration, "bootstrap", fresh)
-        assert await owner.realize() == {"realization_ref": "opaque"}
+        assert await owner.realize(adapter_id='codex_app_server') == {"realization_ref": "opaque"}
         assert refreshed == ["srv"]
         assert owner._bootstrap is original and owner.connection is connection
     finally:
@@ -546,7 +557,8 @@ async def test_repeated_ticket_renewals_do_not_reconnect(control):
         connection, execution = owner.connection, owner.execution
         for index in range(4):
             instant[0] += 421
-            await eventually(lambda: len(renewals) == index + 1)
+            await eventually(lambda: len(renewals) == index + 1 and
+                owner._bootstrap.deadline_monotonic == instant[0] + 600)
             assert owner.connection is connection and owner.execution is execution
             assert connection.online and not owner.cleanup_pending
             assert peer.calls == 1 and len(peer.sockets) == 1

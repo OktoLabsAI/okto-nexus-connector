@@ -8,7 +8,6 @@ from nexus_connector_core import execute_capacity_control, CAPACITY_CONTRACT_REV
 
 from ..errors import ConnectorError
 from ..transport.https_client import R4BindingView
-from ..services.discovery_configuration import configured_candidates
 from ..services.executor_registration import _identity, _profile
 from ..services.r4_execution import R4ExecutionOwner
 from ..services.r4_tickets import acquire_ticket
@@ -153,16 +152,14 @@ class R4DaemonExecution:
         return self._guard(frame)
 
     async def _candidates(self, frame):
+        lane = await self._current(frame)
+        inventory = self.control.inventory_owner
+        if inventory is None:
+            raise ConnectorError('INVENTORY_NOT_FRESH', 'r4_launch',
+                                 'The inventory producer is not ready.', retry_safe=True)
+        batch = await inventory.require_batch(lane.binding.adapter_id)
         await self._current(frame)
-        if self.control.discover is None:
-            snapshot = await asyncio.to_thread(self.control._snapshot)
-            candidates = tuple(await configured_candidates(snapshot[0].discovery_configuration,
-                               observations=snapshot[0].installation_observations))
-            await self.control._require(snapshot)
-        else:
-            candidates = tuple(await self.control.discover())
-        await self._current(frame)
-        return candidates
+        return batch.candidates
 
     async def _launch(self, frame):
         lane = await self._current(frame)

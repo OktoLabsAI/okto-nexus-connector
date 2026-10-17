@@ -15,6 +15,8 @@ from okto_nexus_connector.storage.state_store import ServerProfileRecord, Identi
 from okto_nexus_connector.transport.https_client import R4BindingTicket, R4SessionCapability
 from tests.unit.test_execution_selection import selection
 from tests.unit.test_r4_execution import Connection, Factory, observed
+from tests.unit.inventory_fixture import accepted_batch
+from okto_nexus_connector.daemon.r4_inventory import R4InventoryOwner
 
 
 def test_renewal_deadline_uses_earliest_lane_with_safety_margin():
@@ -44,10 +46,16 @@ async def lifecycle(selection, tmp_path):
     connection.attach_binding = attach
     connection.is_attached = lambda **scope: any(all(row.get(k)==v for k,v in scope.items()) for row in attached)
     host = CoreRuntimeHost(tmp_path / "runtime", vault)
-    async def discover():
-        return [candidate]
+    async def discover(**kwargs):
+        raise AssertionError('Opening a session must not rediscover harnesses.')
+    scope = object()
+    async def require(value):
+        assert value is scope
     control = SimpleNamespace(store=store, vault=vault, host=host, connection=connection,
-        server_id="srv", executor_id="exe", discover=discover, cleanup_pending=False)
+        server_id="srv", executor_id="exe", discover=discover, cleanup_pending=False,
+        _require=require, clock=time.monotonic)
+    control.inventory_owner = R4InventoryOwner(control, None, scope, None, None)
+    control.inventory_owner.published_batch = accepted_batch([candidate])
     class HTTP:
         origin = base_url = "https://nexus.test"
         after_ticket = None
@@ -358,27 +366,16 @@ async def test_failed_inspection_keeps_other_started_inspections_owned(tmp_path)
 
 @pytest.mark.parametrize("selection", [True], indirect=True)
 @pytest.mark.parametrize("drift", [False, True])
-async def test_default_execution_discovery_uses_persisted_scope_and_revalidates(lifecycle, monkeypatch, drift):
-    from okto_nexus_connector.daemon import r4_execution
+async def test_execution_uses_accepted_batch_and_revalidates_scope(lifecycle, monkeypatch, drift):
     owner, _, _, frame, native, _, published, _ = lifecycle
-    candidates = await owner.control.discover()
-    owner.control.discover = None
-    configuration = {"approved_scope": "fixture"}
-    snapshot = (SimpleNamespace(discovery_configuration=configuration, installation_observations=[]), None, None)
-    owner.control._snapshot = lambda: snapshot
+    snapshot = owner.control.inventory_owner.scope
     calls = []
-    async def discover(value, *, observations):
-        assert value == configuration
-        assert observations == []
-        calls.append("discover")
-        return candidates
     async def require(value):
         assert value is snapshot
         calls.append("revalidate")
         if drift:
             raise ConnectorError("PROFILE_DRIFT", "discovery", "The approved discovery scope changed.")
     owner.control._require = require
-    monkeypatch.setattr(r4_execution, "configured_candidates", discover)
     await owner.sync()
     if drift:
         with pytest.raises(ConnectorError, match="PROFILE_DRIFT"):
@@ -389,4 +386,37 @@ async def test_default_execution_discovery_uses_persisted_scope_and_revalidates(
         receipt = await observed(published, owner.owner)
         assert receipt["operation_id"] == frame["operation_id"]
         assert len(native.opened) == 1
-    assert calls and calls[0:2] == ["discover", "revalidate"]
+    assert calls and set(calls) == {"revalidate"}
+
+
+@pytest.mark.parametrize("selection", [True], indirect=True)
+@pytest.mark.parametrize("evidence", ['pending', 'failed', 'expired', 'missing', 'stopping'])
+async def test_open_refuses_unusable_selected_observation_without_discovery(lifecycle, evidence):
+    owner, _, _, frame, native, _, published, _ = lifecycle
+    inventory = owner.control.inventory_owner
+    batch = inventory.published_batch
+    adapter = batch.candidates[0].adapter_id
+    if evidence in ('pending', 'failed'):
+        inventory.published_batch = accepted_batch((), states={adapter: evidence.upper()})
+    elif evidence == 'expired':
+        inventory.published_batch = replace(batch, assembled_at_monotonic=time.monotonic() - 121)
+    elif evidence == 'missing':
+        inventory.published_batch = None
+    else:
+        inventory.begin_shutdown()
+    await owner.sync()
+    with pytest.raises(ConnectorError, match='INVENTORY_NOT_FRESH'):
+        await owner._candidates(frame)
+    assert not native.opened and published.empty()
+
+
+@pytest.mark.parametrize("selection", [True], indirect=True)
+async def test_open_uses_accepted_selected_candidate_while_sibling_pending(lifecycle):
+    owner, _, _, frame, native, _, published, _ = lifecycle
+    inventory = owner.control.inventory_owner
+    batch = inventory.published_batch
+    inventory.published_batch = accepted_batch(batch.candidates, states={'pi_rpc': 'PENDING'})
+    await owner.sync()
+    await owner.connection.emit(frame)
+    receipt = await observed(published, owner.owner)
+    assert receipt['operation_id'] == frame['operation_id'] and len(native.opened) == 1

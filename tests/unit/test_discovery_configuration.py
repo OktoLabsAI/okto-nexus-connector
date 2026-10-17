@@ -129,8 +129,10 @@ async def test_automatic_daemon_uses_persisted_configuration(control, tmp_path, 
     monkeypatch.setattr(service, "discover_installations", discover)
     owner.start()
     try:
-        await eventually(lambda: owner.status()["control_ready"])
+        await eventually(lambda: owner.status()["control_ready"] and len(observed) == 3)
         assert observed[0]["trusted_roots"] == (tmp_path.resolve(),)
+        assert {tuple(row['adapter_ids']) for row in observed} == {
+            ('codex_app_server',), ('claude_stream',), ('pi_rpc',)}
         assert store.load().execution_executors[0].discovery_configuration == value
         snapshot = owner._snapshot()
         service.configure_discovery(store, server_id="srv")

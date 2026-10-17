@@ -26,3 +26,7 @@ Pending: daemon-owned independent observations/publication, refresh frontiers,
 exact published-batch consumption by onboarding, coordinated Server rollout,
 joint installed execution tests and the major UI gate. This foundation does
 not complete M3/M5 or qualify an independent physical remote host.
+
+Follow-up: the actual daemon integration is now qualified in
+[runtime-lifecycle-m3i-producer.md](runtime-lifecycle-m3i-producer.md), with
+164 installed cases. Joint rollout and the real UI gate remain pending.
