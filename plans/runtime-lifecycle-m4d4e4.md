@@ -22,3 +22,9 @@ the verbose rerun passed all 39 in 44 seconds. The cause of the stall is not
 established, so this checkpoint does not claim a load or no-hang guarantee.
 The disposable wheel is `okto_nexus_connector-0.0.10-py3-none-any.whl`,
 SHA-256 `fae32af21020101875a96f2430399f4ba8d45b111d61a3d5f0fda3e96d305f82`.
+
+M4d4e5 adds a pre-readiness rollback check using the shared Core rule. A
+same-identity Core ledger restored behind the independent Connector state is
+refused before IPC readiness. Ten focused source and ten installed binding
+cases passed. The final disposable Connector wheel SHA-256 is
+`a2288bf73f11caf008cfb1bf52427da326d714d0e35d2321ed3b19c9528452b6`.

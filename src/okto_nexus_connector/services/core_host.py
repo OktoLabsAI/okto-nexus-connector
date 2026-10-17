@@ -20,6 +20,7 @@ from typing import Mapping
 from nexus_connector_core import (
     InstallationCandidate, LocalRuntimeCore, SQLiteOwnedSlotLedger,
     create_runtime, ExecutionCapacity, CoreError,
+    require_audit_snapshot_not_rolled_back,
 )
 from nexus_connector_core.environment import child_environment
 from nexus_connector_core.harness_config import HarnessHTTPTemplate
@@ -206,6 +207,12 @@ class CoreRuntimeHost:
             if self._store_binding is not None:
                 store_id = await ledger.physical_store_id()
                 await asyncio.to_thread(self._store_binding.bind, store_id)
+                stored = await asyncio.to_thread(
+                    self._store_binding.stored_audit_anchor, store_id)
+                if stored is not None:
+                    require_audit_snapshot_not_rolled_back(stored,
+                        await ledger.journal_audit_anchor(),
+                        await ledger.journal_registry_head())
         except BaseException:
             await asyncio.shield(ledger.aclose())
             raise

@@ -1,5 +1,6 @@
 """The daemon's JSON state must identify the physical Core ledger it owns."""
 import shutil
+import sqlite3
 
 import pytest
 
@@ -75,6 +76,33 @@ async def test_journal_creation_advances_head_and_reanchors_without_readiness_ga
         assert binding.stored_audit_anchor(await ledger.physical_store_id()) == second
     finally:
         await host.shutdown_all()
+
+
+@pytest.mark.asyncio
+async def test_same_identity_ledger_rollback_is_refused_before_ready(tmp_path):
+    host, store = bound_host(tmp_path)
+    ledger = await host.ensure_ledger()
+    await host.ensure_journal()
+    anchor = await host._store_binding.stage_audit_anchor(
+        ledger, paths.journal_path(tmp_path))
+    assert anchor.revision == 1
+    await host.shutdown_all()
+
+    # Simulate a Core-only physical snapshot restored behind independent
+    # Connector state while retaining the exact same store identity.
+    with sqlite3.connect(paths.owned_slot_ledger_path(tmp_path)) as db:
+        db.execute('DROP TRIGGER managed_journal_locations_no_delete')
+        db.execute('DELETE FROM managed_journal_locations')
+        db.execute('UPDATE managed_journal_head SET revision=0,digest=?,complete=1',
+                   ('0' * 64,))
+        db.execute('DELETE FROM managed_journal_audit_anchor')
+    restarted, _ = bound_host(tmp_path)
+    try:
+        with pytest.raises(Exception, match='PROFILE_DRIFT'):
+            await restarted.ensure_ledger()
+        assert store.load().core_audit_nonce == anchor.nonce
+    finally:
+        await restarted.shutdown_all()
 
 
 @pytest.mark.asyncio
