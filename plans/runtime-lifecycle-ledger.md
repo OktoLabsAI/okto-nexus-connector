@@ -187,3 +187,16 @@ the non-effectful runtime preparation; admitted open still validates the full
 identity before capacity reservation and spawn. Core passed 88 source and 11
 selected installed cases. Connector execution code is unchanged; Connector
 host and UI-B qualification remain pending.
+
+## M7b — Passive Pi identity reader budget
+
+The vendored Core 0.0.12 wheel now has SHA-256
+`d9cf577731e123c417eb731c6b34b5e6fa208be7f33d86441e426c8fedadc1e8`
+from Core commit `ab87980`. Passive inventory discovery uses two concurrent
+file readers; admitted runtime opens retain four. Both still hash the full
+dependency closure and return the same build identity. Core passed 100
+selected source and 100 isolated installed-wheel tests. Connector execution
+code and its Core version pin remain unchanged. Real Connector-host load and
+UI-B qualification remain pending.
+The Connector wheel was built and installed into a clean test environment
+with this exact vendored Core wheel; both packaging tests passed.
