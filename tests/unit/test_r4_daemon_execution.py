@@ -12,7 +12,7 @@ from okto_nexus_connector.identity.vault import RestrictedFileVault
 from okto_nexus_connector.services.core_host import CoreRuntimeHost, ExecutionRuntimeKey
 from okto_nexus_connector.services.execution_selection import acknowledge_execution_binding
 from okto_nexus_connector.storage.state_store import ServerProfileRecord, IdentityRecord
-from okto_nexus_connector.transport.https_client import R4BindingTicket, R4SessionCapability
+from okto_nexus_connector.transport.https_client import R4BindingTicket, R4SessionCapability, R4CapabilityMetadata
 from tests.unit.test_execution_selection import selection
 from tests.unit.test_r4_execution import Connection, Factory, observed
 from tests.unit.inventory_fixture import accepted_batch
@@ -73,9 +73,17 @@ async def lifecycle(selection, tmp_path):
                 "server_id", "executor_id", "binding_id", "agent_id", "workspace_id",
                 "workspace_binding_id", "session_id", "session_owner_generation",
                 "authorization_revision", "configuration_revision", "binding_revision", "credential_epoch")}
-            return R4SessionCapability("cap", "mcp-cap:cap", "nxc4_" + "x" * 40,
+            native = kwargs["audience"] == "nexus-native-session"
+            return R4SessionCapability("cap", "native-cap:cap" if native else "mcp-cap:cap", "nxc4_" + "x" * 40,
                 scope, kwargs["audience"], tuple(kwargs["actions"]), 60,
-                time.monotonic() + 60, self.base_url + "/mcp")
+                time.monotonic() + 60, None if native else self.base_url + "/mcp")
+        async def describe_r4_session_capability(self, key, *, frame, capability_id, audience, actions):
+            scope = {k: frame[k] for k in (
+                "server_id", "executor_id", "binding_id", "agent_id", "workspace_id",
+                "workspace_binding_id", "session_id", "session_owner_generation",
+                "authorization_revision", "configuration_revision", "binding_revision", "credential_epoch")}
+            return R4CapabilityMetadata(capability_id, "native-cap:" + capability_id,
+                scope, audience, actions, time.monotonic() + 60, "lease", 1, None)
         async def publish_operation_receipt(self, ticket, *, frame):
             assert ticket == "nxt4_lane"
             await published.put(frame)
@@ -156,6 +164,72 @@ async def test_executor_shutdown_preserves_other_runtime_owner(lifecycle):
         assert owner.host._journal is not None
     finally:
         owner.host._runtimes.pop(key)
+
+
+@pytest.mark.parametrize('selection', ['pi'], indirect=True)
+@pytest.mark.parametrize('phase', ['before_commit', 'after_commit'])
+async def test_native_claim_keeps_connector_owner_until_outcome_settles(lifecycle, phase):
+    import json
+
+    owner, http, _, frame, native, _, published, _ = lifecycle
+    await owner.sync()
+    await owner.connection.emit(frame)
+    await observed(published, owner.owner)
+    assert len(owner.host._native_action_owners) == 1
+    native_owner = next(iter(owner.host._native_action_owners.values()))
+    runtime = next(iter(owner.host._runtimes.values()))
+    scope = {name: frame[name] for name in (
+        'server_id', 'executor_id', 'binding_id', 'agent_id', 'workspace_id',
+        'workspace_binding_id', 'session_id', 'session_owner_generation',
+        'authorization_revision', 'configuration_revision', 'binding_revision',
+        'credential_epoch')}
+    context = runtime.r4_native_action_context(
+        scope, connection_id='connection', connection_generation=1)
+    await native_owner.launch(native.opened[0], frame['session_id'], context)
+    service = native_owner._service
+    entered, release = asyncio.Event(), asyncio.Event()
+    effects = []
+
+    async def committed(capability, *, request):
+        effects.append(request.operation_id)
+        if phase == 'after_commit':
+            entered.set()
+            await release.wait()
+        return {'handoff_id': 'work', 'status': 'CLAIMED', 'claim_epoch': 1}
+
+    http.native_action = committed
+    if phase == 'before_commit':
+        describe = http.describe_r4_session_capability
+        async def before_commit(*args, **kwargs):
+            entered.set()
+            await release.wait()
+            return await describe(*args, **kwargs)
+        http.describe_r4_session_capability = before_commit
+    reader, writer = await asyncio.open_connection('127.0.0.1', service.port)
+    writer.write((json.dumps({
+        'action': 'handoff.claim', 'operation_id': 'connector-claim-race',
+        'session_id': frame['session_id'], 'capability_ref': 'native-cap:cap',
+        'handoff_id': 'work', 'idempotency_key': 'claim-key',
+    }) + '\n').encode())
+    await writer.drain()
+    closing = None
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        closing = asyncio.create_task(owner.close())
+        await asyncio.sleep(.05)
+        assert not closing.done()
+        assert service.pending_count == 1
+        assert effects == ([] if phase == 'before_commit' else ['connector-claim-race'])
+    finally:
+        release.set()
+        if closing is not None:
+            await asyncio.wait_for(closing, 10)
+        writer.close()
+        await writer.wait_closed()
+    assert await reader.read() == b''
+    assert native.native.stopped
+    assert effects == ([] if phase == 'before_commit' else ['connector-claim-race'])
+    assert not owner.host._native_action_owners
 
 
 @pytest.mark.parametrize("selection", [True], indirect=True)
