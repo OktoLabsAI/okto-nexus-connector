@@ -83,13 +83,16 @@ owners or an additional permanent recovery path. Otherwise retain the shared
 Core library in the embedded host and record why this experiment did not improve
 the outcome. A local Connector is not a second physical machine qualification.
 
-## Checkpoints M6a/M6b and pending work
+## Checkpoints M6a/M6b/M6c and pending work
 
 The opt-in Windows named-pipe adapter reached the actual daemon dispatcher and
 Core host in a disposable separate process; source and installed-wheel
 campaigns passed. See `runtime-lifecycle-m6a-named-pipe.md`. The synchronous
 CLI client then reached that daemon for authentication, ping, status and
 shutdown, with installed-wheel checks; see `runtime-lifecycle-m6b-pipe-client.md`.
+M6c qualified shutdown with a pending pipe authentication read and fixed a
+Windows process-liveness false positive for exited processes with retained
+handles; see `runtime-lifecycle-m6c-process-exit.md`.
 Real Server reconnect/session comparison, separate-process M5
 differential cases, installed availability and cost measurements, UI gate and
 adoption decision remain pending. This ADR does not claim M6 completion.
