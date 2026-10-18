@@ -139,8 +139,9 @@ def test_publication_ack_rejects_concurrent_configuration_change(selection):
         acknowledge_local_realization(store, record=local, published=published)
 
 
-def test_pi_dependency_bytes_remain_part_of_approved_selection(selection, tmp_path):
+async def test_pi_dependency_bytes_remain_part_of_approved_selection(selection, tmp_path, monkeypatch):
     from nexus_connector_core.discovery import candidate_pi_node_cli, selected_fingerprint
+    from okto_nexus_connector.services import core_host
     _, _, old_binding, frame, _, _ = selection
     node = tmp_path / 'node.exe'
     node.write_bytes(b'Synthetic Node binary')
@@ -165,8 +166,28 @@ def test_pi_dependency_bytes_remain_part_of_approved_selection(selection, tmp_pa
     acknowledge_execution_binding(store, binding=binding)
     frame['payload'].update(adapter_id=candidate.adapter_id, candidate_ref=candidate.installation_ref, inventory_revision=revision)
     frame['intent_hash'] = r4_submit_intent_hash(frame)
-    assert resolve_execution_selection(store, frame=frame, candidates=[candidate]).candidate.launch_script == str(script)
-    dependency.write_text('Changed loaded helper', encoding='utf-8')
+    selected = resolve_execution_selection(store, frame=frame, candidates=[candidate])
+    assert selected.candidate.launch_script == str(script)
+    host = CoreRuntimeHost(state_dir(tmp_path / 'pi-runtime'), None)
+    captured = {}
+    original = core_host.create_runtime
+    def compose(**options):
+        captured['environment'] = options['environment']
+        return original(**options)
+    monkeypatch.setattr(core_host, 'create_runtime', compose)
+    async def environment(_):
+        # The package can change while an approved environment is being
+        # materialized. The post-callback full check must catch a dependency
+        # that Node/entrypoint fingerprint checks cannot see.
+        dependency.write_text('Changed loaded helper', encoding='utf-8')
+        return {}
+    try:
+        await host.build_r4(store, frame=frame, candidates=[candidate],
+                            environment=environment)
+        with pytest.raises(ConnectorError, match='PROFILE_DRIFT'):
+            await captured['environment'](None)
+    finally:
+        await host.shutdown_all()
     assert selected_fingerprint(candidate) == candidate.fingerprint
     with pytest.raises(ConnectorError, match='PROFILE_DRIFT'):
         resolve_execution_selection(store, frame=frame, candidates=[candidate])
@@ -240,15 +261,15 @@ async def test_composition_after_store_wait_respects_storage_owner(selection, tm
     acknowledge_execution_binding(store, binding=binding)
     host = CoreRuntimeHost(state_dir(tmp_path / 'lifetime'), None)
     entered, release = threading.Event(), threading.Event()
-    original, calls = execution_selection.resolve_execution_selection, []
+    original, calls = execution_selection.revalidate_opening_selection, []
     def resolve(*args, **kwargs):
         result = original(*args, **kwargs)
         calls.append(result)
-        if len(calls) == 2:
+        if len(calls) == 1:
             entered.set()
             assert release.wait(20)
         return result
-    monkeypatch.setattr(execution_selection, 'resolve_execution_selection', resolve)
+    monkeypatch.setattr(execution_selection, 'revalidate_opening_selection', resolve)
     async def environment(_):
         raise AssertionError('Composition cannot launch a provider.')
     task = asyncio.create_task(host.build_r4(store, frame=frame, candidates=[candidate], environment=environment))

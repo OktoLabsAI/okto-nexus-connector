@@ -96,7 +96,8 @@ class ApprovedToolLaunchProvider:
             audience=audience, actions=actions,
             require_current=guard)
         guard()
-        if await asyncio.to_thread(_resolve, self.store, frozen, candidates) != expected:
+        if await asyncio.to_thread(_resolve, self.store, frozen, candidates,
+                                   opening=expected) != expected:
             raise ConnectorError('PROFILE_DRIFT', 'launch_configuration',
                                  'The approved launch configuration changed.')
         async def metadata(capability):

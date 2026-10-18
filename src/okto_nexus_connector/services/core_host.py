@@ -374,16 +374,21 @@ class CoreRuntimeHost:
         The connection owner must install the canonical lease before prepare.
         Revalidate after shared-store waits and around the environment callback.
         """
-        from .execution_selection import resolve_execution_selection
+        from .execution_selection import (resolve_execution_selection,
+                                          revalidate_opening_selection)
         from nexus_connector_core.native_action_socket import PiNativeActionOwner
         from nexus_connector_core import decode_r4_frame, encode_r4_frame
         # Freeze caller-owned input before yielding; no mutable wire dict or
         # candidate generator may retarget a build that is already waiting.
         encoded = encode_r4_frame(frame)
         candidates = tuple(candidates)
-        async def resolve():
-            return await asyncio.to_thread(resolve_execution_selection, store,
-                frame=decode_r4_frame(encoded), candidates=candidates)
+        async def resolve(*, opening=None):
+            if opening is None:
+                return await asyncio.to_thread(resolve_execution_selection, store,
+                    frame=decode_r4_frame(encoded), candidates=candidates)
+            return await asyncio.to_thread(revalidate_opening_selection, store,
+                frame=decode_r4_frame(encoded), candidates=candidates,
+                expected=opening)
         selection = await resolve()
         if native_action_factory is not None and (
                 not callable(native_action_factory) or selection.candidate.adapter_id != "pi_rpc"):
@@ -393,7 +398,7 @@ class CoreRuntimeHost:
                                   selection.binding_id, selection.session_id)
         journal = await self.ensure_journal()
         ledger = await self.ensure_ledger()
-        if await resolve() != selection:
+        if await resolve(opening=selection) != selection:
             raise ConnectorError('PROFILE_DRIFT', 'runtime_composition', 'The approved execution selection changed.')
         self._require_stores(journal=journal, ledger=ledger)
         existing = self._runtimes.get(key)
@@ -403,9 +408,11 @@ class CoreRuntimeHost:
                 raise ConnectorError('OPERATION_CONFLICT', 'runtime_composition', 'The runtime has a different opening selection.')
             return existing
         async def checked_environment(prepared):
-            if await resolve() != selection:
+            if await resolve(opening=selection) != selection:
                 raise ConnectorError('PROFILE_DRIFT', 'runtime_environment', 'The approved execution selection changed.')
             value = await environment(prepared)
+            # Retain full byte qualification after materializing credentials.
+            # Core also checks the selected build before native spawn.
             if await resolve() != selection:
                 raise ConnectorError('PROFILE_DRIFT', 'runtime_environment', 'The approved execution selection changed.')
             return value

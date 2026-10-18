@@ -112,6 +112,24 @@ def revalidate_running_selection(store: StateStore, *, frame: dict, candidates,
                                         running=expected)
 
 
+def revalidate_opening_selection(store: StateStore, *, frame: dict, candidates,
+                                 expected: ExecutionSelection) -> ExecutionSelection:
+    """Recheck mapping between two full validations of one admitted opening.
+
+    The initial ``resolve_execution_selection`` already qualified all build
+    bytes. This check catches changed consent, root, entrypoint, fingerprint
+    and configuration after an await without rereading Pi's full dependency
+    closure. It does not authorize native effects: Core repeats full build
+    identity before reserving/spawning, and launch environment callbacks keep
+    a full post-materialization check.
+    """
+    if not isinstance(expected, ExecutionSelection):
+        raise ConnectorError('VALIDATION_ERROR', 'execution_selection',
+                             'An established opening selection is required.')
+    return _resolve_execution_selection(store, frame=frame, candidates=candidates,
+                                        running=expected)
+
+
 def _approved_scope(state, scope):
     """Shared administrative consent checks, independent of a native intent."""
     binding = _unique((b for b in state.execution_bindings if b.server_id == scope['server_id'] and
