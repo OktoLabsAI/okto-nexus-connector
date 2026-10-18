@@ -117,7 +117,8 @@ def test_reconciliation_cancels_fenced_holds_without_discarding_consumed_capacit
             if consumed:
                 await port.consume_capacity(req, held.reservation_id,
                     CapacityConsumption('turn', 'sha256:' + 'b' * 64, 'open', 'sha256:' + 'c' * 64))
-            reporter = R4ReconciliationReporter(store, host, 'srv', 'exe')
+            reporter = R4ReconciliationReporter(store, host, 'srv', 'exe',
+                                                validate_authority=lambda _request: None)
             frame = dict(protocol_major=1, contract_revision=R4_PREVIEW_REVISION,
                 server_id='srv', executor_id='exe', connection_id='replacement', connection_generation=2,
                 reconcile_id='cycle', cursor=None, operation_ids=[], session_ids=[], stream_watermarks=[])

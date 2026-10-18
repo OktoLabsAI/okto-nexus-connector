@@ -11,9 +11,10 @@ Both the normal reconciliation report and interrupted-launch recovery now page
 only pending claims. An installed test seeded 1k, 10k and 100k Core claims with
 the same three pending identities; each report contained exactly those three
 in one page. The final isolated installed Core 0.0.12 and Connector 0.0.10
-wheels passed 23 Core session-claim tests and 53 focused Connector tests.
-Another 57 adjacent Connector execution/containment cases passed before the
-final method rename; the final 53 include the renamed outbox path. Package
+wheels passed 23 Core session-claim tests, 53 focused Connector tests and 65
+adjacent Connector capacity/control/containment tests. Two adjacent test
+fixtures were updated to provide the required recovery authority and expect
+the already-current schema 15; no product behavior changed for those cases. Package
 imports resolved to site-packages. This technical checkpoint used no Nexus UI;
 the plan reserves that for major gates.
 
