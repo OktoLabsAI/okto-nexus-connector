@@ -31,7 +31,7 @@ class R4SessionReleaseStore:
             conn.execute('PRAGMA max_page_count=32768')
             conn.execute('BEGIN IMMEDIATE')
             version = conn.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2):
+            if version not in (0, 1, 2, 3):
                 raise ConnectorError('VERSION_INCOMPATIBLE', 'session_release',
                                      'The release outbox requires a newer Connector.')
             conn.execute('CREATE TABLE IF NOT EXISTS releases ('
@@ -41,6 +41,9 @@ class R4SessionReleaseStore:
             if version < 2:
                 conn.execute('ALTER TABLE releases ADD COLUMN recovery BLOB')
                 conn.execute('ALTER TABLE releases ADD COLUMN recovery_digest TEXT')
+            if version < 3:
+                conn.execute('ALTER TABLE releases ADD COLUMN event_retired INTEGER NOT NULL DEFAULT 0 '
+                             'CHECK(event_retired IN (0,1))')
             conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS pending_release ON releases(identity) '
                          'WHERE state=\'PENDING\'')
             conn.execute('CREATE INDEX IF NOT EXISTS release_identity ON releases(identity)')
@@ -48,7 +51,11 @@ class R4SessionReleaseStore:
                          'json_extract(identity,\'$.scope.server_id\'),'
                          'json_extract(identity,\'$.scope.executor_id\'),'
                          'json_extract(identity,\'$.connection_generation\')) WHERE recovery IS NULL')
-            conn.execute('PRAGMA user_version=2')
+            conn.execute('CREATE INDEX IF NOT EXISTS release_event_retirement ON releases('
+                         'json_extract(identity,\'$.scope.server_id\'),'
+                         'json_extract(identity,\'$.scope.executor_id\')) '
+                         'WHERE state=\'ACCEPTED\' AND event_retired=0')
+            conn.execute('PRAGMA user_version=3')
             yield conn
             conn.commit()
         except (OSError, sqlite3.Error, ValueError, KeyError, TypeError) as error:
@@ -165,6 +172,28 @@ class R4SessionReleaseStore:
                                      'The reply cannot supersede a completed publication attempt.')
             conn.execute('UPDATE releases SET state=?,reply=? WHERE release_id=?',
                          (state, encoded, request['release_id']))
+
+    def accepted_event_page(self, server_id, executor_id, *, after=0, limit=128):
+        if type(after) is not int or after<0 or type(limit) is not int or not 1<=limit<=128:
+            raise ValueError('Invalid terminal event page.')
+        with self._transaction() as conn:
+            rows=conn.execute('SELECT rowid,* FROM releases WHERE rowid>? '
+                'AND state=\'ACCEPTED\' AND event_retired=0 '
+                'AND json_extract(identity,\'$.scope.server_id\')=? '
+                'AND json_extract(identity,\'$.scope.executor_id\')=? '
+                'ORDER BY rowid LIMIT ?', (after,server_id,executor_id,limit)).fetchall()
+            return [(row['rowid'],self._decode(row)) for row in rows]
+
+    def mark_event_retired(self, request):
+        request=decode_session_release(encode_session_release(request))
+        with self._transaction() as conn:
+            row=conn.execute('SELECT * FROM releases WHERE release_id=?',
+                (request['release_id'],)).fetchone()
+            if row is None or self._decode(row)!=request or row['state']!='ACCEPTED':
+                raise ConnectorError('RECONCILIATION_REQUIRED','session_release',
+                                     'The release has no accepted acknowledgment.')
+            conn.execute('UPDATE releases SET event_retired=1 WHERE release_id=?',
+                         (request['release_id'],))
 
     @staticmethod
     def _recovered(request, ack, observation):

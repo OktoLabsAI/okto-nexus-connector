@@ -101,8 +101,8 @@ def test_prior_schema_upgrades_without_replacing_pending_request(tmp_path):
         conn.execute('PRAGMA user_version=1')
     assert R4SessionReleaseStore(path).pending(**identity(original)) == original
     with sqlite3.connect(path) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 2
-        assert conn.execute('SELECT request,recovery FROM releases').fetchone() == (raw, None)
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 3
+        assert conn.execute('SELECT request,recovery,event_retired FROM releases').fetchone() == (raw, None, 0)
 
 
 def test_recovery_pages_do_not_skip_an_unmatched_record_or_rewrite_history(tmp_path):

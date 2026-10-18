@@ -7,7 +7,7 @@ from nexus_connector_core import CoreError
 from nexus_connector_core.session_release import session_release_accepted, session_release_deferred
 from okto_nexus_connector.errors import ConnectorError
 from okto_nexus_connector.storage.r4_session_releases import R4SessionReleaseStore
-from okto_nexus_connector.services.r4_session_release import R4SessionReleasePublisher
+from okto_nexus_connector.services.r4_session_release import R4SessionReleasePublisher,retire_accepted_event
 from tests.contract.test_session_release import request
 
 
@@ -53,6 +53,38 @@ def test_pending_report_is_never_adopted_by_another_scope_or_channel(tmp_path, f
     else: changed[field] = 'other'
     assert outbox.pending(**changed) is None
     assert outbox.pending(**identity(original)) == original
+
+
+async def test_accepted_release_retires_event_stream_idempotently_after_interrupted_marker(tmp_path,monkeypatch):
+    from okto_nexus_connector.storage.state_store import StateStore
+    from okto_nexus_connector.storage.r4_events import R4EventStore,FIELDS
+
+    state=StateStore(tmp_path/'state.json')
+    outbox=R4SessionReleaseStore.for_state(state)
+    events=R4EventStore.for_state(state)
+    accepted=request()
+    scope={k:accepted['scope'][k] for k in FIELDS if k!='stream_epoch'} | dict(stream_epoch=accepted['stream_epoch'])
+    events.register(scope)
+    events.advance(scope,remote_acked=accepted['sequence'])
+    events.advance(scope,core_applied=accepted['sequence'])
+    outbox.prepare(accepted)
+    outbox.acknowledge(session_release_accepted(accepted))
+    original=R4SessionReleaseStore.mark_event_retired
+    failed=False
+    def interrupted(self,frame):
+        nonlocal failed
+        if not failed:
+            failed=True
+            raise OSError('Injected marker interruption after event checkpoint.')
+        return original(self,frame)
+    monkeypatch.setattr(R4SessionReleaseStore,'mark_event_retired',interrupted)
+    with pytest.raises(OSError):
+        await retire_accepted_event(state,accepted)
+    assert events.page('srv','exe')[0]==[]
+    assert events.read(scope)['core_applied']==accepted['sequence']
+    assert len(outbox.accepted_event_page('srv','exe'))==1
+    await retire_accepted_event(state,accepted)
+    assert outbox.accepted_event_page('srv','exe')==[]
 
 
 @pytest.mark.parametrize('tamper', ['digest', 'identity', 'state', 'reply'])

@@ -166,9 +166,10 @@ class R4ExecutionOwner:
         self.execution_errors = {}
         from .r4_session_release import R4SessionReleaseReporter, R4SessionReleasePublisher
         from ..storage.r4_session_releases import R4SessionReleaseStore
+        release_reporter = R4SessionReleaseReporter(store, host)
         self.session_releases = R4SessionReleasePublisher(
-            R4SessionReleaseStore.for_state(store), R4SessionReleaseReporter(store, host),
-            self._publish_session_release)
+            R4SessionReleaseStore.for_state(store), release_reporter,
+            self._publish_session_release, on_accepted=release_reporter.retire_accepted)
 
     async def _publish_session_release(self, request, *, stop_event):
         return await self.connection.publish_session_release(request, stop_event=stop_event)
