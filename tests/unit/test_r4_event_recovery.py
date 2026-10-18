@@ -169,6 +169,41 @@ async def test_reconnect_finishes_an_accepted_release_event_checkpoint(lifecycle
     assert not native.opened
 
 
+@pytest.mark.parametrize('selection',[True],indirect=True)
+async def test_reconnect_finishes_a_reconciled_release_checkpoint(lifecycle):
+    from nexus_connector_core import EventCursor,OperationKey,SessionKey
+    from okto_nexus_connector.storage.r4_session_releases import R4SessionReleaseStore
+    from tests.contract.test_session_release import request
+    from tests.unit.test_session_release_recovery import evidence
+
+    owner,http,scope,progress,journal,native,attached,keys=await prepared(lifecycle)
+    original=request()
+    original['scope']={**original['scope'],**{k:scope[k] for k in FIELDS if k!='stream_epoch'}}
+    original['stream_epoch']=scope['stream_epoch']
+    original['sequence']=0
+    claim=await journal.get_session_claim(SessionKey(scope['server_id'],scope['executor_id'],scope['session_id']))
+    if claim is None:
+        await journal.admit(OperationKey(scope['server_id'],scope['executor_id'],original['opening_operation_id']),
+                            'intent',scope['session_id'],claim_session=True)
+    else:
+        original['opening_operation_id']=claim.opening_operation_id
+    outbox=R4SessionReleaseStore.for_state(owner.store)
+    outbox.prepare(original)
+    ack,observations=evidence(original)
+    outbox.reconcile_page(ack,observations)
+    cursor=EventCursor(scope['server_id'],scope['executor_id'],scope['session_id'],scope['stream_epoch'])
+    await journal.acknowledge_events(cursor,1)
+    progress.advance(scope,remote_acked=1)
+    progress.advance(scope,core_applied=1)
+    await recover_event_streams(owner.store,owner.vault,http,owner.host,owner.connection,
+                               require_current=current,authorities={})
+    assert outbox.resolved_checkpoint_page(scope['server_id'],scope['executor_id'])==[]
+    assert progress.page(scope['server_id'],scope['executor_id'])[0]==[]
+    assert progress.read(scope)['core_applied']==1
+    assert (await journal.claimed_sessions(scope['server_id'],scope['executor_id'],pending_only=True)).claims==()
+    assert not native.opened
+
+
 @pytest.mark.parametrize("selection",[True],indirect=True)
 async def test_identity_change_during_ticket_acquisition_preserves_the_event(lifecycle):
     owner,http,scope,progress,journal,native,attached,keys=await prepared(lifecycle)

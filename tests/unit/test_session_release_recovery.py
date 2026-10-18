@@ -1,5 +1,6 @@
 """Only accepted original opening/ownership facts retire old-channel reports."""
 import copy
+import asyncio
 import json
 import sqlite3
 from hashlib import sha256
@@ -49,6 +50,67 @@ def test_recovery_keeps_original_bytes_and_separate_authenticated_proof(tmp_path
     # The original request never acquires the replacement generation or a
     # fabricated live-session ACK. Resolution has its own recorded provenance.
     assert json.loads(raw)['connection_generation'] < ack['connection_generation']
+    checkpoint=rebuilt.resolved_checkpoint_page(original['server_id'],original['executor_id'])
+    assert len(checkpoint)==1 and checkpoint[0][1:3]==(
+        original,original['sequence']+1)
+    assert checkpoint[0][3]==sha256(proof).hexdigest()
+
+
+async def test_reconciled_release_checkpoints_in_background_without_delaying_ready(tmp_path,monkeypatch):
+    from nexus_connector_core import OperationKey,SessionKey
+    from okto_nexus_connector.services.core_host import CoreRuntimeHost
+    from okto_nexus_connector.services.r4_reconciliation import R4ReconciliationReporter
+    from okto_nexus_connector.storage.r4_events import R4EventStore
+    from okto_nexus_connector.storage.state_store import StateStore,ConnectorState
+
+    original=request()
+    ack,observations=evidence(original)
+    state=StateStore(tmp_path/'state.json')
+    state.save(ConnectorState(connector_id='connector'))
+    outbox=R4SessionReleaseStore.for_state(state)
+    outbox.prepare(original)
+    events=R4EventStore.for_state(state)
+    scope={**original['scope'],'stream_epoch':original['stream_epoch']}
+    events.register(scope)
+    sequence=original['sequence']+1
+    events.advance(scope,remote_acked=sequence)
+    events.advance(scope,core_applied=sequence)
+    host=CoreRuntimeHost(tmp_path,None)
+    try:
+        journal=await host.ensure_history_journal()
+        await journal.admit(OperationKey(original['server_id'],original['executor_id'],
+                            original['opening_operation_id']),'intent',
+                            original['scope']['session_id'],claim_session=True)
+        entered,release=asyncio.Event(),asyncio.Event()
+        retire=journal.retire_reconciliation_claim
+        async def delayed(*args,**kwargs):
+            entered.set()
+            await release.wait()
+            return await retire(*args,**kwargs)
+        monkeypatch.setattr(journal,'retire_reconciliation_claim',delayed)
+        reporter=R4ReconciliationReporter(state,host,original['server_id'],original['executor_id'])
+        reporter.cycle=tuple(ack[k] for k in ('connection_id','connection_generation','reconcile_id'))
+        reporter._report_complete=True
+        reporter._release_observations=observations
+        await reporter.accepted(ack)
+        await asyncio.wait_for(entered.wait(),2)
+        assert reporter._checkpoint_task is not None and not reporter._checkpoint_task.done()
+        task=reporter._checkpoint_task
+        await reporter.accepted(ack)
+        assert reporter._checkpoint_task is task and reporter._checkpoint_epoch==2
+        assert len(outbox.resolved_checkpoint_page(original['server_id'],original['executor_id']))==1
+        release.set()
+        await asyncio.wait_for(reporter._checkpoint_task,3)
+        assert outbox.resolved_checkpoint_page(original['server_id'],original['executor_id'])==[]
+        assert events.page(original['server_id'],original['executor_id'])[0]==[]
+        assert events.read(scope)['remote_acked']==events.read(scope)['core_applied']==sequence
+        assert (await journal.claimed_sessions(original['server_id'],original['executor_id'],
+                                              pending_only=True)).claims==()
+        assert await journal.get_session_claim(SessionKey(original['server_id'],
+            original['executor_id'],original['scope']['session_id'])) is not None
+    finally:
+        release.set()
+        await host.shutdown_all()
 
 
 @pytest.mark.parametrize('tamper', ['server','generation','connection','opening','owner','stream','sequence','claim','agent','opening_channel','absent'])
@@ -71,6 +133,7 @@ def test_ready_channel_without_matching_release_evidence_preserves_pending(tmp_p
     else: observations = {}
     assert outbox.reconcile_page(ack, observations) is None
     assert R4SessionReleaseStore(outbox.path).pending(**identity(original)) == original
+    assert outbox.resolved_checkpoint_page(original['server_id'],original['executor_id']) == []
 
 
 def test_recovery_ack_commit_failure_rolls_back_and_identical_retry_resolves(tmp_path):
@@ -101,7 +164,7 @@ def test_prior_schema_upgrades_without_replacing_pending_request(tmp_path):
         conn.execute('PRAGMA user_version=1')
     assert R4SessionReleaseStore(path).pending(**identity(original)) == original
     with sqlite3.connect(path) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 4
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 5
         assert conn.execute('SELECT request,recovery,event_retired,claim_retired FROM releases').fetchone() == (raw, None, 0, 0)
 
 
@@ -120,8 +183,28 @@ def test_accepted_event_checkpoint_from_schema_three_still_retires_core_claim(tm
     store=R4SessionReleaseStore(path)
     assert [item[1] for item in store.accepted_event_page(original['server_id'],original['executor_id'])] == [original]
     with sqlite3.connect(path) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 4
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 5
         assert conn.execute('SELECT event_retired,claim_retired FROM releases').fetchone() == (1,0)
+
+
+def test_schema_four_rebuilds_pending_index_for_reconciliation_proofs(tmp_path):
+    original=request()
+    store=R4SessionReleaseStore(tmp_path/'schema-four.sqlite3')
+    store.prepare(original)
+    ack,observations=evidence(original)
+    store.reconcile_page(ack,observations)
+    with sqlite3.connect(store.path) as conn:
+        conn.execute('DROP INDEX release_event_retirement')
+        conn.execute('CREATE INDEX release_event_retirement ON releases(identity) '
+                     "WHERE state='ACCEPTED' AND (event_retired=0 OR claim_retired=0)")
+        conn.execute('PRAGMA user_version=4')
+    page=R4SessionReleaseStore(store.path).resolved_checkpoint_page(
+        original['server_id'],original['executor_id'])
+    assert len(page)==1 and page[0][1:3]==(original,original['sequence']+1)
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute('PRAGMA user_version').fetchone()[0]==5
+        definition=conn.execute("SELECT sql FROM sqlite_master WHERE name='release_event_retirement'").fetchone()[0]
+        assert 'recovery IS NOT NULL' in definition
 
 
 def test_recovery_pages_do_not_skip_an_unmatched_record_or_rewrite_history(tmp_path):

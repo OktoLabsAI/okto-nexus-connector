@@ -15,13 +15,12 @@ from ..storage.r4_events import R4EventStore
 from ..storage.r4_session_releases import R4SessionReleaseStore
 
 
-async def retire_accepted_event(store, request, journal):
-    """Checkpoint a Server-accepted stream and claim before clearing the outbox marker."""
+async def retire_resolved_checkpoint(store, request, journal, *, sequence, digest):
+    """Retire an exact Server-accepted direct or reconciliation release proof."""
     events=R4EventStore.for_state(store)
     releases=R4SessionReleaseStore.for_state(store)
     scope={**request['scope'], 'stream_epoch':request['stream_epoch']}
-    digest=sha256(encode_session_release(request)).hexdigest()
-    await asyncio.to_thread(events.retire,scope,sequence=request['sequence'],
+    await asyncio.to_thread(events.retire,scope,sequence=sequence,
         release_id=request['release_id'],
         release_digest=digest)
     await journal.retire_reconciliation_claim(
@@ -32,6 +31,13 @@ async def retire_accepted_event(store, request, journal):
     # The three stores cannot commit atomically. A lost final marker causes
     # recovery to repeat both idempotent checkpoints, never to invent an ACK.
     await asyncio.to_thread(releases.mark_checkpoints_retired,request)
+
+
+async def retire_accepted_event(store, request, journal):
+    """Checkpoint a direct session.release ACK after its outbox commit."""
+    await retire_resolved_checkpoint(store,request,journal,
+        sequence=request['sequence'],
+        digest=sha256(encode_session_release(request)).hexdigest())
 
 
 class R4SessionReleaseReporter:
@@ -129,6 +135,7 @@ class SessionReleaseOutbox(Protocol):
 
 class SessionReleaseRecoveryOutbox(Protocol):
     def reconcile_page(self, ack, observations, *, after=0, limit=128): ...
+    def resolved_checkpoint_page(self, server_id, executor_id, *, after=0, limit=128): ...
 
 
 class R4SessionReleasePublisher:

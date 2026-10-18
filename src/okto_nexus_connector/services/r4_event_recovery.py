@@ -7,7 +7,7 @@ from ..errors import ConnectorError
 from .r4_tickets import acquire_ticket
 from .r4_events import R4EventPublisher,event_page
 from .r4_publications import PublicationAuthority,_binding,current_publication_authority
-from .r4_session_release import retire_accepted_event
+from .r4_session_release import retire_resolved_checkpoint
 from ..storage.r4_session_releases import R4SessionReleaseStore
 
 
@@ -19,14 +19,14 @@ async def recover_event_streams(store,vault,http,host,channel,*,require_current,
     retired_after=0
     for _ in range(32):
         await require_current()
-        retired=await asyncio.to_thread(releases.accepted_event_page,server_id,executor_id,after=retired_after)
+        retired=await asyncio.to_thread(releases.resolved_checkpoint_page,server_id,executor_id,after=retired_after)
         if not retired: break
-        for retired_after,request in retired:
+        for retired_after,request,sequence,digest in retired:
             await require_current()
-            await retire_accepted_event(store,request,journal)
+            await retire_resolved_checkpoint(store,request,journal,sequence=sequence,digest=digest)
         if len(retired)<128: break
     else:
-        if await asyncio.to_thread(releases.accepted_event_page,server_id,executor_id,after=retired_after,limit=1):
+        if await asyncio.to_thread(releases.resolved_checkpoint_page,server_id,executor_id,after=retired_after,limit=1):
             raise ConnectorError('RECONCILIATION_REQUIRED','r4_event_recovery',
                                  'Terminal event checkpoints require another pass.')
     after,high,batches=0,None,0

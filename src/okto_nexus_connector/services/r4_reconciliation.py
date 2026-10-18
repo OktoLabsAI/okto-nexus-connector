@@ -1,18 +1,20 @@
 """Bounded reconciliation from public Core facts and persisted wire bindings."""
 import asyncio
+import logging
 import secrets
 
 from nexus_connector_core import EventCursor, OperationKey, project_r4_bound_receipt, project_r4_resource_release, decode_r4_frame, encode_r4_frame
 
 from ..errors import ConnectorError
 from ..storage.r4_publications import R4PublicationStore
-from .r4_session_release import SessionReleaseRecoveryOutbox
+from .r4_session_release import SessionReleaseRecoveryOutbox,retire_resolved_checkpoint
 
 
 class R4ReconciliationReporter:
     def __init__(self, store, host, server_id, executor_id, *, release_outbox: SessionReleaseRecoveryOutbox | None = None,
                  boot_id='reconciliation', validate_authority=None, publish_receipts=None):
         self.publications = R4PublicationStore.for_state(store)
+        self.store = store
         from ..storage.r4_events import R4EventStore
         self.event_store = R4EventStore.for_state(store)
         self.host, self.server_id, self.executor_id = host, server_id, executor_id
@@ -32,6 +34,8 @@ class R4ReconciliationReporter:
         self.validate_authority, self.publish_receipts = validate_authority, publish_receipts
         self._preopen_reports, self._preopen_sent, self._preopen_after = [], {}, 0
         self._unstarted_sessions = set()
+        self._checkpoint_task = None
+        self._checkpoint_epoch = 0
 
     def require_authority(self, request):
         if self.validate_authority is None:
@@ -55,11 +59,49 @@ class R4ReconciliationReporter:
             next_after = await asyncio.to_thread(self.release_outbox.reconcile_page,
                 ack, self._release_observations, after=after)
             if next_after is None:
-                return
+                break
             if next_after <= after:
                 raise ConnectorError('JOURNAL_UNAVAILABLE', 'session_release', 'The recovery cursor did not advance.')
             after = next_after
-        raise ConnectorError('RECONCILIATION_REQUIRED', 'session_release', 'Release recovery exceeded its page budget.')
+        else:
+            raise ConnectorError('RECONCILIATION_REQUIRED', 'session_release', 'Release recovery exceeded its page budget.')
+        # Only the release proof commit gates readiness. Maintenance starts
+        # independently and rechecks if another accepted cycle arrives while
+        # its previous pass is still running.
+        self._checkpoint_epoch += 1
+        if self._checkpoint_task is None or self._checkpoint_task.done():
+            self._checkpoint_task=asyncio.create_task(self._retire_resolved_checkpoints())
+
+    async def _retire_resolved_checkpoints(self):
+        """Keep historical cleanup outside the connection's readiness path."""
+        log=logging.getLogger(__name__)
+        while True:
+            epoch=self._checkpoint_epoch
+            for attempt in range(3):
+                after,failed=0,False
+                try:
+                    journal=await self.host.ensure_history_journal()
+                    while True:
+                        page=await asyncio.to_thread(self.release_outbox.resolved_checkpoint_page,
+                            self.server_id,self.executor_id,after=after)
+                        if not page: break
+                        for after,request,sequence,digest in page:
+                            try:
+                                await retire_resolved_checkpoint(self.store,request,journal,
+                                    sequence=sequence,digest=digest)
+                            except Exception as error:
+                                failed=True
+                                log.warning('Resolved checkpoint deferred: type=%s code=%s stage=%s',
+                                    type(error).__name__,getattr(error,'code',None),getattr(error,'stage',None))
+                        if len(page)<128: break
+                        await asyncio.sleep(0)
+                except Exception as error:
+                    failed=True
+                    log.warning('Resolved checkpoint scan deferred: type=%s code=%s stage=%s',
+                        type(error).__name__,getattr(error,'code',None),getattr(error,'stage',None))
+                if not failed: break
+                if attempt<2: await asyncio.sleep(2**attempt)
+            if self._checkpoint_epoch==epoch: return
 
     async def _fact(self, row, journal):
         if row is None or row['binding'] is None:
