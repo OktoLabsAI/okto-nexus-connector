@@ -226,6 +226,39 @@ async def test_host_revalidates_after_shared_store_wait_and_before_cache_reuse(s
         await host.shutdown_all()
 
 
+@pytest.mark.parametrize('selection', ['pi'], indirect=True)
+async def test_approved_opening_passes_one_qualified_selection_to_runtime(selection, tmp_path, monkeypatch):
+    from okto_nexus_connector.services import execution_selection, launch_configuration
+
+    store, candidate, binding, frame, *_ = selection
+    acknowledge_execution_binding(store, binding=binding)
+    host = CoreRuntimeHost(state_dir(tmp_path / 'runtime'), None)
+    calls = []
+    full = execution_selection.resolve_execution_selection
+
+    def count_full(*args, **kwargs):
+        calls.append(kwargs['frame']['session_id'])
+        return full(*args, **kwargs)
+
+    monkeypatch.setattr(execution_selection, 'resolve_execution_selection', count_full)
+    monkeypatch.setattr(launch_configuration, 'resolve_execution_selection', count_full)
+    try:
+        setup = await host.approved_launch(store, frame=frame, candidates=[candidate])
+        assert calls == ['session']
+        assert setup.opening_selection is not None
+        runtime = await host.build_r4(store, frame=frame, candidates=[candidate],
+            environment=setup.environment, opening_selection=setup.opening_selection)
+        assert runtime is not None
+        assert calls == ['session']
+        Path(candidate.executable).write_bytes(b'Changed executable after selection')
+        with pytest.raises(ConnectorError, match='PROFILE_DRIFT'):
+            await host.build_r4(store, frame=frame, candidates=[candidate],
+                environment=setup.environment, opening_selection=setup.opening_selection)
+        assert calls == ['session']
+    finally:
+        await host.shutdown_all()
+
+
 @pytest.mark.parametrize('selection', [None, 'discovered'], indirect=True)
 async def test_r4_host_defers_native_capture_to_installed_lease(selection, tmp_path, monkeypatch):
     from okto_nexus_connector.services import core_host

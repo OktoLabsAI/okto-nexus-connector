@@ -46,6 +46,7 @@ class R4LaunchSetup:
     environment: object
     auth_refs: tuple[str, ...] = ()
     native_action_factory: object | None = None
+    opening_selection: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -740,7 +741,8 @@ class R4ExecutionOwner:
                                      'The approved launch configuration is invalid.')
             runtime = await self.host.build_r4(self.store, frame=item.frame,
                 candidates=candidates, environment=setup.environment, factory=self.native_factory,
-                native_action_factory=setup.native_action_factory)
+                native_action_factory=setup.native_action_factory,
+                opening_selection=setup.opening_selection)
             self.connection.require_current(item)
             session = _Session(runtime, frame['intent_hash'], 'stream_' + secrets.token_hex(16),
                 {k: frame[k] for k in _SCOPE}, frame['connection_id'], frame['connection_generation'])

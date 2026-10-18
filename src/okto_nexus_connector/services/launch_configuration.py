@@ -118,7 +118,7 @@ def _resolve(store, frame, candidates, *, running=None, opening=None):
 
 
 async def approved_launch_setup(store, vault, *, frame, candidates, capability=None, http=None, tool_root=None,
-                               capability_metadata=None):
+                               capability_metadata=None, opening=None):
     """Compose the standard R4 launch port without raw wire environment or argv."""
     from .core_host import LaunchOverlay, LaunchSecretResolver, make_environment
     from .r4_execution import R4LaunchSetup
@@ -134,7 +134,7 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
     async def current(*, opening=None):
         return await asyncio.to_thread(_resolve, store, decode_r4_frame(encoded),
                                        candidates, opening=opening)
-    expected = await current()
+    expected = await current(opening=opening)
     _, record = expected
     native_factory = None
     templates, material = (), {}
@@ -202,4 +202,4 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
         return result
     await tools_current()
     return R4LaunchSetup(environment, auth_refs=tuple(sorted(auth_refs)),
-                         native_action_factory=native_factory)
+                         native_action_factory=native_factory, opening_selection=expected[0])

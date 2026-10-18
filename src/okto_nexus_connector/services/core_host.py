@@ -361,13 +361,14 @@ class CoreRuntimeHost:
     # -- runtime composition ------------------------------------------------
 
     async def approved_launch(self, store, *, frame, candidates, capability=None, http=None,
-                              capability_metadata=None):
+                              capability_metadata=None, opening=None):
         from .launch_configuration import approved_launch_setup
         return await approved_launch_setup(store, self._vault, frame=frame, candidates=candidates,
                                            capability=capability, http=http, capability_metadata=capability_metadata,
-                                           tool_root=self.root / 'runtime' / 'r4-mcp')
+                                           tool_root=self.root / 'runtime' / 'r4-mcp', opening=opening)
 
-    async def build_r4(self, store, *, frame, candidates, environment, factory=None, native_action_factory=None):
+    async def build_r4(self, store, *, frame, candidates, environment, factory=None,
+                       native_action_factory=None, opening_selection=None):
         """Compose an R4 runtime only from the approved host realization.
 
         Composition is effect-free and does not install execution authority.
@@ -389,7 +390,7 @@ class CoreRuntimeHost:
             return await asyncio.to_thread(revalidate_opening_selection, store,
                 frame=decode_r4_frame(encoded), candidates=candidates,
                 expected=opening)
-        selection = await resolve()
+        selection = await resolve(opening=opening_selection)
         if native_action_factory is not None and (
                 not callable(native_action_factory) or selection.candidate.adapter_id != "pi_rpc"):
             raise ConnectorError("VALIDATION_ERROR", "native_action_launch",
