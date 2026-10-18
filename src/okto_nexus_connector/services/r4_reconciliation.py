@@ -119,6 +119,8 @@ class R4ReconciliationReporter:
         if request['cursor'] is None:
             from .r4_launch_recovery import recover_launches
             await recover_launches(self, journal, ledger, request)
+            from .r4_denied_capacity import recover_denied_opening_capacity
+            await recover_denied_opening_capacity(self, journal, ledger, request)
         # The authenticated recovery channel supplies the replacement
         # generation. Old HELD reservations are cancellable without a native
         # process proof; consumed or uncertain records must still block below.

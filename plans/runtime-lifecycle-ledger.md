@@ -221,3 +221,14 @@ passed, including a disposable separate daemon process. Default IPC remains
 unchanged. CLI support, real session/reconnect comparison, cost, containment
 and the UI gate remain pending. See
 [runtime-lifecycle-m6a-named-pipe.md](runtime-lifecycle-m6a-named-pipe.md).
+
+## M5k — Proved initial-refusal capacity release
+
+The initial lease refusal path now releases consumed capacity only with an
+exact durable no-effect proof and no native claim or launch. Reconciliation
+applies the same rule before the owned-slot fence. Fifteen focused cases
+passed. The installed disposable Connector recovered 21 historical operations
+on its first new control attempt and stayed `CONTROL_READY`; the original
+broadcast handoff then completed through real Nexus UI after its five-second
+start deadline was corrected to 300 seconds. See
+[runtime-lifecycle-m5k-denied-capacity.md](runtime-lifecycle-m5k-denied-capacity.md).

@@ -759,6 +759,14 @@ class R4ExecutionOwner:
                 # No native opening was admitted. Drain this runtime/its tool
                 # resources, without fabricating an opening release proof.
                 await self._contain_session(session, frame, publish_release=False)
+                if self.capacity_provider is not None:
+                    from .r4_denied_capacity import release_denied_opening_capacity
+                    capacity = await self.capacity_provider()
+                    await release_denied_opening_capacity(self.publications,
+                        await self.host.ensure_history_journal(), await self.host.ensure_ledger(),
+                        server_id=frame['server_id'], executor_id=frame['executor_id'],
+                        operation_id=frame['operation_id'], boot_id=capacity.boot_id,
+                        clock=self.clock, require_current=lambda: self.connection.require_current(item))
                 return receipt
             session.deadline = applied.context.lease_deadline_monotonic
             if self.require_authority is not None:

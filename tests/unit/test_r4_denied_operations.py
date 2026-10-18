@@ -1,9 +1,10 @@
 """Correlated lease refusals settle only the original queued operation."""
 import asyncio
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
-from nexus_connector_core import OperationKey, SessionKey, r4_lease_renew_frame
+from nexus_connector_core import OperationKey, SessionKey, CapacityConsumption, r4_lease_renew_frame
 from nexus_connector_core.session_release import SESSION_RELEASE_REVISION, session_release_accepted
 from okto_nexus_connector.transport.lease_denial import LeaseRequestDenied
 from tests.unit.test_execution_selection import selection
@@ -71,8 +72,10 @@ async def test_queued_turn_is_refused_before_native_send_and_sibling_remains_ava
 
 
 @pytest.mark.parametrize('selection', [True], indirect=True)
-async def test_initial_lease_denial_does_not_open_provider_or_close_shared_channel(lifecycle, monkeypatch):
+@pytest.mark.parametrize('with_capacity', [False, True])
+async def test_initial_lease_denial_does_not_open_provider_or_close_shared_channel(lifecycle, monkeypatch, with_capacity):
     daemon, _, _, frame, factory, _, published, _ = lifecycle
+    daemon.host.capacity_enabled = with_capacity
     original = daemon.connection.apply_lease
     async def lease(runtime, *, scope, grant_id, **kwargs):
         if scope['session_id'] == frame['session_id']:
@@ -82,6 +85,16 @@ async def test_initial_lease_denial_does_not_open_provider_or_close_shared_chann
         return await original(runtime, scope=scope, grant_id=grant_id)
     monkeypatch.setattr(daemon.connection, 'apply_lease', lease)
     await daemon.sync()
+    if with_capacity:
+        from tests.unit.test_capacity_authority import request
+        service = await daemon.execution_capacity()
+        capacity_request = request(daemon, frame)
+        held = await service.try_reserve_capacity(capacity_request)
+        assert held.state == 'HELD'
+        consumed = await service.consume_capacity(capacity_request, held.reservation_id,
+            CapacityConsumption('initial-turn', 'sha256:' + 'b' * 64,
+                                frame['operation_id'], frame['intent_hash']))
+        assert consumed.state == 'CONSUMED'
     await daemon.connection.emit(frame)
     receipt = await observed(published, daemon.owner)
     assert receipt['operation_id'] == frame['operation_id'] and receipt['stage'] == 'FAILED'
@@ -89,10 +102,63 @@ async def test_initial_lease_denial_does_not_open_provider_or_close_shared_chann
     assert not factory.opened and daemon.ready and daemon.connection.online
     journal = await daemon.host.ensure_history_journal()
     assert await journal.get_session_claim(SessionKey(frame['server_id'],frame['executor_id'],frame['session_id'])) is None
+    if with_capacity:
+        assert (await service.get_capacity_reservation(capacity_request)).state == 'RELEASED'
+        assert not (await (await daemon.host.ensure_ledger()).owned_slot_page()).reservations
     sibling = dict(frame, operation_id='healthy-open', session_id='healthy')
     await daemon.connection.emit(sibling)
     assert (await observed(published, daemon.owner))['stage'] in ('SUBMITTED', 'SUCCEEDED')
     assert len(factory.opened) == 1 and daemon.owner.failure is None
+
+
+@pytest.mark.parametrize('selection', [True], indirect=True)
+@pytest.mark.parametrize('persist_fact', [False, True])
+async def test_reconnect_releases_only_proved_initial_denial_capacity(lifecycle, persist_fact):
+    from nexus_connector_core import prepare_r4_lease_refusal, persist_r4_lease_refusal
+    from nexus_connector_core.lease_denial import lease_denial_frame
+    from okto_nexus_connector.errors import ConnectorError
+    from okto_nexus_connector.services.r4_denied_capacity import recover_denied_opening_capacity
+    from tests.unit.test_capacity_authority import request as capacity_request
+
+    daemon, _, _, frame, factory, _, _, _ = lifecycle
+    daemon.host.capacity_enabled = True
+    await daemon.sync()
+    service = await daemon.execution_capacity()
+    reservation_request = capacity_request(daemon, frame)
+    held = await service.try_reserve_capacity(reservation_request)
+    await service.consume_capacity(reservation_request, held.reservation_id,
+        CapacityConsumption('initial-turn', 'sha256:' + 'b' * 64,
+                            frame['operation_id'], frame['intent_hash']))
+    lease_request = {k: frame[k] for k in (
+        'protocol_major', 'contract_revision', 'connection_id', 'connection_generation', 'grant_id')}
+    lease_request.update(type='lease.renew', request_id='denied-original',
+        expected_lease_serial=0, purpose='initial', scope={k: frame[k] for k in (
+            'server_id', 'executor_id', 'binding_id', 'agent_id', 'workspace_id',
+            'workspace_binding_id', 'session_id', 'session_owner_generation',
+            'authorization_revision', 'configuration_revision', 'binding_revision', 'credential_epoch')})
+    refusal = prepare_r4_lease_refusal(frame, lease_denial_frame(lease_request))
+    publications = daemon.owner.publications
+    publications.reserve(frame)
+    publications.bind(refusal['binding'], refusal=refusal)
+    journal = await daemon.host.ensure_history_journal()
+    key = OperationKey(frame['server_id'], frame['executor_id'], frame['operation_id'])
+    if persist_fact:
+        await persist_r4_lease_refusal(journal, refusal)
+    ledger = await daemon.host.ensure_ledger()
+    reporter = SimpleNamespace(server_id=frame['server_id'], executor_id=frame['executor_id'],
+        publications=publications, boot_id=daemon.capacity_boot_id,
+        require_authority=lambda _: None)
+    if persist_fact:
+        await recover_denied_opening_capacity(reporter, journal, ledger, {})
+        assert (await service.get_capacity_reservation(reservation_request)).state == 'RELEASED'
+        assert not (await ledger.owned_slot_page()).reservations
+        await recover_denied_opening_capacity(reporter, journal, ledger, {})
+    else:
+        with pytest.raises(ConnectorError, match='RECONCILIATION_REQUIRED'):
+            await recover_denied_opening_capacity(reporter, journal, ledger, {})
+        assert (await service.get_capacity_reservation(reservation_request)).state == 'CONSUMED'
+        assert len((await ledger.owned_slot_page()).reservations) == 1
+    assert not factory.opened
 
 
 @pytest.mark.parametrize('selection', [True], indirect=True)
