@@ -7,7 +7,9 @@ import pytest
 
 from okto_nexus_connector.errors import ConnectorError
 from okto_nexus_connector.services.execution_selection import acknowledge_execution_binding
+from okto_nexus_connector.services.core_host import CoreRuntimeHost
 from okto_nexus_connector.services.launch_configuration import stage_launch_configuration, approved_launch_setup
+from okto_nexus_connector.platform.paths import state_dir
 from okto_nexus_connector.storage.state_store import StateStore, state_from_json, state_to_json
 from tests.unit.test_execution_selection import selection
 from tests.unit.test_r4_execution import execution, observed, failed
@@ -83,6 +85,98 @@ async def test_default_owner_uses_approved_references_and_real_core_prepare(exec
     assert environment["OPENAI_API_KEY"] == "provider-test-secret"
     assert environment["HOME"] == str(store.path.parent / "provider-home")
     assert "provider-test-secret" not in store.path.read_text()
+
+
+@pytest.mark.parametrize("selection", [True], indirect=True)
+async def test_host_approved_environment_qualifies_once_after_materialization(
+        execution, selection, tmp_path, monkeypatch):
+    from okto_nexus_connector.services import core_host, execution_selection, launch_configuration
+
+    owner, connection, factory, receipts, opening = execution
+    store, candidate, *_ = selection
+    owner.launch_provider = None
+    await connection.emit(opening)
+    await observed(receipts, owner)
+    prepared = factory.opened[0]
+
+    class Vault:
+        def resolve(self, reference):
+            assert reference == "vault:provider-demo"
+            return "provider-test-secret"
+
+    host = CoreRuntimeHost(state_dir(tmp_path / "qualified-runtime"), Vault())
+    captured = []
+    original_create = core_host.create_runtime
+    def create(**options):
+        captured.append(options["environment"])
+        return original_create(**options)
+    monkeypatch.setattr(core_host, "create_runtime", create)
+    full = execution_selection.resolve_execution_selection
+    full_calls = []
+    def count_full(*args, **kwargs):
+        full_calls.append(kwargs["frame"]["session_id"])
+        return full(*args, **kwargs)
+    monkeypatch.setattr(execution_selection, "resolve_execution_selection", count_full)
+    monkeypatch.setattr(launch_configuration, "resolve_execution_selection", count_full)
+    try:
+        setup = await host.approved_launch(store, frame=opening, candidates=[candidate])
+        await host.build_r4(store, frame=opening, candidates=[candidate],
+            environment=setup.environment, opening_selection=setup.opening_selection)
+        assert full_calls == ["session"]
+        environment = await captured.pop()(prepared)
+        assert environment["OPENAI_API_KEY"] == "provider-test-secret"
+        assert full_calls == ["session", "session"]
+
+        # An arbitrary environment callback retains the host's own full
+        # post-callback qualification, including after its possible awaits.
+        async def arbitrary(_):
+            return {}
+        other_host = CoreRuntimeHost(state_dir(tmp_path / "arbitrary-runtime"), Vault())
+        try:
+            await other_host.build_r4(store, frame=opening,
+                candidates=[candidate], environment=arbitrary)
+            assert full_calls == ["session"] * 3
+            assert await captured.pop()(prepared) == {}
+            assert full_calls == ["session"] * 4
+        finally:
+            await other_host.shutdown_all()
+    finally:
+        await host.shutdown_all()
+
+
+@pytest.mark.parametrize("selection", [True], indirect=True)
+async def test_host_approved_environment_refuses_post_secret_executable_drift(
+        execution, selection, tmp_path, monkeypatch):
+    from pathlib import Path
+    from okto_nexus_connector.services import core_host
+
+    owner, connection, factory, receipts, opening = execution
+    store, candidate, *_ = selection
+    owner.launch_provider = None
+    await connection.emit(opening)
+    await observed(receipts, owner)
+
+    class Vault:
+        def resolve(self, reference):
+            assert reference == "vault:provider-demo"
+            Path(candidate.executable).write_bytes(b"Executable changed during secret resolution")
+            return "provider-test-secret"
+
+    host = CoreRuntimeHost(state_dir(tmp_path / "drift-runtime"), Vault())
+    captured = []
+    original_create = core_host.create_runtime
+    def create(**options):
+        captured.append(options["environment"])
+        return original_create(**options)
+    monkeypatch.setattr(core_host, "create_runtime", create)
+    try:
+        setup = await host.approved_launch(store, frame=opening, candidates=[candidate])
+        await host.build_r4(store, frame=opening, candidates=[candidate],
+            environment=setup.environment, opening_selection=setup.opening_selection)
+        with pytest.raises(ConnectorError, match="PROFILE_DRIFT"):
+            await captured.pop()(factory.opened[0])
+    finally:
+        await host.shutdown_all()
 
 
 async def test_default_owner_missing_configuration_never_opens(execution):

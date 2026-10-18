@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import asyncio
 import time
+import weakref
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import FunctionType
 from typing import Mapping
 
 from nexus_connector_core import (
@@ -130,6 +132,10 @@ class CoreRuntimeHost:
         self._execution_selections = {}
         self._native_action_owners = {}
         self._native_action_factories = {}
+        # Only environment callbacks produced by this host's approved launch
+        # path may satisfy the post-materialization full qualification itself.
+        # Weak keys do not retain abandoned launch setups.
+        self._qualified_environments = weakref.WeakKeyDictionary()
         self._journal: SQLiteJournal | None = None
         self._ledger: SQLiteOwnedSlotLedger | None = None
         # CN1/CN-05.05: single-flight initialization for the shared
@@ -363,9 +369,14 @@ class CoreRuntimeHost:
     async def approved_launch(self, store, *, frame, candidates, capability=None, http=None,
                               capability_metadata=None, opening=None):
         from .launch_configuration import approved_launch_setup
-        return await approved_launch_setup(store, self._vault, frame=frame, candidates=candidates,
-                                           capability=capability, http=http, capability_metadata=capability_metadata,
-                                           tool_root=self.root / 'runtime' / 'r4-mcp', opening=opening)
+        from nexus_connector_core import encode_r4_frame
+        candidates = tuple(candidates)
+        setup = await approved_launch_setup(store, self._vault, frame=frame, candidates=candidates,
+                                            capability=capability, http=http, capability_metadata=capability_metadata,
+                                            tool_root=self.root / 'runtime' / 'r4-mcp', opening=opening)
+        self._qualified_environments[setup.environment] = (
+            store, encode_r4_frame(frame), candidates, setup.opening_selection)
+        return setup
 
     async def build_r4(self, store, *, frame, candidates, environment, factory=None,
                        native_action_factory=None, opening_selection=None):
@@ -391,6 +402,9 @@ class CoreRuntimeHost:
                 frame=decode_r4_frame(encoded), candidates=candidates,
                 expected=opening)
         selection = await resolve(opening=opening_selection)
+        qualified_environment = (isinstance(environment, FunctionType)
+            and self._qualified_environments.get(environment) == (
+                store, encoded, candidates, selection))
         if native_action_factory is not None and (
                 not callable(native_action_factory) or selection.candidate.adapter_id != "pi_rpc"):
             raise ConnectorError("VALIDATION_ERROR", "native_action_launch",
@@ -412,9 +426,11 @@ class CoreRuntimeHost:
             if await resolve(opening=selection) != selection:
                 raise ConnectorError('PROFILE_DRIFT', 'runtime_environment', 'The approved execution selection changed.')
             value = await environment(prepared)
-            # Retain full byte qualification after materializing credentials.
-            # Core also checks the selected build before native spawn.
-            if await resolve() != selection:
+            # An environment produced by this host already performs this full
+            # check after materialization. Arbitrary callbacks still require
+            # an independent full qualification here. Core always checks the
+            # selected build again before native spawn.
+            if not qualified_environment and await resolve() != selection:
                 raise ConnectorError('PROFILE_DRIFT', 'runtime_environment', 'The approved execution selection changed.')
             return value
         native_owner = None
