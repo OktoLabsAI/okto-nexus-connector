@@ -55,6 +55,36 @@ async def test_pending_stream_replays_once_and_reuses_its_authority(lifecycle):
 
 
 @pytest.mark.parametrize("selection",[True],indirect=True)
+async def test_hot_stream_yields_to_another_stream_before_its_next_page(lifecycle):
+    owner,http,first,progress,journal,native,attached,keys=await prepared(lifecycle)
+    second={**first,"session_id":"second-session"}
+    progress.register(second)
+    await journal.record_event(RuntimeEvent(second["server_id"],second["executor_id"],
+                                            second["session_id"],second["stream_epoch"],
+                                            0,"text_delta",None,{"text":"second"}))
+    original=owner.connection.publish_events
+    order=[]
+    extra=0
+    async def publish(**values):
+        nonlocal extra
+        order.append(values["session_id"])
+        if values["session_id"]==first["session_id"] and extra<2:
+            extra+=1
+            await journal.record_event(RuntimeEvent(first["server_id"],first["executor_id"],
+                                                    first["session_id"],first["stream_epoch"],
+                                                    0,"text_delta",None,{"text":f"extra-{extra}"}))
+        return await original(**values)
+    owner.connection.publish_events=publish
+    await recover_event_streams(owner.store,owner.vault,http,owner.host,owner.connection,
+                               require_current=current,authorities={})
+    assert order[:2]==[first["session_id"],second["session_id"]]
+    assert order.count(first["session_id"])==3
+    assert progress.read(first)["core_applied"]==3
+    assert progress.read(second)["core_applied"]==1
+    assert not native.opened
+
+
+@pytest.mark.parametrize("selection",[True],indirect=True)
 async def test_local_ack_failure_keeps_progress_and_does_not_issue_another_ticket(lifecycle,monkeypatch):
     owner,http,scope,progress,journal,native,attached,keys=await prepared(lifecycle)
     authorities={}
@@ -74,6 +104,35 @@ async def test_local_ack_failure_keeps_progress_and_does_not_issue_another_ticke
                                require_current=current,authorities=authorities)
     assert progress.read(scope)["core_applied"]==1
     assert calls==2 and len(keys)==len(attached)==1 and not native.opened
+
+
+@pytest.mark.parametrize("selection",[True],indirect=True)
+async def test_one_stream_commit_failure_does_not_starve_another(lifecycle,monkeypatch):
+    owner,http,first,progress,journal,native,attached,keys=await prepared(lifecycle)
+    second={**first,"session_id":"second-session"}
+    progress.register(second)
+    await journal.record_event(RuntimeEvent(second["server_id"],second["executor_id"],
+                                            second["session_id"],second["stream_epoch"],
+                                            0,"text_delta",None,{"text":"second"}))
+    original=journal.acknowledge_events
+    failed=False
+    async def fail_first_once(cursor,sequence):
+        nonlocal failed
+        if cursor.session_id==first["session_id"] and not failed:
+            failed=True
+            raise OSError("Injected first-stream Core ACK interruption.")
+        return await original(cursor,sequence)
+    monkeypatch.setattr(journal,"acknowledge_events",fail_first_once)
+    with pytest.raises(OSError):
+        await recover_event_streams(owner.store,owner.vault,http,owner.host,owner.connection,
+                                   require_current=current,authorities={})
+    assert progress.read(first)["remote_acked"]==1
+    assert progress.read(first)["core_applied"]==0
+    assert progress.read(second)["remote_acked"]==progress.read(second)["core_applied"]==1
+    await recover_event_streams(owner.store,owner.vault,http,owner.host,owner.connection,
+                               require_current=current,authorities={})
+    assert progress.read(first)["core_applied"]==1
+    assert not native.opened
 
 
 @pytest.mark.parametrize("selection",[True],indirect=True)

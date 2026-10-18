@@ -1,6 +1,7 @@
 """Recover durable event obligations before the control-ready transition."""
 import asyncio
 import time
+from collections import deque
 from nexus_connector_core import EventCursor
 from ..errors import ConnectorError
 from .r4_tickets import acquire_ticket
@@ -13,11 +14,12 @@ async def recover_event_streams(store,vault,http,host,channel,*,require_current,
     server_id,executor_id=channel.state.server_id,channel.state.executor_id
     journal=await host.ensure_history_journal()
     after,high,batches=0,None,0
+    pending_scopes=deque()
     try:
         for _ in range(32):
             await require_current()
             rows,high=await asyncio.to_thread(publisher.store.page,server_id,executor_id,after=after,high=high)
-            if not rows: return
+            if not rows: break
             for after,state in rows:
                 scope=state["scope"]
                 await require_current()
@@ -36,35 +38,57 @@ async def recover_event_streams(store,vault,http,host,channel,*,require_current,
                     await iterator.aclose()
                 if pending is None:
                     continue
-                binding,identity=await asyncio.to_thread(_binding,store,http,server_id,executor_id,scope)
-                authority=current_publication_authority(authorities,binding,identity,clock())
-                if authority is None:
-                    async def ticket_current():
-                        await require_current()
-                        if await asyncio.to_thread(_binding, store, http, server_id, executor_id, scope) != (binding, identity):
-                            raise ConnectorError("STALE_GENERATION", "r4_event_recovery", "The event publication authority changed.")
-                    ticket, deadline = await acquire_ticket(store, vault, http, binding, identity,
-                        require_current=ticket_current, clock=clock)
-                    authority = PublicationAuthority(binding, identity, ticket, deadline)
-                    authorities[binding.binding_id] = authority
-                async def current():
+                pending_scopes.append(scope)
+            if after>=high: break
+        scan_incomplete=after<high
+        # A hot stream gets one finite page per turn. Its next page goes behind
+        # every other pending stream, so it cannot monopolize pre-ready replay.
+        first_error=None
+        while pending_scopes:
+            scope=pending_scopes.popleft()
+            await require_current()
+            binding,identity=await asyncio.to_thread(_binding,store,http,server_id,executor_id,scope)
+            authority=current_publication_authority(authorities,binding,identity,clock())
+            if authority is None:
+                async def ticket_current():
                     await require_current()
-                    if (clock()>=authority.deadline or (binding,identity)!=(authority.binding,authority.identity) or
-                            await asyncio.to_thread(_binding,store,http,server_id,executor_id,scope)!=(binding,identity)):
-                        raise ConnectorError("STALE_GENERATION","r4_event_recovery","The event publication authority is no longer current.")
+                    if await asyncio.to_thread(_binding, store, http, server_id, executor_id, scope) != (binding, identity):
+                        raise ConnectorError("STALE_GENERATION", "r4_event_recovery", "The event publication authority changed.")
+                ticket, deadline = await acquire_ticket(store, vault, http, binding, identity,
+                    require_current=ticket_current, clock=clock)
+                authority = PublicationAuthority(binding, identity, ticket, deadline)
+                authorities[binding.binding_id] = authority
+            async def current():
+                await require_current()
+                if (clock()>=authority.deadline or (binding,identity)!=(authority.binding,authority.identity) or
+                        await asyncio.to_thread(_binding,store,http,server_id,executor_id,scope)!=(binding,identity)):
+                    raise ConnectorError("STALE_GENERATION","r4_event_recovery","The event publication authority is no longer current.")
+            await current()
+            attach_scope=dict(binding_id=binding.binding_id,agent_id=binding.agent_id,
+                credential_epoch=authority.ticket.credential_epoch,
+                authorization_revision=authority.ticket.authorization_revision,
+                configuration_revision=binding.configuration_revision)
+            if not channel.is_attached(**attach_scope):
+                await channel.attach_binding(**attach_scope,ticket=authority.ticket.ticket)
+            if batches>=4096:
+                raise ConnectorError("RECONCILIATION_REQUIRED","r4_event_recovery","Event recovery requires another pass.")
+            try:
+                more=await publisher.step(scope)
+            except Exception as error:
+                # A failed local commit belongs to this stream. Keep the
+                # recovery attempt unsuccessful, but let siblings make durable
+                # progress before the next retry.
                 await current()
-                await channel.attach_binding(binding_id=binding.binding_id,agent_id=binding.agent_id,
-                    ticket=authority.ticket.ticket,credential_epoch=authority.ticket.credential_epoch,
-                    authorization_revision=authority.ticket.authorization_revision,configuration_revision=binding.configuration_revision)
-                while True:
-                    await current()
-                    if batches>=4096:
-                        raise ConnectorError("RECONCILIATION_REQUIRED","r4_event_recovery","Event recovery requires another pass.")
-                    more=await publisher.step(scope)
-                    await current()
-                    if not more: break
-                    batches+=1
-            if after>=high: return
-        raise ConnectorError("RECONCILIATION_REQUIRED","r4_event_recovery","The stream scan requires another recovery pass.")
+                if first_error is None:
+                    first_error=error
+                continue
+            await current()
+            if more:
+                batches+=1
+                pending_scopes.append(scope)
+        if first_error is not None:
+            raise first_error
+        if scan_incomplete:
+            raise ConnectorError("RECONCILIATION_REQUIRED","r4_event_recovery","The stream scan requires another recovery pass.")
     finally:
         await publisher.stop()
