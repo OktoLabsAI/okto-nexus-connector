@@ -22,7 +22,7 @@ if TYPE_CHECKING:
         ExecutionContext, OperationReceipt, PreparedLaunch,
     )
 
-from ..errors import CapabilityMaterialUnavailable, ConnectorError, TicketMaterialUnavailable
+from ..errors import CapabilityMaterialUnavailable, ConnectorError, TicketMaterialUnavailable, TicketReplacementRequired
 from ..redaction import redact_text
 
 DEFAULT_TIMEOUT = httpx.Timeout(15.0, connect=10.0)
@@ -1439,7 +1439,8 @@ def _ticket_error_from(response: httpx.Response) -> ConnectorError:
     if not isinstance(error, dict):
         return ConnectorError("VERSION_INCOMPATIBLE", "binding_ticket",
                               "Invalid ticket recovery metadata.")
-    if error.get("code") != "CREDENTIAL_MATERIAL_UNAVAILABLE":
+    code = error.get("code")
+    if code not in ("CREDENTIAL_MATERIAL_UNAVAILABLE", "CREDENTIAL_REPLACEMENT_REQUIRED"):
         return _error_from(response)
     ticket_id = error.get("ticket_id")
     if (type(ticket_id) is not str or not 5 <= len(ticket_id) <= 160
@@ -1451,8 +1452,11 @@ def _ticket_error_from(response: httpx.Response) -> ConnectorError:
             or error.get("operation_id") is not None):
         return ConnectorError("VERSION_INCOMPATIBLE", "binding_ticket",
                               "Invalid ticket recovery metadata.")
+    if code == "CREDENTIAL_REPLACEMENT_REQUIRED":
+        return TicketReplacementRequired(
+            code, "credential", "An active ticket must be replaced explicitly.",
+            ticket_id=ticket_id)
     return TicketMaterialUnavailable(
-        "CREDENTIAL_MATERIAL_UNAVAILABLE", "credential",
-        "The ticket secret is returned only once.",
+        code, "credential", "The ticket secret is returned only once.",
         action="Recover the persisted intent before requesting a replacement.",
         ticket_id=ticket_id)

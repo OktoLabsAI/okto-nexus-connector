@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from okto_nexus_connector.errors import ConnectorError, TicketMaterialUnavailable
+from okto_nexus_connector.errors import ConnectorError, TicketMaterialUnavailable, TicketReplacementRequired
 from okto_nexus_connector.services.r4_tickets import acquire_ticket
 from okto_nexus_connector.storage.r4_tickets import R4TicketStore
 from tests.unit.test_execution_selection import selection
@@ -44,6 +44,14 @@ def test_expiration_hint_does_not_extend_or_invent_server_authority(tmp_path, no
     assert second["client_intent_id"] == first["client_intent_id"]
 
 
+def test_server_confirmed_active_ticket_overrides_local_expiration_hint(tmp_path):
+    store = R4TicketStore(tmp_path / "tickets.db")
+    first = store.reserve(metadata(), 100)
+    second = store.replace(first, "ept_active", 800, active=True)
+    assert second["replaces_ticket_id"] == "ept_active"
+    assert second["client_intent_id"] == first["client_intent_id"]
+
+
 def test_corrupt_intent_is_refused_before_reuse(tmp_path):
     store = R4TicketStore(tmp_path / "tickets.db")
     store.reserve(metadata(), 100)
@@ -77,6 +85,42 @@ async def test_lost_reply_replays_exact_request_then_replaces_original_intent(li
     raw = R4TicketStore.for_state(store).path.read_bytes()
     assert b"agent-key" not in raw and ticket.ticket.encode() not in raw
     assert not attached and not native.opened
+
+
+@pytest.mark.parametrize("selection", [True], indirect=True)
+async def test_renewed_server_ticket_replaces_after_local_expiration_hint(lifecycle):
+    owner, http, store, _, native, attached, _, _ = lifecycle
+    binding, identity = next(iter(owner._bindings().values()))
+    original = http.request_r4_binding_ticket
+    requests = []
+    async def issuing(key, **kwargs):
+        requests.append(kwargs)
+        if len(requests) == 1:
+            raise ConnectorError("OUTCOME_UNKNOWN", "http", possible_effect=True)
+        if len(requests) == 2:
+            raise TicketMaterialUnavailable("CREDENTIAL_MATERIAL_UNAVAILABLE", "credential",
+                                            ticket_id="ept_old")
+        if len(requests) == 3:
+            raise TicketReplacementRequired("CREDENTIAL_REPLACEMENT_REQUIRED", "credential",
+                                            ticket_id="ept_renewed")
+        return await original(key, **kwargs)
+    http.request_r4_binding_ticket = issuing
+    with pytest.raises(ConnectorError, match="OUTCOME_UNKNOWN"):
+        await acquire_ticket(store, owner.vault, http, binding, identity,
+                             require_current=current, wall_clock=lambda: 0.0)
+    ticket, _ = await acquire_ticket(store, owner.vault, http, binding, identity,
+                                     require_current=current, wall_clock=lambda: 1000.0)
+    # The first recovery uses a local expiration hint, which may be stale
+    # after Server-side renewal. The second uses the Server's active ticket.
+    intent = R4TicketStore.for_state(store)
+    with sqlite3.connect(intent.path) as conn:
+        import json
+        value = json.loads(conn.execute("SELECT metadata FROM intents").fetchone()[0])
+    assert requests[0]["client_intent_id"] == requests[3]["client_intent_id"]
+    assert requests[2]["replaces_ticket_id"] is None
+    assert requests[3]["replaces_ticket_id"] == "ept_renewed"
+    assert value["replaces_ticket_id"] == "ept_renewed"
+    assert ticket.ticket and not attached and not native.opened
 
 
 @pytest.mark.parametrize("selection", [True], indirect=True)
