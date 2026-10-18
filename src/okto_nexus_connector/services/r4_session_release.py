@@ -15,17 +15,23 @@ from ..storage.r4_events import R4EventStore
 from ..storage.r4_session_releases import R4SessionReleaseStore
 
 
-async def retire_accepted_event(store, request):
-    """Idempotently checkpoint a released stream after its Server ACK is durable."""
+async def retire_accepted_event(store, request, journal):
+    """Checkpoint a Server-accepted stream and claim before clearing the outbox marker."""
     events=R4EventStore.for_state(store)
     releases=R4SessionReleaseStore.for_state(store)
     scope={**request['scope'], 'stream_epoch':request['stream_epoch']}
+    digest=sha256(encode_session_release(request)).hexdigest()
     await asyncio.to_thread(events.retire,scope,sequence=request['sequence'],
         release_id=request['release_id'],
-        release_digest=sha256(encode_session_release(request)).hexdigest())
-    # Separate SQLite stores cannot commit atomically. If this write is lost,
-    # the next recovery repeats the event-store checkpoint before marking it.
-    await asyncio.to_thread(releases.mark_event_retired,request)
+        release_digest=digest)
+    await journal.retire_reconciliation_claim(
+        SessionKey(request['scope']['server_id'],request['scope']['executor_id'],
+                   request['scope']['session_id']),
+        operation_id=request['opening_operation_id'],
+        release_id=request['release_id'],release_digest=digest)
+    # The three stores cannot commit atomically. A lost final marker causes
+    # recovery to repeat both idempotent checkpoints, never to invent an ACK.
+    await asyncio.to_thread(releases.mark_checkpoints_retired,request)
 
 
 class R4SessionReleaseReporter:
@@ -36,7 +42,8 @@ class R4SessionReleaseReporter:
         self.store = store
 
     async def retire_accepted(self, request):
-        await retire_accepted_event(self.store, request)
+        await retire_accepted_event(self.store, request,
+                                    await self.host.ensure_history_journal())
 
     async def report(self, *, scope, connection_id, connection_generation):
         """Observe a session after its owner drains runtime/native-tool producers.

@@ -163,7 +163,8 @@ class R4ReconciliationReporter:
         claims, facts, watermarks = [], [], []
         if not self.claims_done:
             page = await journal.claimed_sessions(self.server_id, self.executor_id,
-                after_rowid=self.after, high_water_rowid=self.high, limit=128)
+                after_rowid=self.after, high_water_rowid=self.high, limit=128,
+                pending_only=True)
             self.high = page.high_water_rowid
             for claim in page.claims:
                 self.seen_sessions.add(claim.key.session_id)

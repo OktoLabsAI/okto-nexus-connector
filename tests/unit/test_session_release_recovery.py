@@ -6,7 +6,7 @@ from hashlib import sha256
 
 import pytest
 from nexus_connector_core import R4_PREVIEW_REVISION
-from nexus_connector_core.session_release import encode_session_release
+from nexus_connector_core.session_release import encode_session_release,session_release_accepted
 from okto_nexus_connector.errors import ConnectorError
 from okto_nexus_connector.storage.r4_session_releases import R4SessionReleaseStore
 from tests.contract.test_session_release import request
@@ -101,8 +101,27 @@ def test_prior_schema_upgrades_without_replacing_pending_request(tmp_path):
         conn.execute('PRAGMA user_version=1')
     assert R4SessionReleaseStore(path).pending(**identity(original)) == original
     with sqlite3.connect(path) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 3
-        assert conn.execute('SELECT request,recovery,event_retired FROM releases').fetchone() == (raw, None, 0)
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 4
+        assert conn.execute('SELECT request,recovery,event_retired,claim_retired FROM releases').fetchone() == (raw, None, 0, 0)
+
+
+def test_accepted_event_checkpoint_from_schema_three_still_retires_core_claim(tmp_path):
+    original,path=request(),tmp_path/'schema-three.sqlite3'
+    raw=encode_session_release(original)
+    reply=encode_session_release(session_release_accepted(original))
+    with sqlite3.connect(path) as conn:
+        conn.execute('CREATE TABLE releases (release_id TEXT PRIMARY KEY,identity TEXT NOT NULL,'
+                     'request BLOB NOT NULL,digest TEXT NOT NULL,state TEXT NOT NULL,reply BLOB,'
+                     'recovery BLOB,recovery_digest TEXT,event_retired INTEGER NOT NULL DEFAULT 0)')
+        conn.execute('INSERT INTO releases VALUES (?,?,?,?,?,?,?,?,?)',(
+            original['release_id'],R4SessionReleaseStore._identity(**identity(original)),raw,
+            sha256(raw).hexdigest(),'ACCEPTED',reply,None,None,1))
+        conn.execute('PRAGMA user_version=3')
+    store=R4SessionReleaseStore(path)
+    assert [item[1] for item in store.accepted_event_page(original['server_id'],original['executor_id'])] == [original]
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 4
+        assert conn.execute('SELECT event_retired,claim_retired FROM releases').fetchone() == (1,0)
 
 
 def test_recovery_pages_do_not_skip_an_unmatched_record_or_rewrite_history(tmp_path):

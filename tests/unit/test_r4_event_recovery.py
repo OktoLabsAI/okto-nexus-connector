@@ -137,7 +137,7 @@ async def test_one_stream_commit_failure_does_not_starve_another(lifecycle,monke
 
 @pytest.mark.parametrize("selection",[True],indirect=True)
 async def test_reconnect_finishes_an_accepted_release_event_checkpoint(lifecycle):
-    from nexus_connector_core import EventCursor
+    from nexus_connector_core import EventCursor,OperationKey,SessionKey
     from nexus_connector_core.session_release import session_release_accepted
     from okto_nexus_connector.storage.r4_session_releases import R4SessionReleaseStore
     from tests.contract.test_session_release import request
@@ -147,6 +147,12 @@ async def test_reconnect_finishes_an_accepted_release_event_checkpoint(lifecycle
     accepted['scope']={**accepted['scope'],**{k:scope[k] for k in FIELDS if k!='stream_epoch'}}
     accepted['stream_epoch']=scope['stream_epoch']
     accepted['sequence']=1
+    claim=await journal.get_session_claim(SessionKey(scope['server_id'],scope['executor_id'],scope['session_id']))
+    if claim is None:
+        await journal.admit(OperationKey(scope['server_id'],scope['executor_id'],accepted['opening_operation_id']),
+                            'intent',scope['session_id'],claim_session=True)
+    else:
+        accepted['opening_operation_id']=claim.opening_operation_id
     releases=R4SessionReleaseStore.for_state(owner.store)
     releases.prepare(accepted)
     releases.acknowledge(session_release_accepted(accepted))
@@ -159,6 +165,7 @@ async def test_reconnect_finishes_an_accepted_release_event_checkpoint(lifecycle
     assert progress.page(scope['server_id'],scope['executor_id'])[0]==[]
     assert progress.read(scope)['core_applied']==1
     assert releases.accepted_event_page(scope['server_id'],scope['executor_id'])==[]
+    assert (await journal.claimed_sessions(scope['server_id'],scope['executor_id'],pending_only=True)).claims==()
     assert not native.opened
 
 

@@ -31,7 +31,7 @@ class R4SessionReleaseStore:
             conn.execute('PRAGMA max_page_count=32768')
             conn.execute('BEGIN IMMEDIATE')
             version = conn.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2, 3):
+            if version not in (0, 1, 2, 3, 4):
                 raise ConnectorError('VERSION_INCOMPATIBLE', 'session_release',
                                      'The release outbox requires a newer Connector.')
             conn.execute('CREATE TABLE IF NOT EXISTS releases ('
@@ -44,6 +44,10 @@ class R4SessionReleaseStore:
             if version < 3:
                 conn.execute('ALTER TABLE releases ADD COLUMN event_retired INTEGER NOT NULL DEFAULT 0 '
                              'CHECK(event_retired IN (0,1))')
+            if version < 4:
+                conn.execute('ALTER TABLE releases ADD COLUMN claim_retired INTEGER NOT NULL DEFAULT 0 '
+                             'CHECK(claim_retired IN (0,1))')
+                conn.execute('DROP INDEX IF EXISTS release_event_retirement')
             conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS pending_release ON releases(identity) '
                          'WHERE state=\'PENDING\'')
             conn.execute('CREATE INDEX IF NOT EXISTS release_identity ON releases(identity)')
@@ -54,8 +58,8 @@ class R4SessionReleaseStore:
             conn.execute('CREATE INDEX IF NOT EXISTS release_event_retirement ON releases('
                          'json_extract(identity,\'$.scope.server_id\'),'
                          'json_extract(identity,\'$.scope.executor_id\')) '
-                         'WHERE state=\'ACCEPTED\' AND event_retired=0')
-            conn.execute('PRAGMA user_version=3')
+                         'WHERE state=\'ACCEPTED\' AND (event_retired=0 OR claim_retired=0)')
+            conn.execute('PRAGMA user_version=4')
             yield conn
             conn.commit()
         except (OSError, sqlite3.Error, ValueError, KeyError, TypeError) as error:
@@ -178,13 +182,13 @@ class R4SessionReleaseStore:
             raise ValueError('Invalid terminal event page.')
         with self._transaction() as conn:
             rows=conn.execute('SELECT rowid,* FROM releases WHERE rowid>? '
-                'AND state=\'ACCEPTED\' AND event_retired=0 '
+                'AND state=\'ACCEPTED\' AND (event_retired=0 OR claim_retired=0) '
                 'AND json_extract(identity,\'$.scope.server_id\')=? '
                 'AND json_extract(identity,\'$.scope.executor_id\')=? '
                 'ORDER BY rowid LIMIT ?', (after,server_id,executor_id,limit)).fetchall()
             return [(row['rowid'],self._decode(row)) for row in rows]
 
-    def mark_event_retired(self, request):
+    def mark_checkpoints_retired(self, request):
         request=decode_session_release(encode_session_release(request))
         with self._transaction() as conn:
             row=conn.execute('SELECT * FROM releases WHERE release_id=?',
@@ -192,7 +196,7 @@ class R4SessionReleaseStore:
             if row is None or self._decode(row)!=request or row['state']!='ACCEPTED':
                 raise ConnectorError('RECONCILIATION_REQUIRED','session_release',
                                      'The release has no accepted acknowledgment.')
-            conn.execute('UPDATE releases SET event_retired=1 WHERE release_id=?',
+            conn.execute('UPDATE releases SET event_retired=1,claim_retired=1 WHERE release_id=?',
                          (request['release_id'],))
 
     @staticmethod

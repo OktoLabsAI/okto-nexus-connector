@@ -23,7 +23,7 @@ async def recover_event_streams(store,vault,http,host,channel,*,require_current,
         if not retired: break
         for retired_after,request in retired:
             await require_current()
-            await retire_accepted_event(store,request)
+            await retire_accepted_event(store,request,journal)
         if len(retired)<128: break
     else:
         if await asyncio.to_thread(releases.accepted_event_page,server_id,executor_id,after=retired_after,limit=1):

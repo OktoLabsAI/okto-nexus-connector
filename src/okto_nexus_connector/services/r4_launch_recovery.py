@@ -12,7 +12,7 @@ async def recover_launches(reporter, journal, ledger, request):
     was_blocked = reporter.blocked
     for _ in range(32):
         page = await journal.claimed_sessions(reporter.server_id, reporter.executor_id,
-            after_rowid=after, high_water_rowid=high, limit=128)
+            after_rowid=after, high_water_rowid=high, limit=128,pending_only=True)
         high = page.high_water_rowid
         for claim in page.claims:
             launch = await journal.get_process_launch(claim.key)
