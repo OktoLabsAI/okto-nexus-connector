@@ -21,5 +21,7 @@ resending its event. No live Nexus/Connector instance or real harness was used
 for this technical checkpoint; the planned major UI gates remain separate.
 
 The scan still starts at row zero and examines at most 4096 registered streams
-per recovery attempt. A durable scan cursor is required before this checkpoint
-can claim fairness with more than 4096 registered streams or full M4 acceptance.
+per recovery attempt. The event store itself currently rejects a 4097th stream,
+so a larger scan cannot occur without changing its capacity and retention.
+Lifecycle-safe retirement of completed streams, or a larger durable store with
+a resumable scan cursor, is required for the M4 historical-scale acceptance.
