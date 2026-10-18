@@ -16,19 +16,15 @@ async def recover_event_streams(store,vault,http,host,channel,*,require_current,
     server_id,executor_id=channel.state.server_id,channel.state.executor_id
     journal=await host.ensure_history_journal()
     releases=R4SessionReleaseStore.for_state(store)
-    retired_after=0
-    for _ in range(32):
+    # Repair one bounded page before the new control generation proceeds. An
+    # accepted reconciliation starts the independent, indexed history scan;
+    # old resolved releases must never keep the Connector out of Ready merely
+    # because their count exceeds a pre-ready page budget.
+    await require_current()
+    retired=await asyncio.to_thread(releases.resolved_checkpoint_page,server_id,executor_id)
+    for _,request,sequence,digest in retired:
         await require_current()
-        retired=await asyncio.to_thread(releases.resolved_checkpoint_page,server_id,executor_id,after=retired_after)
-        if not retired: break
-        for retired_after,request,sequence,digest in retired:
-            await require_current()
-            await retire_resolved_checkpoint(store,request,journal,sequence=sequence,digest=digest)
-        if len(retired)<128: break
-    else:
-        if await asyncio.to_thread(releases.resolved_checkpoint_page,server_id,executor_id,after=retired_after,limit=1):
-            raise ConnectorError('RECONCILIATION_REQUIRED','r4_event_recovery',
-                                 'Terminal event checkpoints require another pass.')
+        await retire_resolved_checkpoint(store,request,journal,sequence=sequence,digest=digest)
     after,high,batches=0,None,0
     pending_scopes=deque()
     try:
