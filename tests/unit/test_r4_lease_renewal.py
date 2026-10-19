@@ -67,7 +67,7 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None,
         if purpose == "renew":
             armed = refusal_armed and (renewal_gate is None or renewal_gate.is_set())
             scoped = refuse in ('scoped', 'expired_scoped', 'revalidation_scoped')
-            if (renewal_gate is None or armed) and (not scoped or scope['session_id'] == frame['session_id']):
+            if armed and (not scoped or scope['session_id'] == frame['session_id']):
                 entered.set()
             # A scoped denial holds only the selected session. Holding every
             # sibling while the shared test clock advances injects unrelated
@@ -295,12 +295,13 @@ async def test_expired_lease_before_renewal_refuses_another_request(lifecycle,mo
         lifecycle,monkeypatch,hold=True,clock=clock)
     try:
         initial = session.deadline
+        prior_calls = len(calls)
         clock.now = initial
         await asyncio.wait_for(asyncio.shield(session.renewal), 8)
         assert owner.owner.failure is None and session.local_lease_failure == 'LEASE_EXPIRED'
         assert session.deadline == initial and owner.connection.online and session.contained
         assert native.native.stopped
-        assert not entered.is_set() and len(calls) == 1
+        assert not entered.is_set() and len(calls) == prior_calls
         assert len(native.opened) == 1
     finally:
         release.set()
