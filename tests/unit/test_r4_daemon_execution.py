@@ -226,7 +226,17 @@ async def test_native_claim_keeps_connector_owner_until_outcome_settles(lifecycl
             await asyncio.wait_for(closing, 10)
         writer.close()
         await writer.wait_closed()
-    assert await reader.read() == b''
+    response = await reader.read()
+    if phase == 'before_commit':
+        assert response == b''
+    elif response:
+        # The committed result can win the race with socket shutdown.
+        # Receiving that one result is valid; closing must still retain the
+        # owner until the effect settles.
+        lines = response.splitlines()
+        assert len(lines) == 1
+        assert json.loads(lines[0]) == {'ok': True, 'data': {
+            'handoff_id': 'work', 'status': 'CLAIMED', 'claim_epoch': 1}}
     assert native.native.stopped
     assert effects == ([] if phase == 'before_commit' else ['connector-claim-race'])
     assert not owner.host._native_action_owners

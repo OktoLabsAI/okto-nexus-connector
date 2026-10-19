@@ -47,7 +47,7 @@ jobs:
       - name: Lint boundaries (structural no-MCP audit)
         run: python -m pytest tests/unit/test_boundaries.py -q
       - name: Full suite
-        run: python -m pytest tests/ -q --tb=short
+        run: python -m pytest tests/ -vv --tb=short -o faulthandler_timeout=120
         env:
           OKTO_NEXUS_CONNECTOR_VAULT: file
 

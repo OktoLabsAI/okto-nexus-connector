@@ -134,6 +134,14 @@ async def test_cli_exit_does_not_stop_daemon(tmp_path: Path):
             [sys.executable, "-m", "okto_nexus_connector.cli.main",
              "--state-dir", str(root), "--json", "daemon", "start"],
             env=env, cwd=root, capture_output=True, text=True, timeout=60)
+        if os.name == "nt" and started.returncode == 3:
+            try:
+                refusal = json.loads(started.stdout)["error"]
+            except (ValueError, KeyError, TypeError):
+                refusal = {}
+            if (refusal.get("code") == "DAEMON_UNAVAILABLE" and
+                    "Job Object breakaway" in refusal.get("message", "")):
+                pytest.skip("The Windows runner prohibits independent Job Object breakaway")
         assert started.returncode == 0, started.stderr or started.stdout
         readiness = await _wait_live(lock)
         pid = readiness.pid

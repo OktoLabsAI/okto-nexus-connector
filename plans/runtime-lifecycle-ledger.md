@@ -246,3 +246,19 @@ pending inventory but never its cancelled candidate. An isolated Connector
 installation using this wheel passed 65 recovery/registration cases and 95
 schema-adjacent cases before the cancellation assertion was updated; that
 case passed separately. Full CI qualification remains pending.
+
+## M3v — Windows CI environment and committed-response race
+
+Run `39181170027` passed all three Linux full suites and the macOS daemon
+subset. Windows 3.11 reached 1,204 passed/one failed: the GitHub runner
+forbade Job Object breakaway, so `daemon start` correctly returned
+`DAEMON_UNAVAILABLE`. The independent-lifetime test now skips only that exact
+refusal; it passed locally with a real daemon. Windows 3.13 additionally
+exposed a valid race: a confirmed handoff result may reach the caller before
+socket close. The ownership test accepts exactly that one committed result or
+EOF and still checks settlement before release; the three focused cases pass.
+Windows 3.12 timed out after 175 passed/one failed near the two-server
+integration tests. Those four cases and the adjacent lifecycle/recovery group
+pass locally under installed Python 3.12 (4 and 12 cases). The CI full suite
+now emits per-test names and a stack dump after 120 seconds if the wait
+recurs. No timeout budget was raised; the cause remains unproven until rerun.
