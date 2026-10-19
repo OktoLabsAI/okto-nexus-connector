@@ -450,8 +450,11 @@ class R4DaemonControl:
                 except Exception as error:
                     code = getattr(error,'code',None)
                     self._recovery_error = code if type(code) is str and code in _STATUS_ERRORS else 'JOURNAL_UNAVAILABLE'
-                    logging.getLogger(__name__).warning('Runtime owned recovery deferred: code=%s stage=%s type=%s',
-                        self._recovery_error, getattr(error, 'stage', 'unknown'), type(error).__name__)
+                    logging.getLogger(__name__).warning(
+                        'Runtime owned recovery deferred: code=%s stage=%s type=%s attribute=%s owner_type=%s',
+                        self._recovery_error, getattr(error, 'stage', 'unknown'), type(error).__name__,
+                        getattr(error, 'name', None) if isinstance(error, AttributeError) else None,
+                        type(getattr(error, 'obj', None)).__name__ if isinstance(error, AttributeError) else None)
                     raise
 
             async def report_reconciliation(request):

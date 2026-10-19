@@ -20,6 +20,15 @@ class R4RecoveryChannel:
             server_id=self.state.server_id,executor_id=self.state.executor_id,
             connection_id=self.state.connection_id,connection_generation=self.state.connection_generation)
 
+    def is_attached(self, *, binding_id, agent_id, credential_epoch,
+                    authorization_revision, configuration_revision):
+        lane = self.lanes.get(binding_id)
+        return bool(self.online and lane is not None and time.monotonic() < lane.deadline_monotonic
+            and all(getattr(lane, name) == value for name, value in dict(
+                agent_id=agent_id, credential_epoch=credential_epoch,
+                authorization_revision=authorization_revision,
+                configuration_revision=configuration_revision).items()))
+
     async def _exchange(self, frame, encode=encode_r4_frame):
         if not self.online:
             raise CoreError('CONTROL_DISCONNECTED','r4_recovery')
