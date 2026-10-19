@@ -83,6 +83,13 @@ async def setup(lifecycle, monkeypatch, *, hold=False, refuse=False, clock=None,
                     from okto_nexus_connector.transport.lease_denial import LeaseRequestDenied
                     raise LeaseRequestDenied(r4_lease_renew_frame(attempt))
             elif refuse and armed:
+                # A valid renewal may have started before the refusal was
+                # armed while the open receipt was still being published.
+                # Capture the deadline at the exact rejected request; that
+                # request itself must not extend it.
+                active = next((session for session in owner.owner._sessions.values()
+                    if session.scope['session_id'] == scope['session_id']), None)
+                lease.deadline_at_refusal = None if active is None else active.deadline
                 raise ConnectorError("AGENT_AUTH_REQUIRED", "test_lease", "Renewal was refused.")
         if require_current is not None:
             await require_current()
@@ -200,7 +207,9 @@ async def test_renewal_failure_does_not_extend_deadline_or_repeat_native_open(li
     async with asyncio.timeout(3):
         while owner.owner.failure is None:
             await asyncio.sleep(.01)
-    assert session.deadline==initial and not owner.connection.online
+    assert session.deadline>=initial
+    assert session.deadline==owner.connection.apply_lease.deadline_at_refusal
+    assert not owner.connection.online
     assert owner.owner.failure.code=="AGENT_AUTH_REQUIRED"
     assert len(native.opened)==1
 
