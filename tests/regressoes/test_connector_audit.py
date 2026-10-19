@@ -350,7 +350,10 @@ async def test_07_operation_cannot_enter_before_handshake_and_reconcile(
     while audit_peer.latest is None:
         await asyncio.sleep(0.02)
     session = audit_peer.latest
-    frame = _valid_submit_frame(session)
+    # The socket is visible before the fake peer copies identity from the
+    # welcome. Keep the frame valid at that exact pre-handshake boundary.
+    frame = _valid_submit_frame(session, server_id="srv_a", executor_id="exe_a",
+                                connection_generation=1)
     await session.websocket.send(encode_frame(frame))
     await asyncio.sleep(0.5)
     assert not received, \
