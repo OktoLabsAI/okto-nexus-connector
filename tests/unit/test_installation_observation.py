@@ -88,7 +88,7 @@ async def test_public_probe_persists_observation_and_passive_preview_reuses_it(h
     assert preview['availability'] == result['availability']
     assert result['availability']['executor_revision'] != args['inventory_revision']
     state = store.load()
-    assert state.schema_version == 14
+    assert state.schema_version == 15
     assert not state.realizations and not state.execution_bindings and not state.runtime_intents
     assert not state.execution_executors[1].installation_observations
 
@@ -149,7 +149,7 @@ def test_schema_twelve_migrates_without_observation_authority(registered):
     for entry in payload['execution_executors']:
         entry.pop('installation_observations')
     migrated = state_from_json(payload)
-    assert migrated.schema_version == 14
+    assert migrated.schema_version == 15
     assert all(not record.installation_observations for record in migrated.execution_executors)
 
 

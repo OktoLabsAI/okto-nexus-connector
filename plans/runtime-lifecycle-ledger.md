@@ -232,3 +232,17 @@ on its first new control attempt and stayed `CONTROL_READY`; the original
 broadcast handoff then completed through real Nexus UI after its five-second
 start deadline was corrected to 300 seconds. See
 [runtime-lifecycle-m5k-denied-capacity.md](runtime-lifecycle-m5k-denied-capacity.md).
+
+## M3u — CI consumer alignment
+
+The Connector CI run `39178834200` installed an older vendored Core 0.0.12
+wheel. Its journal lacked the pending-claim and reconciliation-retirement
+operations already required by this branch, causing repeated daemon recovery
+failures. The vendored wheel is now rebuilt from Core `8bde891` with SHA-256
+`faea17f68891a6112a6392c5b6078ce06583a5e34e718fb152380c92f30bfa64`.
+The registered-adapter fixture now declares a discoverable executable; state
+migration expectations use schema 15; cancelled passive discovery may publish
+pending inventory but never its cancelled candidate. An isolated Connector
+installation using this wheel passed 65 recovery/registration cases and 95
+schema-adjacent cases before the cancellation assertion was updated; that
+case passed separately. Full CI qualification remains pending.

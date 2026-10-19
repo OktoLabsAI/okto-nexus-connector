@@ -56,7 +56,7 @@ def test_schema_eight_migrates_without_implicit_discovery_authority(registered):
     record = asdict(registered.load().execution_executors[0])
     record.pop("discovery_configuration")
     state = state_from_json(dict(schema_version=8, execution_executors=[record]))
-    assert state.schema_version == 14
+    assert state.schema_version == 15
     assert state.execution_executors[0].discovery_configuration == {}
 
 
@@ -209,7 +209,7 @@ async def test_pi_release_with_explicit_node_outside_release_root(registered, tm
     assert selected.version == "0.87.1" and selected.build_identity and selected.installation_ref
 
 
-async def test_stop_joins_cancelled_passive_reader_without_publishing(control, tmp_path, monkeypatch):
+async def test_stop_joins_cancelled_passive_reader_without_publishing_candidate(control, tmp_path, monkeypatch):
     import asyncio
     import io
     import os
@@ -254,8 +254,11 @@ async def test_stop_joins_cancelled_passive_reader_without_publishing(control, t
         await asyncio.wait_for(asyncio.shield(stopper), 3)
         assert exited.is_set()
         assert owner._task.done() and owner.phase == "STOPPED"
-        assert not peer.publications and all(not socket.online for socket in peer.sockets)
-        assert store.load().execution_executors[0].inventory_publication_sequence == 0
+        # The independent publisher may emit a pending snapshot or reserve
+        # a sequence while discovery is in flight. It must not publish the
+        # candidate from the cancelled OS read.
+        assert all(not snapshot['evidence'] for snapshot in peer.publications)
+        assert all(not socket.online for socket in peer.sockets)
     finally:
         release.set()
         await dispose(owner, host)

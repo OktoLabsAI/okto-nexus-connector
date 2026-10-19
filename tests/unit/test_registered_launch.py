@@ -13,7 +13,7 @@ from tests.unit.test_r4_execution import observed, operation
 def registered_adapter(monkeypatch):
     adapter = 'fixture.additional.v1'
     monkeypatch.setitem(registry._SPECS, adapter, registry.AdapterSpec(
-        adapter, adapter, __name__, 'UnusedNativeFactory', 'managed', None,
+        adapter, adapter, __name__, 'UnusedNativeFactory', 'managed', 'synthetic',
         frozenset({sys.platform}),
         (ControlTargeting('turn.steer', False, 'forbidden', False),
          ControlTargeting('turn.interrupt', False, 'forbidden', False)),
