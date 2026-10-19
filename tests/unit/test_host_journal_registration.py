@@ -110,7 +110,9 @@ async def test_late_capacity_facade_cannot_publish_a_closed_store(tmp_path, monk
     producer = asyncio.create_task(host.capacity_service(server_id='server', executor_id='executor',
         boot_id='boot', authority=Authority()))
     try:
-        await asyncio.wait_for(entered.wait(), 5)
+        # Hosted Windows may spend several seconds opening the durable ledger.
+        # This is a deadlock guard; the race begins only after `entered`.
+        await asyncio.wait_for(entered.wait(), 20)
         await host.shutdown_all()
         host._capacity_gate.release()
         with pytest.raises(CoreError, match='RUNTIME_DRAINING'):
