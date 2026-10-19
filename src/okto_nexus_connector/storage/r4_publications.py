@@ -9,6 +9,7 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+from threading import Lock
 
 from nexus_connector_core import (
     CoreError, R4ReceiptProjection, decode_r4_frame, encode_r4_frame,
@@ -33,49 +34,72 @@ class R4PublicationStore:
         if type(capacity) is not int or not 1 <= capacity <= 4096:
             raise ValueError('Invalid publication capacity.')
         self.path, self.capacity = Path(path), capacity
+        self._schema_lock = Lock()
+        self._schema_ready = False
 
     @classmethod
     def for_state(cls, store):
         return cls(store.path.with_suffix('.r4-publications.sqlite3'))
 
+    def _ensure_schema(self):
+        # Schema changes need a writer lock once, not on every publication read.
+        if self._schema_ready:
+            return
+        with self._schema_lock:
+            if self._schema_ready:
+                return
+            connection = None
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                connection = sqlite3.connect(self.path, timeout=10)
+                connection.row_factory = sqlite3.Row
+                connection.execute('PRAGMA synchronous=FULL')
+                connection.execute('PRAGMA max_page_count=65536')
+                connection.execute('BEGIN IMMEDIATE')
+                version = connection.execute('PRAGMA user_version').fetchone()[0]
+                if version not in (0, 1, 2, 3, 4, 5, 6):
+                    raise ConnectorError('VERSION_INCOMPATIBLE', 'r4_publication',
+                                         'The publication store requires a newer Connector.')
+                connection.execute('CREATE TABLE IF NOT EXISTS publications ('
+                    'server_id TEXT NOT NULL, executor_id TEXT NOT NULL, operation_id TEXT NOT NULL,'
+                    'metadata TEXT NOT NULL, receipt TEXT, digest TEXT,'
+                    'PRIMARY KEY(server_id,executor_id,operation_id))')
+                if version < 2:
+                    connection.execute('ALTER TABLE publications ADD COLUMN projection_binding TEXT')
+                if version < 3:
+                    connection.execute('ALTER TABLE publications ADD COLUMN acknowledged INTEGER NOT NULL DEFAULT 0')
+                    connection.execute('ALTER TABLE publications ADD COLUMN metadata_digest TEXT')
+                    for row in connection.execute('SELECT rowid,metadata FROM publications').fetchall():
+                        connection.execute('UPDATE publications SET metadata_digest=? WHERE rowid=?',
+                                           (hashlib.sha256(row['metadata'].encode()).hexdigest(), row['rowid']))
+                if version < 4:
+                    connection.execute('ALTER TABLE publications ADD COLUMN refusal_binding TEXT')
+                if version < 5:
+                    connection.execute('ALTER TABLE publications ADD COLUMN preopen_refusal TEXT')
+                    connection.execute('ALTER TABLE publications ADD COLUMN preopen_state TEXT')
+                if version < 6:
+                    connection.execute('ALTER TABLE publications ADD COLUMN startup_report TEXT')
+                    connection.execute('ALTER TABLE publications ADD COLUMN startup_prelease INTEGER NOT NULL DEFAULT 0')
+                connection.execute('PRAGMA user_version=6')
+                connection.execute("CREATE INDEX IF NOT EXISTS publication_sessions ON publications "
+                    "(server_id,executor_id,json_extract(metadata,'$.session_id'),json_extract(metadata,'$.action'))")
+                connection.commit()
+                self._schema_ready = True
+            finally:
+                if connection is not None:
+                    connection.close()
+
     @contextmanager
-    def _transaction(self):
+    def _transaction(self, *, write=True):
         connection = None
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._ensure_schema()
             connection = sqlite3.connect(self.path, timeout=10)
             connection.row_factory = sqlite3.Row
             connection.execute('PRAGMA synchronous=FULL')
-            # Acknowledged associations remain queryable; bound physical growth.
-            connection.execute('PRAGMA max_page_count=65536')
-            connection.execute('BEGIN IMMEDIATE')
-            version = connection.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2, 3, 4, 5, 6):
-                raise ConnectorError('VERSION_INCOMPATIBLE', 'r4_publication',
-                                     'The publication store requires a newer Connector.')
-            connection.execute('CREATE TABLE IF NOT EXISTS publications ('
-                'server_id TEXT NOT NULL, executor_id TEXT NOT NULL, operation_id TEXT NOT NULL,'
-                'metadata TEXT NOT NULL, receipt TEXT, digest TEXT,'
-                'PRIMARY KEY(server_id,executor_id,operation_id))')
-            if version < 2:
-                connection.execute('ALTER TABLE publications ADD COLUMN projection_binding TEXT')
-            if version < 3:
-                connection.execute('ALTER TABLE publications ADD COLUMN acknowledged INTEGER NOT NULL DEFAULT 0')
-                connection.execute('ALTER TABLE publications ADD COLUMN metadata_digest TEXT')
-                for row in connection.execute('SELECT rowid,metadata FROM publications').fetchall():
-                    connection.execute('UPDATE publications SET metadata_digest=? WHERE rowid=?',
-                                       (hashlib.sha256(row['metadata'].encode()).hexdigest(), row['rowid']))
-            if version < 4:
-                connection.execute('ALTER TABLE publications ADD COLUMN refusal_binding TEXT')
-            if version < 5:
-                connection.execute('ALTER TABLE publications ADD COLUMN preopen_refusal TEXT')
-                connection.execute('ALTER TABLE publications ADD COLUMN preopen_state TEXT')
-            if version < 6:
-                connection.execute('ALTER TABLE publications ADD COLUMN startup_report TEXT')
-                connection.execute('ALTER TABLE publications ADD COLUMN startup_prelease INTEGER NOT NULL DEFAULT 0')
-            connection.execute('PRAGMA user_version=6')
-            connection.execute("CREATE INDEX IF NOT EXISTS publication_sessions ON publications "
-                "(server_id,executor_id,json_extract(metadata,'$.session_id'),json_extract(metadata,'$.action'))")
+            if not write:
+                connection.execute('PRAGMA query_only=ON')
+            connection.execute('BEGIN IMMEDIATE' if write else 'BEGIN')
             yield connection
             connection.commit()
         except (OSError, sqlite3.Error, ValueError, TypeError, KeyError) as error:
@@ -179,7 +203,7 @@ class R4PublicationStore:
     def startup_page(self, server_id, executor_id, *, connection_id, generation, limit=128):
         if type(limit) is not int or not 1 <= limit <= 128:
             raise ValueError('Invalid startup refusal page size.')
-        with self._transaction() as conn:
+        with self._transaction(write=False) as conn:
             rows = conn.execute('SELECT * FROM publications WHERE server_id=? AND executor_id=? '
                 'AND acknowledged=0 AND startup_report IS NOT NULL '
                 "AND json_extract(metadata,'$.connection_id')=? "
@@ -191,7 +215,7 @@ class R4PublicationStore:
     def startup_recovery_page(self, server_id, executor_id, *, generation, after='', limit=128):
         if type(generation) is not int or generation < 1 or type(after) is not str or not 1 <= limit <= 128:
             raise ValueError('Invalid startup recovery page.')
-        with self._transaction() as conn:
+        with self._transaction(write=False) as conn:
             rows = conn.execute('SELECT * FROM publications WHERE server_id=? AND executor_id=? '
                 "AND operation_id>? AND acknowledged=0 AND startup_prelease=1 "
                 "AND json_extract(metadata,'$.connection_generation')<? "
@@ -203,7 +227,7 @@ class R4PublicationStore:
         if (not isinstance(session_ids, (tuple, list)) or len(session_ids) > 256
                 or any(type(value) is not str for value in session_ids)):
             raise ValueError('Invalid recovered startup session page.')
-        with self._transaction() as conn:
+        with self._transaction(write=False) as conn:
             return {session_id for session_id in session_ids if conn.execute(
                 "SELECT 1 FROM publications WHERE server_id=? AND executor_id=? "
                 "AND json_extract(metadata,'$.session_id')=? AND acknowledged=1 "
@@ -254,7 +278,7 @@ class R4PublicationStore:
     def unprojected(self, server_id, executor_id, *, after='', limit=128):
         if type(limit) is not int or not 1 <= limit <= 256 or type(after) is not str:
             raise ValueError('Invalid publication page cursor.')
-        with self._transaction() as conn:
+        with self._transaction(write=False) as conn:
             rows = conn.execute('SELECT * FROM publications '
                 'WHERE server_id=? AND executor_id=? AND operation_id>? AND receipt IS NULL '
                 "AND projection_binding IS NOT NULL AND coalesce(preopen_state,'')<>'PREPARED' ORDER BY operation_id LIMIT ?",
@@ -270,7 +294,7 @@ class R4PublicationStore:
             connection_id, generation = connection
             clause = " AND json_extract(metadata,'$.connection_id')=? AND json_extract(metadata,'$.connection_generation')=?"
             values += [connection_id, generation]
-        with self._transaction() as conn:
+        with self._transaction(write=False) as conn:
             rows = conn.execute("SELECT * FROM publications WHERE server_id=? AND executor_id=? "
                 "AND operation_id>? AND acknowledged=1 AND projection_binding IS NOT NULL AND receipt IS NOT NULL "
                 "AND json_extract(receipt,'$.stage') NOT IN ('SUCCEEDED','FAILED','CANCELLED')" + clause +
@@ -291,7 +315,7 @@ class R4PublicationStore:
     def ready(self, server_id, executor_id, *, limit=128):
         if type(limit) is not int or not 1 <= limit <= 256:
             raise ValueError('Invalid publication page size.')
-        with self._transaction() as conn:
+        with self._transaction(write=False) as conn:
             rows = conn.execute('SELECT * FROM publications WHERE server_id=? '
                 "AND executor_id=? AND acknowledged=0 AND receipt IS NOT NULL "
                 "AND startup_prelease=0 "
@@ -300,12 +324,12 @@ class R4PublicationStore:
             return [self._decode(row)['receipt'] for row in rows]
 
     def pending(self, server_id, executor_id):
-        with self._transaction() as conn:
+        with self._transaction(write=False) as conn:
             return conn.execute('SELECT 1 FROM publications WHERE server_id=? AND executor_id=? AND acknowledged=0 LIMIT 1',
                                 (server_id, executor_id)).fetchone() is not None
 
     def pending_unfenced(self, server_id, executor_id):
-        with self._transaction() as conn:
+        with self._transaction(write=False) as conn:
             return conn.execute("SELECT 1 FROM publications WHERE server_id=? AND executor_id=? "
                 "AND acknowledged=0 AND coalesce(preopen_state,'')<>'FENCED' LIMIT 1",
                 (server_id, executor_id)).fetchone() is not None
@@ -313,7 +337,7 @@ class R4PublicationStore:
     def preopen_page(self, server_id, executor_id, *, generation, after='', limit=128):
         if type(generation) is not int or generation < 1 or type(after) is not str or type(limit) is not int or not 1 <= limit <= 128:
             raise ValueError('Invalid preopening recovery page.')
-        with self._transaction() as conn:
+        with self._transaction(write=False) as conn:
             rows = conn.execute("SELECT * FROM publications WHERE server_id=? AND executor_id=? "
                 "AND operation_id>? AND acknowledged=0 AND json_extract(metadata,'$.action')='runtime.open' "
                 "AND json_extract(metadata,'$.connection_generation')<? AND refusal_binding IS NULL "
@@ -421,7 +445,7 @@ class R4PublicationStore:
     def refusal_page(self, server_id, executor_id, *, after='', limit=128):
         if type(after) is not str or type(limit) is not int or not 1 <= limit <= 128:
             raise ValueError('Invalid refusal page cursor.')
-        with self._transaction() as conn:
+        with self._transaction(write=False) as conn:
             rows = conn.execute('SELECT * FROM publications WHERE server_id=? AND executor_id=? '
                 'AND operation_id>? AND refusal_binding IS NOT NULL AND receipt IS NULL '
                 'ORDER BY operation_id LIMIT ?', (server_id, executor_id, after, limit)).fetchall()
@@ -430,7 +454,7 @@ class R4PublicationStore:
     def lookup(self, server_id, executor_id, operation_ids):
         if not isinstance(operation_ids, (tuple, list)) or len(operation_ids) > 256 or any(type(i) is not str for i in operation_ids):
             raise ValueError('Invalid operation lookup page.')
-        with self._transaction() as conn:
+        with self._transaction(write=False) as conn:
             result = {}
             for operation_id in operation_ids:
                 row = conn.execute('SELECT * FROM publications WHERE server_id=? AND executor_id=? AND operation_id=?',
@@ -440,7 +464,7 @@ class R4PublicationStore:
             return result
 
     def session_history(self, server_id, executor_id, session_id):
-        with self._transaction() as conn:
+        with self._transaction(write=False) as conn:
             rows = conn.execute("SELECT * FROM publications WHERE server_id=? AND executor_id=? "
                 "AND json_extract(metadata,'$.session_id')=? AND json_extract(metadata,'$.action') "
                 "IN ('runtime.open','runtime.close') ORDER BY operation_id LIMIT 257",
@@ -453,7 +477,7 @@ class R4PublicationStore:
         """All actions for one session, with bounded memory and stable ordering."""
         if type(after) is not str or type(limit) is not int or not 1 <= limit <= 256:
             raise ValueError('Invalid session publication cursor.')
-        with self._transaction() as conn:
+        with self._transaction(write=False) as conn:
             rows = conn.execute('SELECT * FROM publications WHERE server_id=? AND executor_id=? '
                 "AND json_extract(metadata,'$.session_id')=? AND operation_id>? ORDER BY operation_id LIMIT ?",
                 (server_id,executor_id,session_id,after,limit)).fetchall()
