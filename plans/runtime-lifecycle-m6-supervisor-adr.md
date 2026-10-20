@@ -93,6 +93,23 @@ shutdown, with installed-wheel checks; see `runtime-lifecycle-m6b-pipe-client.md
 M6c qualified shutdown with a pending pipe authentication read and fixed a
 Windows process-liveness false positive for exited processes with retained
 handles; see `runtime-lifecycle-m6c-process-exit.md`.
+
+## M6 adoption decision (2026-10-20)
+
+Retain the embedded Nexus host as the default for local agents. Keep the
+separate local supervisor and Windows named-pipe transport experimental and
+opt-in. Real installed Pi calls, Nexus restarts, in-flight completion, lease
+expiry, safe shutdown, and upgrade/rollback were qualified locally in Nexus
+M6d–M6k. The separate Connector recovered control about 10.8 seconds after
+the HTTP server was ready in one restart sample, while the embedded agents
+also recovered and answered through the real UI without manual action. There
+is no comparable monotonic timing proving better usable availability. A
+separate daemon added approximately 96 MB working set in one paired sample,
+plus its own installation, state, IPC and update lifecycle. The ADR adoption
+condition therefore was not met. Nexus records the comparison and its limits
+in `plans/runtime_lifecycle/m6l-supervisor-decision.md`. This decision does
+not remove the Connector used for remote hosts; a physical remote-host trial
+was outside this local qualification.
 Real Server reconnect/session comparison, separate-process M5
 differential cases, installed availability and cost measurements, UI gate and
 adoption decision remain pending. This ADR does not claim M6 completion.
