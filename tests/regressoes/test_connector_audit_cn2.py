@@ -19,6 +19,7 @@ boundary.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import os
 import stat
 import sys
@@ -305,6 +306,7 @@ async def test_b02_queued_operation_revalidates_detached_lane(cn2_peer):
 # N01 — b03: wire namespace vs resolved session (control + foreign)
 # =====================================================================
 
+@asynccontextmanager
 async def _b03_environment(tmp_path, server_a_url_peer,
                            include_srv_b_session=True):
     """A real Core journal/session under srv_a, plus (optionally) a
@@ -322,12 +324,7 @@ async def _b03_environment(tmp_path, server_a_url_peer,
         candidates={"codex_app_server": _candidate(binary)},
         workspace_roots={"ws_a": str(tmp_path)},
         native_factory=factory_a)
-    host = CoreRuntimeHost.__new__(CoreRuntimeHost)
-    host.root = tmp_path
-    host._vault = None
-    host._journal_path = paths.journal_path(tmp_path)
-    host._ledger_path = paths.owned_slot_ledger_path(tmp_path)
-    host._runtimes = {}
+    host = CoreRuntimeHost(tmp_path, None)
     host._journal = journal_a
     host._ledger = None
     host._journal_gate = None
@@ -366,7 +363,16 @@ async def _b03_environment(tmp_path, server_a_url_peer,
                                           "turn.interrupt",
                                           "runtime.close"}))
         manager._register(twin)
-    return manager, factory_a
+    try:
+        yield manager, factory_a
+    finally:
+        manager.begin_drain()
+        tasks = tuple(manager._pumps.values()) + tuple(manager._lease_tasks.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await runtime_a.shutdown(ShutdownPolicy(2, 2))
+        await journal_a.aclose()
 
 
 async def test_b03_wire_namespace_matches_resolved_local_session(
@@ -374,54 +380,54 @@ async def test_b03_wire_namespace_matches_resolved_local_session(
     """[foreign_server]: a frame negotiated on srv_b whose textual
     session id exists under srv_a must produce ZERO writes on A's Core
     (the old code resolved by text and remapped A's grant)."""
-    manager, factory = await _b03_environment(tmp_path, cn2_peer)
-    from okto_nexus_connector.transport.wss_client import \
-        ValidatedOperation
-    frame = _submit_frame(None, operation_id="op_wire_b",
-                          server_id="srv_b", executor_id="exe_b",
-                          binding="bind_a", agent="ag_b",
-                          session_id="session_a")
-    # Build the DTO as the srv_b-configured receiver would (its own
-    # namespace), exactly like _validate_operation_scope does.
-    operation = ValidatedOperation(
-        server_id="srv_b", executor_id="exe_b", binding_id="bind_a",
-        agent_id="ag_b", workspace_id="ws_b",
-        session_key=("srv_b", "exe_b", "session_a"),
-        session_id="session_a", operation_id="op_wire_b",
-        action="turn.submit", intent_hash=frame["intent_hash"],
-        payload={"text": "x"}, expected_turn_id=None,
-        connection_generation=1, authorization_revision=1,
-        configuration_revision=1)
-    with pytest.raises(ConnectorError) as error:
-        await manager.submit_remote(operation)
-    assert error.value.code in ("VALIDATION_ERROR",
-                                "BINDING_NOT_AUTHORIZED")
-    assert factory.native.sent == [], \
-        "wire namespace was remapped onto another server's session"
+    async with _b03_environment(tmp_path, cn2_peer) as (manager, factory):
+        from okto_nexus_connector.transport.wss_client import \
+            ValidatedOperation
+        frame = _submit_frame(None, operation_id="op_wire_b",
+                              server_id="srv_b", executor_id="exe_b",
+                              binding="bind_a", agent="ag_b",
+                              session_id="session_a")
+        # Build the DTO as the srv_b-configured receiver would (its own
+        # namespace), exactly like _validate_operation_scope does.
+        operation = ValidatedOperation(
+            server_id="srv_b", executor_id="exe_b", binding_id="bind_a",
+            agent_id="ag_b", workspace_id="ws_b",
+            session_key=("srv_b", "exe_b", "session_a"),
+            session_id="session_a", operation_id="op_wire_b",
+            action="turn.submit", intent_hash=frame["intent_hash"],
+            payload={"text": "x"}, expected_turn_id=None,
+            connection_generation=1, authorization_revision=1,
+            configuration_revision=1)
+        with pytest.raises(ConnectorError) as error:
+            await manager.submit_remote(operation)
+        assert error.value.code in ("VALIDATION_ERROR",
+                                    "BINDING_NOT_AUTHORIZED")
+        assert factory.native.sent == [], \
+            "wire namespace was remapped onto another server's session"
 
 
 async def test_b03_positive_same_server(cn2_peer, tmp_path):
     """[positive_same_server] control: the same frame on its OWN server
     produces exactly one native write."""
-    manager, factory = await _b03_environment(
-        tmp_path, cn2_peer, include_srv_b_session=False)
-    from okto_nexus_connector.transport.wss_client import \
-        ValidatedOperation
-    frame = _submit_frame(None, operation_id="op_wire_a",
-                          server_id="srv_a", executor_id="exe_a",
-                          session_id="session_a")
-    operation = ValidatedOperation(
-        server_id="srv_a", executor_id="exe_a", binding_id="bind_a",
-        agent_id="ag_a", workspace_id="ws_a",
-        session_key=("srv_a", "exe_a", "session_a"),
-        session_id="session_a", operation_id="op_wire_a",
-        action="turn.submit", intent_hash=frame["intent_hash"],
-        payload={"text": "hello"}, expected_turn_id=None,
-        connection_generation=1, authorization_revision=1,
-        configuration_revision=1)
-    receipt = await manager.submit_remote(operation)
-    assert receipt.stage in ("SUBMITTED", "OUTCOME_UNKNOWN")
-    assert [verb for verb, _ in factory.native.sent] == ["send_turn"]
+    async with _b03_environment(
+            tmp_path, cn2_peer, include_srv_b_session=False) as (manager, factory):
+        from okto_nexus_connector.transport.wss_client import \
+            ValidatedOperation
+        frame = _submit_frame(None, operation_id="op_wire_a",
+                              server_id="srv_a", executor_id="exe_a",
+                              session_id="session_a")
+        operation = ValidatedOperation(
+            server_id="srv_a", executor_id="exe_a", binding_id="bind_a",
+            agent_id="ag_a", workspace_id="ws_a",
+            session_key=("srv_a", "exe_a", "session_a"),
+            session_id="session_a", operation_id="op_wire_a",
+            action="turn.submit", intent_hash=frame["intent_hash"],
+            payload={"text": "hello"}, expected_turn_id=None,
+            connection_generation=1, authorization_revision=1,
+            configuration_revision=1)
+        receipt = await manager.submit_remote(operation)
+        assert receipt.stage in ("SUBMITTED", "OUTCOME_UNKNOWN")
+        assert [verb for verb, _ in factory.native.sent] == ["send_turn"]
 
 
 # =====================================================================
@@ -685,12 +691,7 @@ async def test_b10_reconcile_durable_receipt_does_not_require_current_binary(
     historical = _binding(tmp_path, binary)
     binary.unlink()
 
-    host = CoreRuntimeHost.__new__(CoreRuntimeHost)
-    host.root = tmp_path
-    host._vault = None
-    host._journal_path = paths.journal_path(tmp_path)
-    host._ledger_path = paths.owned_slot_ledger_path(tmp_path)
-    host._runtimes = {}
+    host = CoreRuntimeHost(tmp_path, None)
     host._journal = journal  # the shared journal port stays open
     host._ledger = None
     host._journal_gate = None
@@ -717,12 +718,7 @@ async def test_b10_reconcile_durable_receipt_does_not_require_current_binary(
 
 def _stop_manager(tmp_path, *, close_receipt=None, close_error=None):
     import time as _time
-    host = CoreRuntimeHost.__new__(CoreRuntimeHost)
-    host.root = tmp_path
-    host._vault = None
-    host._journal_path = paths.journal_path(tmp_path)
-    host._ledger_path = paths.owned_slot_ledger_path(tmp_path)
-    host._runtimes = {}
+    host = CoreRuntimeHost(tmp_path, None)
     host._journal = None
     host._ledger = None
     host._journal_gate = None
@@ -843,12 +839,7 @@ async def test_b08_approval_manager_reaches_public_core_api(tmp_path):
         candidates={"codex_app_server": _candidate(binary)},
         workspace_roots={"ws_a": str(tmp_path)},
         native_factory=factory)
-    host = CoreRuntimeHost.__new__(CoreRuntimeHost)
-    host.root = tmp_path
-    host._vault = None
-    host._journal_path = paths.journal_path(tmp_path)
-    host._ledger_path = paths.owned_slot_ledger_path(tmp_path)
-    host._runtimes = {}
+    host = CoreRuntimeHost(tmp_path, None)
     host._journal = journal
     host._ledger = None
     host._journal_gate = None

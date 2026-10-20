@@ -1,0 +1,23 @@
+{
+  "artifacts": [
+    {
+      "module": "nexus_connector_core",
+      "sha256": "dfdfef2edeb9f8db8697e6b850c05a704698e692a3592ed6d9d827887235f816",
+      "files": 161
+    },
+    {
+      "module": "okto_nexus_connector",
+      "sha256": "2e222043b889314a21492191a77b41b1ba890f1a8cc12b3885efecc651ce0893",
+      "files": 99
+    }
+  ],
+  "tests": [
+    "unit/test_r4_preopen_publications.py",
+    "unit/test_r4_launch_recovery.py",
+    "unit/test_r4_launch_recovery_lifetime.py",
+    "unit/test_r4_execution.py"
+  ],
+  "exit_code": 0,
+  "changed_inputs": [],
+  "inputs_sha256": "7fa7e3790f0ab6aeb13c5d4ee6aa9e4209f1c0637dd79b2c577f9f2c0625c72b"
+}

@@ -116,6 +116,48 @@ async def attach(owner, socket, **changes):
     await asyncio.wait_for(task, 2)
 
 
+@pytest.mark.parametrize('reject',[False,True])
+async def test_event_artifact_transport_is_correlated_and_does_not_ack_events(reject):
+    from dataclasses import replace
+    from nexus_connector_core.event_artifacts import (EVENT_ARTIFACT_REVISION,externalize_event,
+        decode_event_artifact,encode_event_artifact,artifact_ack)
+    class ArtifactSocket(Socket):
+        async def send(self,raw):
+            if 'event.artifact.put' in raw:
+                frame=decode_event_artifact(raw.encode())
+                await self.outgoing.put(frame)
+            else:
+                await super().send(raw)
+    socket=ArtifactSocket()
+    owner=R4Connection(socket,replace(STATE,control_capabilities=(EVENT_ARTIFACT_REVISION,)),boot_id='boot')
+    owner.start()
+    try:
+        await attach(owner,socket)
+        event=dict(server_id='srv',executor_id='exe',session_id='session',stream_epoch='epoch',sequence=1,
+                   category='tool_activity',payload={'text':'x'*95000})
+        wire,raw=externalize_event(event)
+        scope=dict(binding_id='binding',agent_id='agent')
+        task=asyncio.create_task(owner.publish_event_artifact(scope,wire,raw))
+        for offset in range(0,len(raw),32768):
+            frame=await asyncio.wait_for(socket.outgoing.get(),3)
+            assert frame['offset']==offset
+            reply=artifact_ack(frame)
+            if reject:
+                reply=dict(reply,type='event.artifact.rejected',code='QUOTA_EXCEEDED')
+            await socket.incoming.put(encode_event_artifact(reply).decode())
+            if reject: break
+        if reject:
+            with pytest.raises(CoreError,match='QUOTA_EXCEEDED'): await asyncio.wait_for(task,3)
+        else:
+            await asyncio.wait_for(task,3)
+        # Duplicate/late artifact replies have no authority to disconnect lanes.
+        await socket.incoming.put(encode_event_artifact(reply).decode())
+        await asyncio.sleep(.02)
+        assert owner._event_written=={} and socket.peak_readers==1 and owner.online
+    finally:
+        await owner.close()
+
+
 def operation(operation_id='op', action='turn.submit'):
     payload = {'text': 'Hello'} if action == 'turn.submit' else {'reason': 'Stop'}
     frame = {**BASE, **CHANNEL, **SCOPE, 'type': 'operation.submit',

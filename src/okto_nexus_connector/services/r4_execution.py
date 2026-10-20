@@ -21,7 +21,11 @@ from nexus_connector_core import (
     OperationCapacityDeferred, CapacityRetryWaiter, CAPACITY_CONTRACT_REVISION,
     project_r4_bound_receipt,
     prepare_r4_lease_refusal, persist_r4_lease_refusal,
+    prepare_r4_stopped_refusal, persist_r4_operation_refusal,
+    prepare_r4_startup_refusal, persist_r4_startup_refusal,
 )
+from nexus_connector_core.native.adapter_types import NativeAdapterError
+from nexus_connector_core.startup_refusal_link import STARTUP_REFUSAL_REVISION
 
 from ..errors import ConnectorError
 from ..transport.lease_denial import LeaseRequestDenied
@@ -42,6 +46,13 @@ class R4LaunchSetup:
     environment: object
     auth_refs: tuple[str, ...] = ()
     native_action_factory: object | None = None
+    opening_selection: object | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _StartupRefusalOutcome:
+    receipt: dict
+    report: dict
 
 
 class _RenewalGate:
@@ -87,6 +98,9 @@ class _Session:
     runtime: object
     opening_hash: str
     stream_epoch: str
+    scope: dict
+    connection_id: str
+    connection_generation: int
     gate: _RenewalGate = field(default_factory=_RenewalGate)
     stopped: asyncio.Event = field(default_factory=asyncio.Event)
     deadline: float = 0
@@ -95,6 +109,8 @@ class _Session:
     contained: bool = False
     release_accepted: bool = False
     denial: dict | None = None
+    local_lease_failure: str | None = None
+    opened: bool = False
 
 
 class R4ExecutionOwner:
@@ -150,9 +166,10 @@ class R4ExecutionOwner:
         self.execution_errors = {}
         from .r4_session_release import R4SessionReleaseReporter, R4SessionReleasePublisher
         from ..storage.r4_session_releases import R4SessionReleaseStore
+        release_reporter = R4SessionReleaseReporter(store, host)
         self.session_releases = R4SessionReleasePublisher(
-            R4SessionReleaseStore.for_state(store), R4SessionReleaseReporter(store, host),
-            self._publish_session_release)
+            R4SessionReleaseStore.for_state(store), release_reporter,
+            self._publish_session_release, on_accepted=release_reporter.retire_accepted)
 
     async def _publish_session_release(self, request, *, stop_event):
         return await self.connection.publish_session_release(request, stop_event=stop_event)
@@ -339,14 +356,19 @@ class R4ExecutionOwner:
     async def _produce(self, item):
         try:
             await asyncio.to_thread(self.publications.reserve, self.connection.require_current(item))
-            receipt = await self._execute_with_recorded_outcome(item)
+            outcome = await self._execute_with_recorded_outcome(item)
+            receipt = outcome.receipt if isinstance(outcome, _StartupRefusalOutcome) else outcome
             if receipt is None:
                 return
             self._record_execution_outcome(receipt)
             # Once Core has produced a fact, loss of lane/link does not undo
             # it. Publish that same fact; never fabricate a second operation.
-            await asyncio.to_thread(self.publications.record, receipt)
-            await self.publish_receipt(receipt)
+            if isinstance(outcome, _StartupRefusalOutcome):
+                await asyncio.to_thread(self.publications.record_startup, outcome.report)
+                await self._publish_startup_refusal(outcome.report)
+            else:
+                await asyncio.to_thread(self.publications.record, receipt)
+                await self.publish_receipt(receipt)
             await asyncio.to_thread(self.publications.acknowledge, receipt)
             if self._receipt_monitor is None and not self._stopping:
                 self._receipt_monitor = asyncio.create_task(self._observe_receipts(), name="r4-receipt-observer")
@@ -396,6 +418,17 @@ class R4ExecutionOwner:
             # and the previously persisted binding; a mismatched fact fails.
             return project_r4_bound_receipt(binding, fact, key=key, receipt_revision=1)
 
+    async def _publish_startup_refusal(self, report):
+        while True:
+            reply = await self.connection.publish_startup_refusal(report,
+                stop_event=self._receipt_stop)
+            if reply['type'] == 'startup.refuse.accepted':
+                return
+            if self._stopping or not self.connection.online:
+                raise ConnectorError('PUBLICATION_INTERRUPTED', 'r4_startup_refusal',
+                    'The durable startup refusal remains pending.')
+            await asyncio.sleep(.5)
+
     async def _renew_session(self, session, source):
         async def current():
             if self._stopping or session.stopped.is_set() or not self.connection.online:
@@ -412,7 +445,7 @@ class R4ExecutionOwner:
                 except TimeoutError:
                     pass
                 async with self._renewal_slots:
-                    async with session.gate.renewal():
+                    async with self._session_renewal(session):
                         await current()
                         if self.clock() >= session.deadline:
                             raise CoreError("LEASE_EXPIRED", "r4_renewal")
@@ -439,13 +472,16 @@ class R4ExecutionOwner:
         except Exception as error:
             if self._stopping:
                 return
+            if self._fence_local_lease_failure(session, error) and self.connection.online:
+                await self._contain_session(session, source)
+                return
             if isinstance(error, LeaseRequestDenied):
                 # The transport correlated this exact request before raising.
                 # Recheck the supplied port's proof against the retained owner;
                 # neither another scope nor an uncorrelated link failure can
                 # be converted into a successful scoped cleanup.
                 if self._scoped_denial(error, source, 'renew'):
-                    await self._contain_denied_session(session, source)
+                    await self._contain_session(session, source)
                     return
             if session.stopped.is_set():
                 return
@@ -459,6 +495,29 @@ class R4ExecutionOwner:
             if self.failure is None:
                 self.failure = error
             await self.connection.close()
+
+    @staticmethod
+    def _fence_local_lease_failure(session, error):
+        # Before an opening fact exists, initial admission/recovery owns the
+        # outcome. This path only contains a known opened session and must not
+        # invent release evidence for preparation or a missing opening claim.
+        if (session.opened and isinstance(error, CoreError)
+                and error.code in ('LEASE_EXPIRED', 'LEASE_REVALIDATION_REQUIRED')):
+            session.local_lease_failure = session.local_lease_failure or error.code
+            session.stopped.set()
+            return True
+        return False
+
+    @asynccontextmanager
+    async def _session_renewal(self, session):
+        async with session.gate.renewal():
+            try:
+                yield
+            except Exception as error:
+                # Latch before waking queued productive work. The gate only
+                # drains this session; control and siblings remain independent.
+                self._fence_local_lease_failure(session, error)
+                raise
 
     @staticmethod
     def _scoped_denial(error, source, purpose):
@@ -480,7 +539,22 @@ class R4ExecutionOwner:
         return project_r4_bound_receipt(binding, receipt,
             key=OperationKey(frame['server_id'], frame['executor_id'], frame['operation_id']), receipt_revision=1)
 
-    async def _contain_denied_session(self, session, source, *, publish_release=True):
+    async def _refuse_stopped_operation(self, item, session):
+        frame = self.connection.require_current(item)
+        if not session.stopped.is_set() or session.local_lease_failure is None:
+            raise CoreError('OPERATION_CONFLICT', 'r4_stopped_refusal')
+        refusal = prepare_r4_stopped_refusal(frame,
+            scope=session.scope, connection_id=session.connection_id,
+            connection_generation=session.connection_generation,
+            error_code=session.local_lease_failure)
+        binding = refusal['binding']
+        await asyncio.to_thread(self.publications.bind, binding, refusal=refusal)
+        journal = await self.host.ensure_history_journal()
+        receipt = await persist_r4_operation_refusal(journal, refusal)
+        return project_r4_bound_receipt(binding, receipt,
+            key=OperationKey(frame['server_id'], frame['executor_id'], frame['operation_id']), receipt_revision=1)
+
+    async def _contain_session(self, session, source, *, publish_release=True):
         """Retain one stop producer, retrying only this session's resources.
 
         The renewal task already belongs to this owner and is joined on stop.
@@ -521,6 +595,59 @@ class R4ExecutionOwner:
                 except TimeoutError:
                     pass
 
+    async def _refuse_failed_preparation(self, item, session, *, prelease=False):
+        """Finish only an opening that never entered Core native admission."""
+        frame = self.connection.require_current(item)
+        if session is not None:
+            session.stopped.set()
+            if session.renewal is not None:
+                await asyncio.gather(session.renewal, return_exceptions=True)
+            await self._contain_session(session, frame, publish_release=False)
+            if not session.contained:
+                raise CoreError('RECONCILIATION_REQUIRED', 'r4_startup_containment')
+        elif not prelease or STARTUP_REFUSAL_REVISION not in self.connection.state.control_capabilities:
+            raise CoreError('RECONCILIATION_REQUIRED', 'r4_startup_containment')
+        operation = OperationKey(frame['server_id'], frame['executor_id'], frame['operation_id'])
+        session_key = SessionKey(frame['server_id'], frame['executor_id'], frame['session_id'])
+        journal = await self.host.ensure_history_journal()
+        if await journal.get_session_claim(session_key) is not None:
+            raise CoreError('RECONCILIATION_REQUIRED', 'r4_startup_claim')
+        refusal = prepare_r4_startup_refusal(frame)
+        binding = refusal['binding']
+        # Persist the refusal association before touching capacity. A crash
+        # before Core fencing leaves the original preopen recovery obligation.
+        await asyncio.to_thread(self.publications.bind, binding, refusal=refusal,
+            startup_prelease=prelease)
+        self._capacity_bindings[item.token] = binding
+        released_capacity = None
+        if self.capacity_provider is not None:
+            capacity = await self.capacity_provider()
+            ledger = await self.host.ensure_ledger()
+            reservation = await ledger.capacity_for_operation(operation,
+                action='runtime.open', now=self.clock(), boot_id=capacity.boot_id)
+            if reservation is not None:
+                if reservation.request.unit != 'new_session' or any(
+                        getattr(reservation.request.scope, name) != frame[name]
+                        for name in ('server_id', 'executor_id', 'agent_id', 'binding_id',
+                            'session_id', 'connection_generation', 'session_owner_generation')):
+                    raise CoreError('SCOPE_MISMATCH', 'r4_startup_capacity')
+                released = await capacity.release_capacity(reservation.request,
+                    reservation.reservation_id, 'ROLLBACK')
+                if released.state != 'RELEASED':
+                    raise CoreError('RECONCILIATION_REQUIRED', 'r4_startup_capacity')
+                released_capacity = released.to_dict()
+        receipt = await persist_r4_startup_refusal(journal, refusal)
+        projected = project_r4_bound_receipt(binding, receipt, key=operation, receipt_revision=1)
+        if not prelease:
+            return projected
+        report = dict(contract_revision=STARTUP_REFUSAL_REVISION, type='startup.refuse',
+            request_id='startup_' + secrets.token_hex(16),
+            server_id=frame['server_id'], executor_id=frame['executor_id'],
+            connection_id=frame['connection_id'],
+            connection_generation=frame['connection_generation'], refusal=refusal,
+            receipt=projected, capacity=released_capacity, native_absent=True)
+        return _StartupRefusalOutcome(projected, report)
+
     async def _execute(self, item):
         frame = self.connection.require_current(item)
         key = ExecutionRuntimeKey(frame["server_id"], frame["executor_id"], frame["binding_id"], frame["session_id"])
@@ -551,6 +678,8 @@ class R4ExecutionOwner:
                     # native work while its owner is being contained.
                     if session.denial is not None:
                         return await self._refuse_denied_operation(item, session.denial)
+                    if session.local_lease_failure is not None:
+                        return await self._refuse_stopped_operation(item, session)
                     raise CoreError('AGENT_REVOKED', 'r4_execution')
                 return await self._execute_owned(item)
         if session is not None and frame["action"] == "runtime.close":
@@ -581,7 +710,14 @@ class R4ExecutionOwner:
             if len(self._sessions) >= self.max_sessions:
                 raise ConnectorError('CAPACITY_EXCEEDED', 'r4_execution',
                                      'The execution session capacity is exhausted.')
-            candidates = tuple(await self.candidate_provider(item.frame))
+            try:
+                candidates = tuple(await self.candidate_provider(item.frame))
+            except (NativeAdapterError, ConnectorError) as error:
+                if isinstance(error, ConnectorError) and error.code in (
+                        'STALE_GENERATION', 'CONTROL_DISCONNECTED', 'BINDING_NOT_AUTHORIZED',
+                        'RECONCILIATION_REQUIRED', 'JOURNAL_UNAVAILABLE'):
+                    raise
+                return await self._refuse_failed_preparation(item, None, prelease=True)
             self.connection.require_current(item)
             if self.launch_provider is not None:
                 setup = await self.launch_provider(item.frame)
@@ -606,9 +742,11 @@ class R4ExecutionOwner:
                                      'The approved launch configuration is invalid.')
             runtime = await self.host.build_r4(self.store, frame=item.frame,
                 candidates=candidates, environment=setup.environment, factory=self.native_factory,
-                native_action_factory=setup.native_action_factory)
+                native_action_factory=setup.native_action_factory,
+                opening_selection=setup.opening_selection)
             self.connection.require_current(item)
-            session = _Session(runtime, frame['intent_hash'], 'stream_' + secrets.token_hex(16))
+            session = _Session(runtime, frame['intent_hash'], 'stream_' + secrets.token_hex(16),
+                {k: frame[k] for k in _SCOPE}, frame['connection_id'], frame['connection_generation'])
             self._sessions[key] = session
             try:
                 applied = await self.connection.apply_lease(runtime, scope={k: frame[k] for k in _SCOPE},
@@ -621,18 +759,29 @@ class R4ExecutionOwner:
                 receipt = await self._refuse_denied_operation(item, error.request)
                 # No native opening was admitted. Drain this runtime/its tool
                 # resources, without fabricating an opening release proof.
-                await self._contain_denied_session(session, frame, publish_release=False)
+                await self._contain_session(session, frame, publish_release=False)
+                if self.capacity_provider is not None:
+                    from .r4_denied_capacity import release_denied_opening_capacity
+                    capacity = await self.capacity_provider()
+                    await release_denied_opening_capacity(self.publications,
+                        await self.host.ensure_history_journal(), await self.host.ensure_ledger(),
+                        server_id=frame['server_id'], executor_id=frame['executor_id'],
+                        operation_id=frame['operation_id'], boot_id=capacity.boot_id,
+                        clock=self.clock, require_current=lambda: self.connection.require_current(item))
                 return receipt
             session.deadline = applied.context.lease_deadline_monotonic
             if self.require_authority is not None:
                 session.renewal = asyncio.create_task(self._renew_session(session, dict(frame)),
                     name='r4-session-lease-renewal')
             context = self._context(item, runtime)
-            prepared = await runtime.prepare(LaunchIntent(frame['agent_id'], frame['workspace_id'],
-                payload['adapter_id'], mode=payload['mode'], model=payload.get('model'),
-                auth_refs=setup.auth_refs,
-                mcp_preset=tuple(payload.get('mcp_preset', [])),
-                harness_settings=validate_harness_settings(payload['adapter_id'], payload.get('harness_settings', {}))), context)
+            try:
+                prepared = await runtime.prepare(LaunchIntent(frame['agent_id'], frame['workspace_id'],
+                    payload['adapter_id'], mode=payload['mode'], model=payload.get('model'),
+                    auth_refs=setup.auth_refs,
+                    mcp_preset=tuple(payload.get('mcp_preset', [])),
+                    harness_settings=validate_harness_settings(payload['adapter_id'], payload.get('harness_settings', {}))), context)
+            except NativeAdapterError:
+                return await self._refuse_failed_preparation(item, session)
             self._prepared_openings[item.token] = (session, prepared)
         if action == 'runtime.open':
             retained_session, prepared = self._prepared_openings[item.token]
@@ -657,6 +806,7 @@ class R4ExecutionOwner:
                     frame['server_id'], frame['executor_id'], frame['operation_id']))
                 if receipt is None or receipt.stage != 'FAILED':
                     raise
+            session.opened = receipt.stage in ('SUBMITTED', 'SUCCEEDED')
             return project_r4_open_receipt(frame, receipt, context, prepared,
                 stream_epoch=session.stream_epoch, receipt_revision=1)
         if session is None:

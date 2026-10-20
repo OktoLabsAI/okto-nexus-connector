@@ -88,7 +88,7 @@ async def test_public_probe_persists_observation_and_passive_preview_reuses_it(h
     assert preview['availability'] == result['availability']
     assert result['availability']['executor_revision'] != args['inventory_revision']
     state = store.load()
-    assert state.schema_version == 13
+    assert state.schema_version == 15
     assert not state.realizations and not state.execution_bindings and not state.runtime_intents
     assert not state.execution_executors[1].installation_observations
 
@@ -149,7 +149,7 @@ def test_schema_twelve_migrates_without_observation_authority(registered):
     for entry in payload['execution_executors']:
         entry.pop('installation_observations')
     migrated = state_from_json(payload)
-    assert migrated.schema_version == 13
+    assert migrated.schema_version == 15
     assert all(not record.installation_observations for record in migrated.execution_executors)
 
 
@@ -171,9 +171,12 @@ async def test_default_daemon_publishes_retained_observation_without_probing(con
     owner.start()
     try:
         await eventually(lambda: owner.status()['control_ready'], diagnostics=owner.status)
-        evidence = peer.publications[-1]['evidence'][0]
+        await eventually(lambda: any(p['evidence'] for p in peer.publications),
+                         diagnostics=owner.status)
+        published = next(p for p in reversed(peer.publications) if p['evidence'])
+        evidence = published['evidence'][0]
         assert evidence['version'] == '0.159.0'
-        assert str(tmp_path) not in str(peer.publications[-1])
+        assert str(tmp_path) not in str(published)
         assert evidence['state'] == 'READY_FOR_RUNTIME'  # Eligible for a live handshake; not a recorded build grant.
         assert not store.load().execution_bindings
     finally:

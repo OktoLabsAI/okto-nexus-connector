@@ -55,6 +55,36 @@ async def test_pending_stream_replays_once_and_reuses_its_authority(lifecycle):
 
 
 @pytest.mark.parametrize("selection",[True],indirect=True)
+async def test_hot_stream_yields_to_another_stream_before_its_next_page(lifecycle):
+    owner,http,first,progress,journal,native,attached,keys=await prepared(lifecycle)
+    second={**first,"session_id":"second-session"}
+    progress.register(second)
+    await journal.record_event(RuntimeEvent(second["server_id"],second["executor_id"],
+                                            second["session_id"],second["stream_epoch"],
+                                            0,"text_delta",None,{"text":"second"}))
+    original=owner.connection.publish_events
+    order=[]
+    extra=0
+    async def publish(**values):
+        nonlocal extra
+        order.append(values["session_id"])
+        if values["session_id"]==first["session_id"] and extra<2:
+            extra+=1
+            await journal.record_event(RuntimeEvent(first["server_id"],first["executor_id"],
+                                                    first["session_id"],first["stream_epoch"],
+                                                    0,"text_delta",None,{"text":f"extra-{extra}"}))
+        return await original(**values)
+    owner.connection.publish_events=publish
+    await recover_event_streams(owner.store,owner.vault,http,owner.host,owner.connection,
+                               require_current=current,authorities={})
+    assert order[:2]==[first["session_id"],second["session_id"]]
+    assert order.count(first["session_id"])==3
+    assert progress.read(first)["core_applied"]==3
+    assert progress.read(second)["core_applied"]==1
+    assert not native.opened
+
+
+@pytest.mark.parametrize("selection",[True],indirect=True)
 async def test_local_ack_failure_keeps_progress_and_does_not_issue_another_ticket(lifecycle,monkeypatch):
     owner,http,scope,progress,journal,native,attached,keys=await prepared(lifecycle)
     authorities={}
@@ -74,6 +104,181 @@ async def test_local_ack_failure_keeps_progress_and_does_not_issue_another_ticke
                                require_current=current,authorities=authorities)
     assert progress.read(scope)["core_applied"]==1
     assert calls==2 and len(keys)==len(attached)==1 and not native.opened
+
+
+@pytest.mark.parametrize("selection",[True],indirect=True)
+async def test_one_stream_commit_failure_does_not_starve_another(lifecycle,monkeypatch):
+    owner,http,first,progress,journal,native,attached,keys=await prepared(lifecycle)
+    second={**first,"session_id":"second-session"}
+    progress.register(second)
+    await journal.record_event(RuntimeEvent(second["server_id"],second["executor_id"],
+                                            second["session_id"],second["stream_epoch"],
+                                            0,"text_delta",None,{"text":"second"}))
+    original=journal.acknowledge_events
+    failed=False
+    async def fail_first_once(cursor,sequence):
+        nonlocal failed
+        if cursor.session_id==first["session_id"] and not failed:
+            failed=True
+            raise OSError("Injected first-stream Core ACK interruption.")
+        return await original(cursor,sequence)
+    monkeypatch.setattr(journal,"acknowledge_events",fail_first_once)
+    with pytest.raises(OSError):
+        await recover_event_streams(owner.store,owner.vault,http,owner.host,owner.connection,
+                                   require_current=current,authorities={})
+    assert progress.read(first)["remote_acked"]==1
+    assert progress.read(first)["core_applied"]==0
+    assert progress.read(second)["remote_acked"]==progress.read(second)["core_applied"]==1
+    await recover_event_streams(owner.store,owner.vault,http,owner.host,owner.connection,
+                               require_current=current,authorities={})
+    assert progress.read(first)["core_applied"]==1
+    assert not native.opened
+
+
+@pytest.mark.parametrize("selection",[True],indirect=True)
+async def test_reconnect_finishes_an_accepted_release_event_checkpoint(lifecycle):
+    from nexus_connector_core import EventCursor,OperationKey,SessionKey
+    from nexus_connector_core.session_release import session_release_accepted
+    from okto_nexus_connector.storage.r4_session_releases import R4SessionReleaseStore
+    from tests.contract.test_session_release import request
+
+    owner,http,scope,progress,journal,native,attached,keys=await prepared(lifecycle)
+    accepted=request()
+    accepted['scope']={**accepted['scope'],**{k:scope[k] for k in FIELDS if k!='stream_epoch'}}
+    accepted['stream_epoch']=scope['stream_epoch']
+    accepted['sequence']=1
+    claim=await journal.get_session_claim(SessionKey(scope['server_id'],scope['executor_id'],scope['session_id']))
+    if claim is None:
+        await journal.admit(OperationKey(scope['server_id'],scope['executor_id'],accepted['opening_operation_id']),
+                            'intent',scope['session_id'],claim_session=True)
+    else:
+        accepted['opening_operation_id']=claim.opening_operation_id
+    releases=R4SessionReleaseStore.for_state(owner.store)
+    releases.prepare(accepted)
+    releases.acknowledge(session_release_accepted(accepted))
+    cursor=EventCursor(scope['server_id'],scope['executor_id'],scope['session_id'],scope['stream_epoch'])
+    await journal.acknowledge_events(cursor,1)
+    progress.advance(scope,remote_acked=1)
+    progress.advance(scope,core_applied=1)
+    await recover_event_streams(owner.store,owner.vault,http,owner.host,owner.connection,
+                               require_current=current,authorities={})
+    assert progress.page(scope['server_id'],scope['executor_id'])[0]==[]
+    assert progress.read(scope)['core_applied']==1
+    assert releases.accepted_event_page(scope['server_id'],scope['executor_id'])==[]
+    assert (await journal.claimed_sessions(scope['server_id'],scope['executor_id'],pending_only=True)).claims==()
+    assert not native.opened
+
+
+@pytest.mark.parametrize('selection',[True],indirect=True)
+async def test_reconnect_finishes_a_reconciled_release_checkpoint(lifecycle):
+    from nexus_connector_core import EventCursor,OperationKey,SessionKey
+    from okto_nexus_connector.storage.r4_session_releases import R4SessionReleaseStore
+    from tests.contract.test_session_release import request
+    from tests.unit.test_session_release_recovery import evidence
+
+    owner,http,scope,progress,journal,native,attached,keys=await prepared(lifecycle)
+    original=request()
+    original['scope']={**original['scope'],**{k:scope[k] for k in FIELDS if k!='stream_epoch'}}
+    original['stream_epoch']=scope['stream_epoch']
+    original['sequence']=0
+    claim=await journal.get_session_claim(SessionKey(scope['server_id'],scope['executor_id'],scope['session_id']))
+    if claim is None:
+        await journal.admit(OperationKey(scope['server_id'],scope['executor_id'],original['opening_operation_id']),
+                            'intent',scope['session_id'],claim_session=True)
+    else:
+        original['opening_operation_id']=claim.opening_operation_id
+    outbox=R4SessionReleaseStore.for_state(owner.store)
+    outbox.prepare(original)
+    ack,observations=evidence(original)
+    outbox.reconcile_page(ack,observations)
+    cursor=EventCursor(scope['server_id'],scope['executor_id'],scope['session_id'],scope['stream_epoch'])
+    await journal.acknowledge_events(cursor,1)
+    progress.advance(scope,remote_acked=1)
+    progress.advance(scope,core_applied=1)
+    await recover_event_streams(owner.store,owner.vault,http,owner.host,owner.connection,
+                               require_current=current,authorities={})
+    assert outbox.resolved_checkpoint_page(scope['server_id'],scope['executor_id'])==[]
+    assert progress.page(scope['server_id'],scope['executor_id'])[0]==[]
+    assert progress.read(scope)['core_applied']==1
+    assert (await journal.claimed_sessions(scope['server_id'],scope['executor_id'],pending_only=True)).claims==()
+    assert not native.opened
+
+
+@pytest.mark.parametrize('selection',[True],indirect=True)
+async def test_old_resolved_release_history_continues_after_reconciliation(lifecycle, monkeypatch):
+    import asyncio
+    from nexus_connector_core.session_release import session_release_accepted
+    from okto_nexus_connector.services.r4_reconciliation import R4ReconciliationReporter
+    from okto_nexus_connector.storage.r4_session_releases import R4SessionReleaseStore
+    from tests.contract.test_session_release import request
+    from tests.unit.test_session_release_recovery import evidence
+
+    owner,http,store,frame,native,attached,published,keys=lifecycle
+    releases=R4SessionReleaseStore.for_state(store)
+    original=request()
+    original['server_id'],original['executor_id']=frame['server_id'],frame['executor_id']
+    original['scope']['server_id'],original['scope']['executor_id']=frame['server_id'],frame['executor_id']
+    for index in range(129):
+        item={**original,'scope':{**original['scope'],'session_id':f'old-{index}'},
+              'release_id':f'release-old-{index}', 'opening_operation_id':f'open-{index}'}
+        releases.prepare(item)
+        releases.acknowledge(session_release_accepted(item))
+
+    async def retire(store,request,journal,*,sequence,digest):
+        R4SessionReleaseStore.for_state(store).mark_checkpoints_retired(request)
+    monkeypatch.setattr('okto_nexus_connector.services.r4_event_recovery.retire_resolved_checkpoint',retire)
+    monkeypatch.setattr('okto_nexus_connector.services.r4_reconciliation.retire_resolved_checkpoint',retire)
+    await recover_event_streams(owner.store,owner.vault,http,owner.host,owner.connection,
+                                require_current=current,authorities={})
+    assert len(releases.resolved_checkpoint_page(frame['server_id'],frame['executor_id']))==1
+
+    ack,_=evidence(original)
+    reporter=R4ReconciliationReporter(owner.store,owner.host,frame['server_id'],frame['executor_id'])
+    reporter.cycle=tuple(ack[k] for k in ('connection_id','connection_generation','reconcile_id'))
+    reporter._report_complete=True
+    await reporter.accepted(ack)
+    await asyncio.wait_for(reporter._checkpoint_task,5)
+    assert releases.resolved_checkpoint_page(frame['server_id'],frame['executor_id'])==[]
+    assert not native.opened
+
+
+@pytest.mark.parametrize('selection',[True],indirect=True)
+async def test_more_than_4096_resolved_releases_do_not_block_recovery(lifecycle, monkeypatch):
+    from hashlib import sha256
+    import sqlite3
+    from nexus_connector_core.session_release import encode_session_release, session_release_accepted
+    from okto_nexus_connector.storage.r4_session_releases import R4SessionReleaseStore
+    from tests.contract.test_session_release import request
+
+    owner,http,store,frame,native,attached,published,keys=lifecycle
+    releases=R4SessionReleaseStore.for_state(store)
+    releases.resolved_checkpoint_page(frame['server_id'],frame['executor_id'])
+    original=request()
+    original['server_id'],original['executor_id']=frame['server_id'],frame['executor_id']
+    original['scope']['server_id'],original['scope']['executor_id']=frame['server_id'],frame['executor_id']
+    rows=[]
+    for index in range(4097):
+        item={**original,'scope':{**original['scope'],'session_id':f'old-{index}'},
+              'release_id':f'release-old-{index}', 'opening_operation_id':f'open-{index}'}
+        encoded=encode_session_release(item)
+        identity=releases._identity(scope=item['scope'],connection_id=item['connection_id'],
+                                     connection_generation=item['connection_generation'])
+        rows.append((item['release_id'],identity,encoded,sha256(encoded).hexdigest(),
+                     encode_session_release(session_release_accepted(item))))
+    # Seed the accepted history in one transaction; the public store APIs are
+    # used below for decoding and checkpoint progress.
+    with sqlite3.connect(releases.path) as conn:
+        conn.executemany("INSERT INTO releases(release_id,identity,request,digest,state,reply) "
+                         "VALUES (?,?,?,?,'ACCEPTED',?)",rows)
+    async def retire(store,request,journal,*,sequence,digest):
+        R4SessionReleaseStore.for_state(store).mark_checkpoints_retired(request)
+    monkeypatch.setattr('okto_nexus_connector.services.r4_event_recovery.retire_resolved_checkpoint',retire)
+    await recover_event_streams(owner.store,owner.vault,http,owner.host,owner.connection,
+                                require_current=current,authorities={})
+    assert len(releases.resolved_checkpoint_page(frame['server_id'],frame['executor_id']))==128
+    with sqlite3.connect(releases.path) as conn:
+        assert conn.execute('SELECT count(*) FROM releases WHERE event_retired=0').fetchone()[0]==3969
+    assert not native.opened
 
 
 @pytest.mark.parametrize("selection",[True],indirect=True)

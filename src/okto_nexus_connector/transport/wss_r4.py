@@ -26,6 +26,8 @@ from nexus_connector_core import (
 from .wss_client import validate_link_url
 from nexus_connector_core.lease_denial import LEASE_DENIAL_REVISION
 from nexus_connector_core.session_release import SESSION_RELEASE_REVISION
+from nexus_connector_core.startup_refusal_link import STARTUP_REFUSAL_REVISION
+from nexus_connector_core.event_artifacts import EVENT_ARTIFACT_REVISION
 
 
 ReconcileReporter = Callable[[dict], Awaitable[Mapping[str, object]]]
@@ -111,7 +113,8 @@ async def negotiate_r4_control(
         "supported_nxl": [R4_PREVIEW_REVISION],
         "snapshot_formats": [snapshot_format],
         "control_capabilities": ['connection_renewal_v1', 'heartbeat_ack_v1', 'connection_resume_v1',
-                                 LEASE_DENIAL_REVISION, SESSION_RELEASE_REVISION, PREOPEN_REFUSAL_REVISION],
+                                 LEASE_DENIAL_REVISION, SESSION_RELEASE_REVISION, STARTUP_REFUSAL_REVISION, PREOPEN_REFUSAL_REVISION, EVENT_ARTIFACT_REVISION,
+                                 'nexus-launch-recovery-v1'],
     }
     if capacity_enabled:
         hello['control_capabilities'].append(CAPACITY_CONTRACT_REVISION)
@@ -130,7 +133,8 @@ async def negotiate_r4_control(
     generation = welcome["connection_generation"]
     from .r4_recovery import R4RecoveryChannel
     recovery = R4RecoveryChannel(websocket,
-        R4ControlState(server_id,executor_id,connection_id,generation,False),boot_id)
+        R4ControlState(server_id,executor_id,connection_id,generation,False,
+            tuple(welcome['control_capabilities'])),boot_id)
     pending: R4ReconcileAttempt | None = None
     attempts = 0
     report_complete = False
@@ -147,6 +151,8 @@ async def negotiate_r4_control(
             # retries. Liveness does not grant control readiness.
             continue
         if kind == "reconcile.request":
+            if frame.get('launch_recovery_supported') and 'nexus-launch-recovery-v1' not in welcome['control_capabilities']:
+                raise ValueError('Launch recovery was not negotiated.')
             if frame.get('preopen_refusal_supported') and PREOPEN_REFUSAL_REVISION not in welcome['control_capabilities']:
                 raise ValueError('Preopening recovery was not negotiated.')
             if frame['cursor'] is None:

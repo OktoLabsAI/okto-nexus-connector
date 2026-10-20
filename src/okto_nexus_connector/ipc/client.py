@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import json
 import socket
+import time
 from pathlib import Path
 from typing import Iterator
 
 from ..errors import ConnectorError
+from .pipe_client import NamedPipeSocket
 
 _TIMEOUT = 30.0
 _CONNECT_TIMEOUT = 5.0
 _STREAM_POLL_SECONDS = 1.0
+_HELLO_TIMEOUT_SECONDS = 20.0
 
 
 class IPCClient:
@@ -24,7 +27,7 @@ class IPCClient:
         self.transport = transport
         self.address = address
         self.token = token
-        self._socket: socket.socket | None = None
+        self._socket: socket.socket | NamedPipeSocket | None = None
         self._buffer = b""
         self._closed = False
 
@@ -41,10 +44,16 @@ class IPCClient:
         if self.transport == "unix":
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             target = self.address
-        else:
+        elif self.transport == 'named_pipe':
+            sock = NamedPipeSocket()
+            target = self.address
+        elif self.transport == 'loopback':
             host, _, port = self.address.partition(":")
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             target = (host, int(port))
+        else:
+            raise ConnectorError('VALIDATION_ERROR', 'ipc_connect',
+                                 'unknown IPC transport')
         sock.settimeout(_CONNECT_TIMEOUT)
         try:
             sock.connect(target)
@@ -55,11 +64,16 @@ class IPCClient:
                                  retry_safe=True) from exc
         sock.settimeout(_STREAM_POLL_SECONDS)
         self._socket = sock
-        self._send({"op": "hello", "token": self.token, "version": 1})
-        hello = self._read_object()
-        if not hello.get("ok"):
-            raise ConnectorError("AGENT_AUTH_REQUIRED", "ipc_hello",
-                                 "daemon rejected IPC authentication")
+        try:
+            self._send({"op": "hello", "token": self.token, "version": 1})
+            hello = self._read_object(deadline=time.monotonic() +
+                                      _HELLO_TIMEOUT_SECONDS)
+            if not hello.get("ok"):
+                raise ConnectorError("AGENT_AUTH_REQUIRED", "ipc_hello",
+                                     "daemon rejected IPC authentication")
+        except BaseException:
+            self.close()
+            raise
 
     def close(self) -> None:
         self._closed = True
@@ -96,9 +110,13 @@ class IPCClient:
         blob = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         self._socket.sendall(blob + b"\n")
 
-    def _read_object(self) -> dict[str, object]:
+    def _read_object(self, *, deadline: float | None = None) -> dict[str, object]:
         assert self._socket is not None
         while b"\n" not in self._buffer:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise ConnectorError('DAEMON_UNAVAILABLE', 'ipc_hello',
+                                     'daemon did not authenticate IPC in time',
+                                     retry_safe=True)
             if self._closed or self._socket is None:
                 raise ConnectorError("DAEMON_UNAVAILABLE", "ipc_read",
                                      "client closed",

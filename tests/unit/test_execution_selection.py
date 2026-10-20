@@ -85,7 +85,7 @@ def test_approved_binding_roundtrip_does_not_downgrade_on_publication_replay(sel
     assert selected.workspace_root == str(store.path.parent / 'workspace')
     assert len(store.load().execution_bindings) == 1
     old = state_from_json({'schema_version': 3, 'connector_id': 'legacy', 'preferences': {'keep': True}})
-    assert old.schema_version == 13 and old.execution_bindings == []
+    assert old.schema_version == 15 and old.execution_bindings == []
     assert state_to_json(old)['preferences'] == {'keep': True}
     with pytest.raises(ConnectorError):
         acknowledge_execution_binding(store, binding=replace(binding, endpoint_id='another'))
@@ -139,8 +139,9 @@ def test_publication_ack_rejects_concurrent_configuration_change(selection):
         acknowledge_local_realization(store, record=local, published=published)
 
 
-def test_pi_dependency_bytes_remain_part_of_approved_selection(selection, tmp_path):
+async def test_pi_dependency_bytes_remain_part_of_approved_selection(selection, tmp_path, monkeypatch):
     from nexus_connector_core.discovery import candidate_pi_node_cli, selected_fingerprint
+    from okto_nexus_connector.services import core_host
     _, _, old_binding, frame, _, _ = selection
     node = tmp_path / 'node.exe'
     node.write_bytes(b'Synthetic Node binary')
@@ -165,8 +166,28 @@ def test_pi_dependency_bytes_remain_part_of_approved_selection(selection, tmp_pa
     acknowledge_execution_binding(store, binding=binding)
     frame['payload'].update(adapter_id=candidate.adapter_id, candidate_ref=candidate.installation_ref, inventory_revision=revision)
     frame['intent_hash'] = r4_submit_intent_hash(frame)
-    assert resolve_execution_selection(store, frame=frame, candidates=[candidate]).candidate.launch_script == str(script)
-    dependency.write_text('Changed loaded helper', encoding='utf-8')
+    selected = resolve_execution_selection(store, frame=frame, candidates=[candidate])
+    assert selected.candidate.launch_script == str(script)
+    host = CoreRuntimeHost(state_dir(tmp_path / 'pi-runtime'), None)
+    captured = {}
+    original = core_host.create_runtime
+    def compose(**options):
+        captured['environment'] = options['environment']
+        return original(**options)
+    monkeypatch.setattr(core_host, 'create_runtime', compose)
+    async def environment(_):
+        # The package can change while an approved environment is being
+        # materialized. The post-callback full check must catch a dependency
+        # that Node/entrypoint fingerprint checks cannot see.
+        dependency.write_text('Changed loaded helper', encoding='utf-8')
+        return {}
+    try:
+        await host.build_r4(store, frame=frame, candidates=[candidate],
+                            environment=environment)
+        with pytest.raises(ConnectorError, match='PROFILE_DRIFT'):
+            await captured['environment'](None)
+    finally:
+        await host.shutdown_all()
     assert selected_fingerprint(candidate) == candidate.fingerprint
     with pytest.raises(ConnectorError, match='PROFILE_DRIFT'):
         resolve_execution_selection(store, frame=frame, candidates=[candidate])
@@ -205,6 +226,39 @@ async def test_host_revalidates_after_shared_store_wait_and_before_cache_reuse(s
         await host.shutdown_all()
 
 
+@pytest.mark.parametrize('selection', ['pi'], indirect=True)
+async def test_approved_opening_passes_one_qualified_selection_to_runtime(selection, tmp_path, monkeypatch):
+    from okto_nexus_connector.services import execution_selection, launch_configuration
+
+    store, candidate, binding, frame, *_ = selection
+    acknowledge_execution_binding(store, binding=binding)
+    host = CoreRuntimeHost(state_dir(tmp_path / 'runtime'), None)
+    calls = []
+    full = execution_selection.resolve_execution_selection
+
+    def count_full(*args, **kwargs):
+        calls.append(kwargs['frame']['session_id'])
+        return full(*args, **kwargs)
+
+    monkeypatch.setattr(execution_selection, 'resolve_execution_selection', count_full)
+    monkeypatch.setattr(launch_configuration, 'resolve_execution_selection', count_full)
+    try:
+        setup = await host.approved_launch(store, frame=frame, candidates=[candidate])
+        assert calls == ['session']
+        assert setup.opening_selection is not None
+        runtime = await host.build_r4(store, frame=frame, candidates=[candidate],
+            environment=setup.environment, opening_selection=setup.opening_selection)
+        assert runtime is not None
+        assert calls == ['session']
+        Path(candidate.executable).write_bytes(b'Changed executable after selection')
+        with pytest.raises(ConnectorError, match='PROFILE_DRIFT'):
+            await host.build_r4(store, frame=frame, candidates=[candidate],
+                environment=setup.environment, opening_selection=setup.opening_selection)
+        assert calls == ['session']
+    finally:
+        await host.shutdown_all()
+
+
 @pytest.mark.parametrize('selection', [None, 'discovered'], indirect=True)
 async def test_r4_host_defers_native_capture_to_installed_lease(selection, tmp_path, monkeypatch):
     from okto_nexus_connector.services import core_host
@@ -228,4 +282,48 @@ async def test_r4_host_defers_native_capture_to_installed_lease(selection, tmp_p
         assert composed[0]['candidates'][candidate.adapter_id] == replace(candidate, trust='selected')
         assert resolve_execution_selection(store, frame=frame, candidates=[candidate]).candidate == candidate
     finally:
+        await host.shutdown_all()
+
+
+@pytest.mark.parametrize('shutdown', ['host', 'other_executor'])
+async def test_composition_after_store_wait_respects_storage_owner(selection, tmp_path, monkeypatch, shutdown):
+    import threading
+    from nexus_connector_core import CoreError
+    from okto_nexus_connector.services import execution_selection
+    store, candidate, binding, frame, *_ = selection
+    acknowledge_execution_binding(store, binding=binding)
+    host = CoreRuntimeHost(state_dir(tmp_path / 'lifetime'), None)
+    entered, release = threading.Event(), threading.Event()
+    original, calls = execution_selection.revalidate_opening_selection, []
+    def resolve(*args, **kwargs):
+        result = original(*args, **kwargs)
+        calls.append(result)
+        if len(calls) == 1:
+            entered.set()
+            assert release.wait(20)
+        return result
+    monkeypatch.setattr(execution_selection, 'revalidate_opening_selection', resolve)
+    async def environment(_):
+        raise AssertionError('Composition cannot launch a provider.')
+    task = asyncio.create_task(host.build_r4(store, frame=frame, candidates=[candidate], environment=environment))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        journal = host.journal_if_open()
+        assert journal is not None
+        if shutdown == 'host':
+            await host.shutdown_all()
+            assert host.journal_if_open() is None
+            release.set()
+            with pytest.raises(CoreError, match='RUNTIME_DRAINING'):
+                await task
+            assert not host._runtimes
+        else:
+            await host.shutdown_executor(server_id='other', executor_id='other')
+            assert host.journal_if_open() is journal
+            release.set()
+            assert await task is not None
+            assert len(host._runtimes) == 1
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
         await host.shutdown_all()

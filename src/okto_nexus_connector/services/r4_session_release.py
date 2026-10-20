@@ -1,6 +1,7 @@
 """Build one release report from public Core facts and acknowledged history."""
 import asyncio
 from hashlib import sha256
+import logging
 from typing import Protocol
 
 from nexus_connector_core import (
@@ -11,6 +12,32 @@ from nexus_connector_core.session_release import SESSION_RELEASE_REVISION, Sessi
 
 from ..storage.r4_publications import R4PublicationStore
 from ..storage.r4_events import R4EventStore
+from ..storage.r4_session_releases import R4SessionReleaseStore
+
+
+async def retire_resolved_checkpoint(store, request, journal, *, sequence, digest):
+    """Retire an exact Server-accepted direct or reconciliation release proof."""
+    events=R4EventStore.for_state(store)
+    releases=R4SessionReleaseStore.for_state(store)
+    scope={**request['scope'], 'stream_epoch':request['stream_epoch']}
+    await asyncio.to_thread(events.retire,scope,sequence=sequence,
+        release_id=request['release_id'],
+        release_digest=digest)
+    await journal.retire_reconciliation_claim(
+        SessionKey(request['scope']['server_id'],request['scope']['executor_id'],
+                   request['scope']['session_id']),
+        operation_id=request['opening_operation_id'],
+        release_id=request['release_id'],release_digest=digest)
+    # The three stores cannot commit atomically. A lost final marker causes
+    # recovery to repeat both idempotent checkpoints, never to invent an ACK.
+    await asyncio.to_thread(releases.mark_checkpoints_retired,request)
+
+
+async def retire_accepted_event(store, request, journal):
+    """Checkpoint a direct session.release ACK after its outbox commit."""
+    await retire_resolved_checkpoint(store,request,journal,
+        sequence=request['sequence'],
+        digest=sha256(encode_session_release(request)).hexdigest())
 
 
 class R4SessionReleaseReporter:
@@ -18,6 +45,11 @@ class R4SessionReleaseReporter:
         self.publications = R4PublicationStore.for_state(store)
         self.events = R4EventStore.for_state(store)
         self.host = host
+        self.store = store
+
+    async def retire_accepted(self, request):
+        await retire_accepted_event(self.store, request,
+                                    await self.host.ensure_history_journal())
 
     async def report(self, *, scope, connection_id, connection_generation):
         """Observe a session after its owner drains runtime/native-tool producers.
@@ -103,6 +135,7 @@ class SessionReleaseOutbox(Protocol):
 
 class SessionReleaseRecoveryOutbox(Protocol):
     def reconcile_page(self, ack, observations, *, after=0, limit=128): ...
+    def resolved_checkpoint_page(self, server_id, executor_id, *, after=0, limit=128): ...
 
 
 class R4SessionReleasePublisher:
@@ -113,8 +146,9 @@ class R4SessionReleasePublisher:
     service. Reconnection under another generation uses global reconciliation,
     never rewriting this original channel's proof or native operation.
     """
-    def __init__(self, outbox: SessionReleaseOutbox, reporter, publish):
+    def __init__(self, outbox: SessionReleaseOutbox, reporter, publish, *, on_accepted=None):
         self.outbox, self.reporter, self.publish = outbox, reporter, publish
+        self.on_accepted=on_accepted
 
     async def run(self, *, scope, connection_id, connection_generation, stop_event):
         identity = dict(scope=scope, connection_id=connection_id,
@@ -131,6 +165,13 @@ class R4SessionReleasePublisher:
             # received: this retained producer commits it before returning.
             await asyncio.to_thread(self.outbox.acknowledge, reply)
             if reply['type'] == 'session.release.accepted':
+                if self.on_accepted is not None:
+                    try:
+                        await self.on_accepted(request)
+                    except Exception as error:
+                        logging.getLogger(__name__).warning(
+                            'Terminal event checkpoint deferred: type=%s code=%s stage=%s',
+                            type(error).__name__,getattr(error,'code',None),getattr(error,'stage',None))
                 return True
             try:
                 await asyncio.wait_for(stop_event.wait(), .25)

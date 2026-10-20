@@ -1,18 +1,20 @@
 """Bounded reconciliation from public Core facts and persisted wire bindings."""
 import asyncio
+import logging
 import secrets
 
 from nexus_connector_core import EventCursor, OperationKey, project_r4_bound_receipt, project_r4_resource_release, decode_r4_frame, encode_r4_frame
 
 from ..errors import ConnectorError
 from ..storage.r4_publications import R4PublicationStore
-from .r4_session_release import SessionReleaseRecoveryOutbox
+from .r4_session_release import SessionReleaseRecoveryOutbox,retire_resolved_checkpoint
 
 
 class R4ReconciliationReporter:
     def __init__(self, store, host, server_id, executor_id, *, release_outbox: SessionReleaseRecoveryOutbox | None = None,
-                 boot_id='reconciliation'):
+                 boot_id='reconciliation', validate_authority=None, publish_receipts=None):
         self.publications = R4PublicationStore.for_state(store)
+        self.store = store
         from ..storage.r4_events import R4EventStore
         self.event_store = R4EventStore.for_state(store)
         self.host, self.server_id, self.executor_id = host, server_id, executor_id
@@ -29,7 +31,17 @@ class R4ReconciliationReporter:
         self._release_observations = {}
         self._report_complete = False
         self.boot_id = boot_id
+        self.validate_authority, self.publish_receipts = validate_authority, publish_receipts
         self._preopen_reports, self._preopen_sent, self._preopen_after = [], {}, 0
+        self._unstarted_sessions = set()
+        self._checkpoint_task = None
+        self._checkpoint_epoch = 0
+
+    def require_authority(self, request):
+        if self.validate_authority is None:
+            raise ConnectorError('RECONCILIATION_REQUIRED', 'launch_recovery',
+                                 'A live replacement owner is required for process recovery.')
+        self.validate_authority(request)
 
     async def accepted(self, ack):
         """Called only after the authenticated transport validates this ACK."""
@@ -47,11 +59,49 @@ class R4ReconciliationReporter:
             next_after = await asyncio.to_thread(self.release_outbox.reconcile_page,
                 ack, self._release_observations, after=after)
             if next_after is None:
-                return
+                break
             if next_after <= after:
                 raise ConnectorError('JOURNAL_UNAVAILABLE', 'session_release', 'The recovery cursor did not advance.')
             after = next_after
-        raise ConnectorError('RECONCILIATION_REQUIRED', 'session_release', 'Release recovery exceeded its page budget.')
+        else:
+            raise ConnectorError('RECONCILIATION_REQUIRED', 'session_release', 'Release recovery exceeded its page budget.')
+        # Only the release proof commit gates readiness. Maintenance starts
+        # independently and rechecks if another accepted cycle arrives while
+        # its previous pass is still running.
+        self._checkpoint_epoch += 1
+        if self._checkpoint_task is None or self._checkpoint_task.done():
+            self._checkpoint_task=asyncio.create_task(self._retire_resolved_checkpoints())
+
+    async def _retire_resolved_checkpoints(self):
+        """Keep historical cleanup outside the connection's readiness path."""
+        log=logging.getLogger(__name__)
+        while True:
+            epoch=self._checkpoint_epoch
+            for attempt in range(3):
+                after,failed=0,False
+                try:
+                    journal=await self.host.ensure_history_journal()
+                    while True:
+                        page=await asyncio.to_thread(self.release_outbox.resolved_checkpoint_page,
+                            self.server_id,self.executor_id,after=after)
+                        if not page: break
+                        for after,request,sequence,digest in page:
+                            try:
+                                await retire_resolved_checkpoint(self.store,request,journal,
+                                    sequence=sequence,digest=digest)
+                            except Exception as error:
+                                failed=True
+                                log.warning('Resolved checkpoint deferred: type=%s code=%s stage=%s',
+                                    type(error).__name__,getattr(error,'code',None),getattr(error,'stage',None))
+                        if len(page)<128: break
+                        await asyncio.sleep(0)
+                except Exception as error:
+                    failed=True
+                    log.warning('Resolved checkpoint scan deferred: type=%s code=%s stage=%s',
+                        type(error).__name__,getattr(error,'code',None),getattr(error,'stage',None))
+                if not failed: break
+                if attempt<2: await asyncio.sleep(2**attempt)
+            if self._checkpoint_epoch==epoch: return
 
     async def _fact(self, row, journal):
         if row is None or row['binding'] is None:
@@ -84,9 +134,15 @@ class R4ReconciliationReporter:
             self.cycle, self.cursor = cycle, None
             self.after, self.high, self.claims_done, self.blocked = 0, None, False, False
             self.requested_sessions, self.seen_sessions = set(), set()
+            self.seen_sessions.update(await asyncio.to_thread(
+                self.publications.recovered_startup_sessions,
+                self.server_id, self.executor_id,
+                generation=request['connection_generation'],
+                session_ids=request['session_ids']))
             self._release_observations = {}
             self._report_complete = False
             self._preopen_reports, self._preopen_sent, self._preopen_after = [], {}, 0
+            self._unstarted_sessions = set()
             if request.get('preopen_refusal_supported') is True:
                 from .r4_preopen_recovery import recover_preopen_publications
                 self._preopen_reports = await recover_preopen_publications(
@@ -102,6 +158,11 @@ class R4ReconciliationReporter:
             raise ConnectorError('CAPACITY_EXCEEDED', 'r4_reconcile', 'The reconciliation session budget is exhausted.')
         journal = await self.host.ensure_history_journal()
         ledger = await self.host.ensure_ledger()
+        if request['cursor'] is None:
+            from .r4_launch_recovery import recover_launches
+            await recover_launches(self, journal, ledger, request)
+            from .r4_denied_capacity import recover_denied_opening_capacity
+            await recover_denied_opening_capacity(self, journal, ledger, request)
         # The authenticated recovery channel supplies the replacement
         # generation. Old HELD reservations are cancellable without a native
         # process proof; consumed or uncertain records must still block below.
@@ -133,7 +194,7 @@ class R4ReconciliationReporter:
         for operation_id in request['operation_ids']:
             fact = await self._fact(rows.get(operation_id), journal)
             if fact is None:
-                if self._preopen_reports:
+                if self._preopen_reports or request.get('launch_recovery_supported') and self._unstarted_sessions:
                     # Only the Server can retire never-dispatched children of
                     # these exact openings. Omit a missing fact; its canonical
                     # checks must reject any other unexplained operation.
@@ -144,7 +205,8 @@ class R4ReconciliationReporter:
         claims, facts, watermarks = [], [], []
         if not self.claims_done:
             page = await journal.claimed_sessions(self.server_id, self.executor_id,
-                after_rowid=self.after, high_water_rowid=self.high, limit=128)
+                after_rowid=self.after, high_water_rowid=self.high, limit=128,
+                pending_only=True)
             self.high = page.high_water_rowid
             for claim in page.claims:
                 self.seen_sessions.add(claim.key.session_id)
@@ -166,18 +228,32 @@ class R4ReconciliationReporter:
                 release_fact = None
                 if closed is None and opening is not None and opening['binding'] is not None:
                     slot = await ledger.owned_slot_state(claim.key)
-                    if slot is not None and slot.released:
+                    launch = await journal.get_process_launch(claim.key)
+                    never_claimed = launch is not None and launch.stop_proof == 'NEVER_CLAIMED'
+                    if never_claimed or slot is not None and slot.released:
                         opening_receipt = await journal.get_receipt(OperationKey(
                             self.server_id, self.executor_id, claim.opening_operation_id))
                         if opening_receipt is not None:
-                            release_fact = project_r4_resource_release(
-                                opening['binding'], claim, slot, opening_receipt)
+                            if never_claimed:
+                                if request.get('launch_recovery_supported') is not True:
+                                    raise ConnectorError('VERSION_INCOMPATIBLE', 'launch_recovery',
+                                                         'Never-started recovery was not negotiated.')
+                                from nexus_connector_core.launch_release_r4 import project_r4_unstarted_release
+                                release_fact = project_r4_unstarted_release(
+                                    opening['binding'], claim, slot, opening_receipt, launch,
+                                    journal_slot=await journal.owned_slot_state(claim.key),
+                                    birth=await journal.get_process_birth(claim.key))
+                            else:
+                                release_fact = project_r4_resource_release(
+                                    opening['binding'], claim, slot, opening_receipt)
                 released = (closed is not None or release_fact is not None) and opening is not None and opening['metadata'].get('stream_epoch') is not None
                 generation = generation if generation is not None else 0
                 claims.append(dict(session_id=claim.key.session_id, owner_generation=generation,
                                    state='RELEASED' if released else 'UNKNOWN'))
                 facts.append(dict(session_id=claim.key.session_id, owner_generation=generation,
                                   process_state='EXITED' if released else 'UNKNOWN'))
+                if release_fact is not None:
+                    facts[-1].update(release_fact)
                 if released:
                     facts[-1]['proof_digest'] = (release_fact['proof_digest'] if release_fact is not None
                                                    else closed['binding']['digest'])
@@ -236,4 +312,5 @@ class R4ReconciliationReporter:
             'connection_id', 'connection_generation', 'reconcile_id', 'cursor')} | dict(
                 type='reconcile.report', next_cursor=self.cursor, complete=complete,
                 receipts=receipts, claims=claims, ownership_facts=facts, stream_watermarks=watermarks) | (
-                    {'preopen_refusals': preopen_page} if preopen_page else {})
+                    {'preopen_refusals': preopen_page} if preopen_page else {}) | (
+                    {'launch_recovery_supported': True} if request.get('launch_recovery_supported') is True else {})

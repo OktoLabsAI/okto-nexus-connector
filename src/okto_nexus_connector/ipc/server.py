@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 import socket as socket_module
 import sys
 from pathlib import Path
@@ -40,6 +41,7 @@ class IPCServer:
         self._dispatcher = dispatcher
         self._secrets = list(redaction_secrets)
         self._server: asyncio.AbstractServer | None = None
+        self._pipe_server = None
         self.transport = ""
         self.address = ""
         self._connections: set[asyncio.StreamWriter] = set()
@@ -47,9 +49,24 @@ class IPCServer:
         self._token = ""
         self._closing = False
 
-    async def start(self, run_dir: Path, token: str) -> None:
+    async def start(self, run_dir: Path, token: str, *, transport: str = 'auto') -> None:
         run_dir.mkdir(parents=True, exist_ok=True)
         self._token = token
+        if transport == 'named_pipe':
+            if sys.platform != 'win32':
+                raise ConnectorError('CAPABILITY_UNSUPPORTED', 'ipc_bind',
+                                     'Windows named pipes are unavailable.')
+            from .named_pipe import serve_secure_pipe
+            name = r'\\.\pipe\okto-nexus-m6-' + secrets.token_hex(16)
+            def protocol_factory():
+                reader = asyncio.StreamReader(limit=MAX_FRAME_BYTES)
+                return asyncio.StreamReaderProtocol(reader, self._spawn_client)
+            self._pipe_server = await serve_secure_pipe(protocol_factory, name)
+            self.transport = 'named_pipe'
+            self.address = name
+            return
+        if transport != 'auto':
+            raise ConnectorError('VALIDATION_ERROR', 'ipc_bind', 'unknown IPC transport')
         if _HAS_UNIX:
             path = run_dir / "ipc.sock"
             try:
@@ -88,6 +105,10 @@ class IPCServer:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
+        if self._pipe_server is not None:
+            self._pipe_server.close()
+            self._pipe_server = None
+            await asyncio.sleep(0)
         for writer in list(self._connections):
             writer.close()
         for task in list(self._tasks):

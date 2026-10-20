@@ -5,7 +5,7 @@ import hashlib
 import time
 
 from nexus_connector_core.protocol import canonical_json
-from ..errors import ConnectorError, TicketMaterialUnavailable
+from ..errors import ConnectorError, TicketMaterialUnavailable, TicketReplacementRequired
 from ..storage.r4_tickets import R4TicketStore
 
 SCOPES = ("lane:attach", "lease:request", "receipt:publish")
@@ -24,7 +24,7 @@ async def acquire_ticket(store, vault, http, binding, identity, *, require_curre
     request = await asyncio.to_thread(intents.reserve, context, wall_clock())
     await require_current()
     key = await asyncio.to_thread(vault.resolve, identity.secret_handle)
-    for attempt in range(2):
+    for attempt in range(3):
         await require_current()
         await asyncio.to_thread(intents.require_current, request)
         await require_current()
@@ -36,10 +36,11 @@ async def acquire_ticket(store, vault, http, binding, identity, *, require_curre
                 credential_request_id=request["credential_request_id"],
                 replaces_ticket_id=request["replaces_ticket_id"],
                 scopes=SCOPES, expires_in=context["expires_in"])
-        except TicketMaterialUnavailable as error:
+        except (TicketMaterialUnavailable, TicketReplacementRequired) as error:
             await require_current()
-            request = await asyncio.to_thread(intents.replace, request, error.ticket_id, wall_clock())
-            if attempt == 1:
+            request = await asyncio.to_thread(intents.replace, request, error.ticket_id,
+                                              wall_clock(), active=isinstance(error, TicketReplacementRequired))
+            if attempt == 2:
                 raise ConnectorError("RECONCILIATION_REQUIRED", "r4_tickets",
                                      "Ticket recovery requires another pass.") from None
             continue

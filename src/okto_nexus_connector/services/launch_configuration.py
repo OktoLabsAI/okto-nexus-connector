@@ -15,7 +15,9 @@ from nexus_connector_core.protocol import canonical_json
 
 from ..errors import ConnectorError
 from ..storage.state_store import LaunchConfigurationRecord
-from .execution_selection import resolve_execution_selection, revalidate_running_selection
+from .execution_selection import (resolve_execution_selection,
+                                  revalidate_opening_selection,
+                                  revalidate_running_selection)
 
 
 def _digest(record):
@@ -86,10 +88,17 @@ def stage_launch_configuration(store, *, server_id, executor_id, agent_id,
     return replace(record, secret_bindings=dict(bindings))
 
 
-def _resolve(store, frame, candidates, *, running=None):
-    selection = (resolve_execution_selection(store, frame=frame, candidates=candidates)
-                 if running is None else revalidate_running_selection(
-                     store, frame=frame, candidates=candidates, expected=running[0]))
+def _resolve(store, frame, candidates, *, running=None, opening=None):
+    if running is not None and opening is not None:
+        raise ValueError('Provide one expected selection.')
+    if running is not None:
+        selection = revalidate_running_selection(
+            store, frame=frame, candidates=candidates, expected=running[0])
+    elif opening is not None:
+        selection = revalidate_opening_selection(
+            store, frame=frame, candidates=candidates, expected=opening[0])
+    else:
+        selection = resolve_execution_selection(store, frame=frame, candidates=candidates)
     state = store.load()
     matches = [r for r in state.launch_configurations
                if r.configuration_digest == selection.configuration_digest]
@@ -109,7 +118,7 @@ def _resolve(store, frame, candidates, *, running=None):
 
 
 async def approved_launch_setup(store, vault, *, frame, candidates, capability=None, http=None, tool_root=None,
-                               capability_metadata=None):
+                               capability_metadata=None, opening=None):
     """Compose the standard R4 launch port without raw wire environment or argv."""
     from .core_host import LaunchOverlay, LaunchSecretResolver, make_environment
     from .r4_execution import R4LaunchSetup
@@ -122,9 +131,10 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
         capability = replace(capability, scope=MappingProxyType(native_action_scope(capability.scope)))
     encoded = encode_r4_frame(frame)
     candidates = tuple(candidates)
-    async def current():
-        return await asyncio.to_thread(_resolve, store, decode_r4_frame(encoded), candidates)
-    expected = await current()
+    async def current(*, opening=None):
+        return await asyncio.to_thread(_resolve, store, decode_r4_frame(encoded),
+                                       candidates, opening=opening)
+    expected = await current(opening=opening)
     _, record = expected
     native_factory = None
     templates, material = (), {}
@@ -177,7 +187,7 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
         if session_home is not None:
             await asyncio.to_thread(session_home.require_current)
     async def environment(prepared):
-        if await current() != expected:
+        if await current(opening=expected) != expected:
             raise ConnectorError('PROFILE_DRIFT', 'launch_configuration',
                                  'The approved launch configuration changed.')
         if prepared.intent.adapter_id != record.adapter_id:
@@ -192,4 +202,4 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
         return result
     await tools_current()
     return R4LaunchSetup(environment, auth_refs=tuple(sorted(auth_refs)),
-                         native_action_factory=native_factory)
+                         native_action_factory=native_factory, opening_selection=expected[0])

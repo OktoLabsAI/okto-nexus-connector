@@ -1,5 +1,7 @@
 import ctypes
 import os
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +16,27 @@ def test_current_process_has_stable_native_identity():
     assert sysinfo.same_process(identity)
     assert not sysinfo.same_process(sysinfo.ProcessIdentity(identity.pid, 'different-birth'))
     assert sysinfo.process_identity(-1) is None
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Windows process handle')
+def test_exited_process_with_retained_handle_is_not_alive():
+    child = subprocess.Popen([sys.executable, '-c',
+                              'import time; time.sleep(1)'],
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL,
+                             creationflags=0x08000000)
+    try:
+        identity = sysinfo.process_identity(child.pid)
+        assert identity is not None and sysinfo.same_process(identity)
+        assert child.wait(timeout=5) == 0
+        # Popen deliberately retains the Windows process handle here. Its
+        # birth time remains queryable after exit, but it cannot own a daemon.
+        assert sysinfo.process_identity(child.pid) is None
+        assert not sysinfo.same_process(identity)
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=5)
 
 
 @pytest.mark.parametrize('fault', [None, 'short', 'wrong_pid', 'zero_start', 'bad_usec'])
