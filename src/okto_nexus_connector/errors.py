@@ -71,6 +71,16 @@ class TicketMaterialUnavailable(ConnectorError):
         return ConnectorError.to_json(self) | {"ticket_id": self.ticket_id}
 
 
+@dataclass(slots=True)
+class TicketReplacementRequired(ConnectorError):
+    """The Server identified the still-active derivative to replace."""
+
+    ticket_id: str = ""
+
+    def to_json(self) -> dict[str, object]:
+        return ConnectorError.to_json(self) | {"ticket_id": self.ticket_id}
+
+
 def auth_required(stage: str, message: str = "") -> ConnectorError:
     return ConnectorError("AGENT_AUTH_REQUIRED", stage, message,
                           action="Import a valid canonical agent key with "

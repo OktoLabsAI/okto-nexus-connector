@@ -38,6 +38,34 @@ async def append(journal, count):
         await journal.record_event(RuntimeEvent("srv","exe","session","epoch",0,"text_delta",None,{"text":"Hello"}))
 
 
+async def test_large_event_upload_precedes_reference_and_retry_preserves_content(publisher):
+    from nexus_connector_core.event_artifacts import event_reference, hydrate_event
+    owner,journal,connection=publisher
+    content='ação🙂'*18000
+    await journal.record_event(RuntimeEvent('srv','exe','session','epoch',0,'tool_activity',None,{'text':content}))
+    await append(journal,1)
+    uploaded={}
+    attempts=0
+    async def upload(scope,event,raw):
+        nonlocal attempts
+        attempts+=1
+        assert owner.store.read(SCOPE)['remote_acked']==0
+        if attempts==1: raise OSError('lost upload ACK')
+        assert hydrate_event(event,raw)['payload']['text']==content
+        uploaded[event_reference(event)['artifact_id']]=raw
+    connection.publish_event_artifact=upload
+    original=connection.publish_events
+    async def publish(**values):
+        assert event_reference(values['events'][0])['artifact_id'] in uploaded
+        return await original(**values)
+    connection.publish_events=publish
+    with pytest.raises(OSError): await owner.step(SCOPE)
+    assert owner.store.read(SCOPE)['core_applied']==0
+    assert await owner.step(SCOPE)
+    assert owner.store.read(SCOPE)['core_applied']==2
+    assert len(connection.calls)==1
+
+
 @pytest.mark.parametrize("count",[0,1,127,128,129])
 async def test_finite_snapshot_does_not_wait_for_a_full_batch(publisher,count):
     owner,journal,_=publisher
@@ -179,3 +207,39 @@ def test_stream_store_rejects_cross_binding_and_corrupted_identity(tmp_path):
         conn.execute("UPDATE streams SET metadata='{}'")
     with pytest.raises(ConnectorError) as refused: store.read(SCOPE)
     assert refused.value.code=="JOURNAL_UNAVAILABLE"
+
+
+def test_accepted_terminal_checkpoint_frees_a_live_stream_slot_without_losing_ack(tmp_path):
+    import hashlib
+    import sqlite3
+    from nexus_connector_core.protocol import canonical_json
+    from okto_nexus_connector.storage.r4_events import R4EventStore
+    from okto_nexus_connector.errors import ConnectorError
+
+    store=R4EventStore(tmp_path/"events.db")
+    store.register(SCOPE)
+    store.advance(SCOPE,remote_acked=2)
+    store.advance(SCOPE,core_applied=2)
+    # Seed the exact lifetime frontier in one durable transaction; every row
+    # still has a valid scope digest and the ordinary registration is tested.
+    with sqlite3.connect(store.path) as conn:
+        rows=[]
+        for n in range(4095):
+            scope={**SCOPE,"session_id":f"historic-{n}"}
+            raw=canonical_json(scope).decode()
+            rows.append((scope["server_id"],scope["executor_id"],scope["session_id"],
+                         scope["stream_epoch"],raw,hashlib.sha256(raw.encode()).hexdigest()))
+        conn.executemany("INSERT INTO streams(server_id,executor_id,session_id,stream_epoch,metadata,digest) "
+                         "VALUES (?,?,?,?,?,?)",rows)
+    fresh={**SCOPE,"session_id":"fresh"}
+    with pytest.raises(ConnectorError,match='CAPACITY_EXCEEDED'):
+        store.register(fresh)
+    store.retire(SCOPE,sequence=2,release_id="release-accepted",release_digest="a"*64)
+    store.retire(SCOPE,sequence=2,release_id="release-accepted",release_digest="a"*64)
+    assert store.read(SCOPE)["remote_acked"]==store.read(SCOPE)["core_applied"]==2
+    with pytest.raises(ConnectorError,match='SCOPE_MISMATCH'):
+        store.retire(SCOPE,sequence=2,release_id="another",release_digest="a"*64)
+    with pytest.raises(ConnectorError,match='STALE_GENERATION'):
+        store.register(SCOPE)
+    store.register(fresh)
+    assert store.read(fresh)["core_applied"]==0

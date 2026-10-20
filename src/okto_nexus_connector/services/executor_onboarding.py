@@ -8,7 +8,7 @@ import time
 
 from ..errors import ConnectorError
 from ..transport.https_client import NexusHTTPClient
-from .discovery_configuration import configuration_arguments, configured_candidates
+from .discovery_configuration import configuration_arguments
 from .discovery_service import known_adapter
 from .executor_registration import _identity, _one, _profile
 from .launch_configuration import stage_launch_configuration, _digest, _home
@@ -70,15 +70,15 @@ class ExecutorOnboarding:
 
     async def realize(self, *, identity_alias, client_intent_id, adapter_id,
                       candidate_ref, inventory_revision, configuration_digest,
-                      workspace_root, workspace_id, workspace_label, bootstrap, require_current=None):
+                      workspace_root, workspace_id, workspace_label, bootstrap, inventory_batch, require_current=None):
         scope = await asyncio.to_thread(self._scope, identity_alias)
         record, identity, profile = scope
         if identity.agent_id != record.registration_agent_id:
             raise ConnectorError("BINDING_NOT_AUTHORIZED", "executor_onboarding",
                                  "Bootstrap realization requires the executor registration identity.")
         configuration = await asyncio.to_thread(self._configuration, scope, configuration_digest, adapter_id)
-        candidates = tuple(await configured_candidates(record.discovery_configuration,
-                           observations=record.installation_observations))
+        candidates = inventory_batch.candidates
+        observations = inventory_batch.coverage()
         await asyncio.to_thread(self._require, identity_alias, scope)
         # Staging validates the exact inventory, physical candidate/root, stable
         # client intent and consent before any credential access or HTTP call.
@@ -88,7 +88,7 @@ class ExecutorOnboarding:
             candidate_ref=candidate_ref, inventory_revision=inventory_revision,
             workspace_root=Path(workspace_root), workspace_id=workspace_id,
             workspace_label=workspace_label, configuration_digest=configuration_digest,
-            local_consent_id=configuration.local_consent_id)
+            local_consent_id=configuration.local_consent_id, observations=observations)
         if (bootstrap.executor.server_id, bootstrap.executor.executor_id,
                 bootstrap.executor.registration_agent_id) != (record.server_id, record.executor_id, identity.agent_id):
             raise ConnectorError("SCOPE_MISMATCH", "executor_onboarding",
@@ -119,7 +119,7 @@ class ExecutorOnboarding:
                 candidate_ref=candidate_ref, inventory_revision=inventory_revision,
                 workspace_root=Path(workspace_root), workspace_id=workspace_id,
                 workspace_label=workspace_label, configuration_digest=configuration_digest,
-                local_consent_id=configuration.local_consent_id)
+                local_consent_id=configuration.local_consent_id, observations=observations)
             if publication_body(refreshed) != publication_body(local):
                 raise ConnectorError("STALE_GENERATION", "executor_onboarding",
                                      "The local realization changed before publication.")

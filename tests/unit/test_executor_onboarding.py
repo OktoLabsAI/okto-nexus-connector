@@ -9,6 +9,7 @@ from okto_nexus_connector.errors import ConnectorError
 from okto_nexus_connector.services import executor_onboarding as module
 from okto_nexus_connector.transport.https_client import R4Realization, InventoryAccepted
 from tests.unit.test_executor_registration import registration
+from tests.unit.inventory_fixture import accepted_batch
 
 
 @pytest.fixture
@@ -21,11 +22,8 @@ async def onboarding(registration, tmp_path, monkeypatch):
     binary.write_bytes(b"technical selected executable")
     selected = InstallationCandidate("codex_app_server", str(binary), fingerprint(binary),
         "explicit", "selected", installation_ref=installation_ref("codex_app_server", str(binary)))
-    async def discover(configuration, *, observations):
-        assert configuration == {}
-        assert observations == []
-        return [selected]
-    monkeypatch.setattr(module, "configured_candidates", discover)
+    # All onboarding cases operate while an unrelated harness is still pending.
+    batch = accepted_batch([selected], states={'pi_rpc': 'PENDING'})
     configuration = await service.configure_launch(identity_alias="selected", adapter_id="codex_app_server",
         local_consent_id="consent", profile_revision=1, provider_home=tmp_path)
     peer.inventory = []
@@ -37,7 +35,7 @@ async def onboarding(registration, tmp_path, monkeypatch):
         from okto_nexus_connector.services.discovery_service import executor_inventory_snapshot
         assert key == "synthetic-canonical-key"
         snapshot = executor_inventory_snapshot([selected], server_id=server_id, executor_id=executor_id,
-            producer_instance_id="daemon", publication_sequence=1)
+            producer_instance_id="daemon", publication_sequence=1, observations=batch.coverage())
         peer.inventory.append(snapshot)
         if peer.during_inventory:
             peer.during_inventory()
@@ -58,8 +56,8 @@ async def onboarding(registration, tmp_path, monkeypatch):
     bootstrap = await registration_service.bootstrap(server_id="srv")
     project = tmp_path / "project"
     project.mkdir()
-    arguments = dict(bootstrap=bootstrap, identity_alias="selected", client_intent_id="realize", adapter_id="codex_app_server",
-        candidate_ref=selected.installation_ref, inventory_revision=calculate_inventory_revision([selected]),
+    arguments = dict(bootstrap=bootstrap, inventory_batch=batch, identity_alias="selected", client_intent_id="realize", adapter_id="codex_app_server",
+        candidate_ref=selected.installation_ref, inventory_revision=calculate_inventory_revision([selected], observations=batch.coverage()),
         configuration_digest=configuration.configuration_digest, workspace_root=project,
         workspace_id=None, workspace_label="Project")
     return service, peer, store, arguments, binary

@@ -20,15 +20,43 @@ class R4RecoveryChannel:
             server_id=self.state.server_id,executor_id=self.state.executor_id,
             connection_id=self.state.connection_id,connection_generation=self.state.connection_generation)
 
-    async def _exchange(self, frame):
+    def is_attached(self, *, binding_id, agent_id, credential_epoch,
+                    authorization_revision, configuration_revision):
+        lane = self.lanes.get(binding_id)
+        return bool(self.online and lane is not None and time.monotonic() < lane.deadline_monotonic
+            and all(getattr(lane, name) == value for name, value in dict(
+                agent_id=agent_id, credential_epoch=credential_epoch,
+                authorization_revision=authorization_revision,
+                configuration_revision=configuration_revision).items()))
+
+    async def _exchange(self, frame, encode=encode_r4_frame):
         if not self.online:
             raise CoreError('CONTROL_DISCONNECTED','r4_recovery')
-        await asyncio.wait_for(self.websocket.send(encode_r4_frame(frame).decode()),self.timeout)
+        await asyncio.wait_for(self.websocket.send(encode(frame).decode()),self.timeout)
         raw=await asyncio.wait_for(self.websocket.recv(),self.timeout)
-        reply=decode_r4_frame(raw.encode() if isinstance(raw,str) else raw)
-        if any(reply.get(k)!=self._base()[k] for k in ("server_id","executor_id","connection_id","connection_generation")):
+        from nexus_connector_core.control_codec import decode_control_frame
+        reply=decode_control_frame(raw.encode() if isinstance(raw,str) else raw,
+                                  capabilities=getattr(self.state,'control_capabilities',()))
+        envelope = reply['request'] if reply['type'] in (
+            'startup.refuse.accepted', 'startup.refuse.deferred') else reply
+        if any(envelope.get(k)!=self._base()[k] for k in ("server_id","executor_id","connection_id","connection_generation")):
             raise CoreError("STALE_GENERATION","r4_recovery")
         return reply
+
+    async def publish_startup_refusal(self, report):
+        from nexus_connector_core.startup_refusal_link import (
+            STARTUP_REFUSAL_REVISION, encode_startup_refusal,
+        )
+        if STARTUP_REFUSAL_REVISION not in self.state.control_capabilities:
+            raise CoreError('VERSION_INCOMPATIBLE', 'startup_refusal_recovery')
+        if any(report[name] != getattr(self.state, name) for name in (
+                'server_id', 'executor_id', 'connection_id', 'connection_generation')):
+            raise CoreError('STALE_GENERATION', 'startup_refusal_recovery')
+        response = await self._exchange(report, encode_startup_refusal)
+        if response['request'] != report or response['type'] not in (
+                'startup.refuse.accepted', 'startup.refuse.deferred'):
+            raise CoreError('SCOPE_MISMATCH', 'startup_refusal_recovery')
+        return response['type'] == 'startup.refuse.accepted'
 
     async def attach_binding(self, *, binding_id, agent_id, ticket, credential_epoch,
                              authorization_revision, configuration_revision):
@@ -53,6 +81,24 @@ class R4RecoveryChannel:
             agent_id=agent_id,ticket=ticket,credential_epoch=credential_epoch,authorization_revision=authorization_revision,
             configuration_revision=configuration_revision))
         self.lanes[binding_id]=reduce_r4_binding_attached(attempt,reply,received_at_monotonic=time.monotonic())
+
+    async def publish_event_artifact(self, scope, event, raw):
+        from nexus_connector_core.event_artifacts import EVENT_ARTIFACT_REVISION, artifact_chunks, artifact_ack, encode_event_artifact
+        if EVENT_ARTIFACT_REVISION not in getattr(self.state,'control_capabilities',()):
+            raise CoreError('VERSION_INCOMPATIBLE','event_artifact')
+        base = dict(self._base(),binding_id=scope['binding_id'],agent_id=scope['agent_id'])
+        for chunk in artifact_chunks(base,event,raw):
+            lane=self.lanes.get(scope['binding_id'])
+            if lane is None or lane.agent_id!=scope['agent_id'] or time.monotonic()>=lane.deadline_monotonic:
+                raise CoreError('BINDING_NOT_AUTHORIZED','event_artifact')
+            reply = await self._exchange(chunk,encode_event_artifact)
+            if reply['type']=='event.artifact.rejected':
+                normalized={k:v for k,v in reply.items() if k!='code'}
+                if dict(normalized,type='event.artifact.ack')!=artifact_ack(chunk):
+                    raise CoreError('EVENT_CONFLICT','event_artifact_ack')
+                raise CoreError(reply['code'],'event_artifact',possible_effect=True)
+            if reply != artifact_ack(chunk):
+                raise CoreError('EVENT_CONFLICT','event_artifact_ack')
 
     async def publish_events(self, *, binding_id, agent_id, session_id, stream_epoch, events):
         lane=self.lanes.get(binding_id)

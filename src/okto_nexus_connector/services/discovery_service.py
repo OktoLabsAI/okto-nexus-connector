@@ -295,7 +295,7 @@ def availability_snapshot(candidates) -> dict[str, object]:
 def executor_inventory_snapshot(candidates, *, server_id: str, executor_id: str,
                                 producer_instance_id: str,
                                 publication_sequence: int,
-                                observation_age_ms: int = 0) -> dict[str, object]:
+                                observation_age_ms: int = 0, observations=None) -> dict[str, object]:
     """R4 HTTP publication shape; the caller retains the full candidates."""
     from nexus_connector_core import build_executor_inventory_snapshot
     return build_executor_inventory_snapshot(
@@ -303,17 +303,18 @@ def executor_inventory_snapshot(candidates, *, server_id: str, executor_id: str,
         producer_instance_id=producer_instance_id,
         publication_sequence=publication_sequence,
         observation_age_ms=observation_age_ms,
+        observations=observations,
     )
 
 
 def resolve_executor_installation(candidates, *, adapter_id: str,
                                   candidate_ref: str,
-                                  expected_inventory_revision: str):
+                                  expected_inventory_revision: str, observations=None):
     """Select only within this executor's current, full Core inventory."""
     from nexus_connector_core import calculate_inventory_revision, resolve_installation
 
     items = tuple(candidates)
-    if calculate_inventory_revision(items) != expected_inventory_revision:
+    if calculate_inventory_revision(items, observations=observations) != expected_inventory_revision:
         raise ConnectorError("STALE_GENERATION", "inventory_selection",
                              "The selected inventory revision is stale")
     try:

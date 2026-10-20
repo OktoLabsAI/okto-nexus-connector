@@ -3,10 +3,11 @@ import asyncio
 from dataclasses import asdict
 from nexus_connector_core import CoreError, EventCursor, encode_r4_frame
 from nexus_connector_core.protocol import canonical_json
+from nexus_connector_core.event_artifacts import externalize_event
 from ..storage.r4_events import R4EventStore, FIELDS
 
 
-async def event_page(journal, scope, after):
+async def event_page(journal, scope, after, publish_artifact=None):
     """Read a finite journal snapshot, never the runtime's continuous follower."""
     iterator = journal.events(EventCursor(scope["server_id"],scope["executor_id"],
                                          scope["session_id"],scope["stream_epoch"],after))
@@ -17,12 +18,16 @@ async def event_page(journal, scope, after):
             value=asdict(event)
             if value["operation_id"] is None: value.pop("operation_id")
             raw=canonical_json(value)
-            if len(raw)>64*1024:
-                raise CoreError("CAPACITY_EXCEEDED","r4_event")
             if any(value[k]!=scope[k] for k in ("server_id","executor_id","session_id","stream_epoch")):
                 raise CoreError("EVENT_SESSION_MISMATCH","r4_event")
             if value["sequence"] != after+len(events)+1:
                 raise CoreError("EVENT_GAP","r4_event")
+            value, artifact = externalize_event(value)
+            if artifact is not None:
+                if publish_artifact is None:
+                    raise CoreError('VERSION_INCOMPATIBLE','event_artifact')
+                await publish_artifact(scope, value, artifact)
+                raw = canonical_json(value)
             if size+len(raw)>768*1024: break
             events.append(value)
             size+=len(raw)
@@ -68,7 +73,8 @@ class R4EventPublisher:
             await asyncio.to_thread(self.store.advance,scope,core_applied=state["remote_acked"])
             state["core_applied"]=state["remote_acked"]
         if self._stopped.is_set(): return False
-        events=await event_page(journal,scope,state["core_applied"])
+        events=await event_page(journal,scope,state["core_applied"],
+                                getattr(self.connection,'publish_event_artifact',None))
         if not events or self._stopped.is_set(): return False
         ack=await self.connection.publish_events(**{k:scope[k] for k in ("binding_id","agent_id","session_id","stream_epoch")},events=events)
         # Validate even a custom transport port; never trust an unrelated ACK.

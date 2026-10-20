@@ -118,6 +118,7 @@ class R4DaemonControl:
         self.phase, self.error_code = 'STOPPED', None
         self.executor_id = ''
         self.inventory_revision = None
+        self.inventory_owner = None
         self.publication_sequence = 0
         self.attempts = 0
         self.consecutive_failures = 0
@@ -192,8 +193,24 @@ class R4DaemonControl:
                 bootstrap = await self.registration.bootstrap(server_id=self.server_id)
                 await self._require(snapshot)
             service = ExecutorOnboarding(self.store, self.vault, http_factory=self.http_factory, clock=self.clock)
+            inventory = self.inventory_owner
+            if inventory is None:
+                raise ConnectorError('INVENTORY_NOT_FRESH', 'executor_onboarding',
+                                     'Wait for the selected harness observation.', retry_safe=True)
+            adapter_id = params['adapter_id']
+            batch = await inventory.require_batch(adapter_id)
+            async def current():
+                await self._require(snapshot)
+                if self.inventory_owner is not inventory:
+                    raise ConnectorError('STALE_GENERATION', 'executor_onboarding',
+                                         'The inventory owner changed.')
+                latest = await inventory.require_batch(adapter_id)
+                if (tuple(c for c in latest.candidates if c.adapter_id == adapter_id) !=
+                        tuple(c for c in batch.candidates if c.adapter_id == adapter_id)):
+                    raise ConnectorError('STALE_GENERATION', 'executor_onboarding',
+                                         'The selected harness observation changed.')
             return await service.realize(**params, bootstrap=bootstrap,
-                                         require_current=lambda: self._require(snapshot))
+                                         inventory_batch=batch, require_current=current)
 
     def status(self):
         connection = self.connection
@@ -266,13 +283,15 @@ class R4DaemonControl:
         self.store.update(reserve)
         return result
 
-    async def _publish(self, http, bootstrap, snapshot, refresh_delivery_id=None):
+    async def _publish(self, http, bootstrap, snapshot, refresh_delivery_id=None, *, batch=None,
+                       current_bootstrap=None):
         await self._require(snapshot)
-        observed_at = self.clock()
-        candidates = tuple(await self.discover() if self.discover is not None else
-                           await configured_candidates(snapshot[0].discovery_configuration,
-                               observations=snapshot[0].installation_observations,
-                               cancel_requested=self._discovery_stopped.is_set))
+        observed_at = batch.assembled_at_monotonic if batch is not None else self.clock()
+        candidates = batch.candidates if batch is not None else tuple(
+            await self.discover() if self.discover is not None else
+            await configured_candidates(snapshot[0].discovery_configuration,
+                observations=snapshot[0].installation_observations,
+                cancel_requested=self._discovery_stopped.is_set))
         await self._require(snapshot)
         if self.connection is not None and not self.connection.online:
             failure = (getattr(getattr(self.execution, 'owner', None), 'failure', None)
@@ -286,9 +305,17 @@ class R4DaemonControl:
         value = await asyncio.to_thread(executor_inventory_snapshot, candidates,
             server_id=self.server_id, executor_id=bootstrap.executor.executor_id,
             producer_instance_id=(self.connection.state.connection_id if self.connection else self.boot_id),
-            publication_sequence=sequence)
+            publication_sequence=sequence, observations=batch.coverage() if batch is not None else None)
         value['observation_age_ms'] = max(0, int((self.clock() - observed_at) * 1000))
         await self._require(snapshot)
+        if current_bootstrap is not None:
+            # Publication may have waited on storage while the independent
+            # control loop renewed this connection's authority in place.
+            renewed = current_bootstrap()
+            if renewed.executor.executor_id != bootstrap.executor.executor_id:
+                raise ConnectorError('STALE_GENERATION', 'r4_inventory',
+                                     'The publication executor changed.')
+            bootstrap = renewed
         if self.clock() >= bootstrap.deadline_monotonic:
             raise ConnectorError('CONTROL_DISCONNECTED', 'r4_inventory',
                                  'The bootstrap ticket expired before inventory publication.')
@@ -299,17 +326,18 @@ class R4DaemonControl:
         self.inventory_revision = accepted.inventory_revision
         return self.clock() + max(0.5, accepted.fresh_for_ms / 1000 * 0.7)
 
-    async def _reconcile(self, request):
+    async def _reconcile(self, request, *, validate_authority=None, publish_receipts=None):
         from ..services.r4_reconciliation import R4ReconciliationReporter
         if self._reporter is None:
-            self._reporter = R4ReconciliationReporter(self.store, self.host, self.server_id, self.executor_id, boot_id=self.boot_id)
+            self._reporter = R4ReconciliationReporter(self.store, self.host, self.server_id, self.executor_id,
+                boot_id=self.boot_id, validate_authority=validate_authority, publish_receipts=publish_receipts)
         report = await self._reporter.report(request)
         self._recovery_error = 'RECONCILIATION_REQUIRED' if self._reporter.blocked else None
         return report
 
-    async def _report_reconciliation(self, request):
+    async def _report_reconciliation(self, request, **recovery):
         try:
-            return await self._reconcile(request)
+            return await self._reconcile(request, **recovery)
         except Exception as error:
             code = getattr(error, 'code', None)
             self._recovery_error = code if type(code) is str and code in _STATUS_ERRORS else 'JOURNAL_UNAVAILABLE'
@@ -376,28 +404,80 @@ class R4DaemonControl:
             self.phase = 'RECOVERING'
             from ..services.r4_event_recovery import recover_event_streams
             recovery_tasks = set()
+            recovery_active = threading.Event()
+            recovery_active.set()
+            recovery_channel = None
+            recovery_bootstrap = bootstrap
+
+            def verify_recovery(request=None):
+                channel = recovery_channel
+                if (not recovery_active.is_set() or self._stopped.is_set()
+                        or self._bootstrap is not recovery_bootstrap
+                        or self.clock() >= recovery_bootstrap.deadline_monotonic
+                        or channel is None or not channel.online or self._snapshot() != snapshot
+                        or request is not None and any(request[k] != getattr(channel.state, k)
+                            for k in ('server_id', 'executor_id', 'connection_id', 'connection_generation'))):
+                    raise ConnectorError('STALE_GENERATION', 'launch_recovery',
+                                         'The recovery channel no longer owns this attempt.')
+
+            async def require_recovery():
+                await asyncio.to_thread(verify_recovery)
+
+            async def publish_recovered():
+                await require_recovery()
+                await recover_publications(self.store, self.vault, http,
+                    server_id=self.server_id, executor_id=self.executor_id,
+                    require_current=require_recovery, clock=self.clock,
+                    journal=await self.host.ensure_history_journal(), authorities=recovered_lanes)
+                await require_recovery()
+
             async def recover_events(channel):
-                task = asyncio.create_task(recover_event_streams(self.store,self.vault,http,self.host,channel,
-                    require_current=lambda: self._require(snapshot),authorities=recovered_lanes,clock=self.clock),
-                    name='r4-event-recovery')
+                nonlocal recovery_channel
+                recovery_channel = channel
+                async def recover_owned_obligations():
+                    await recover_event_streams(self.store,self.vault,http,self.host,channel,
+                        require_current=require_recovery,authorities=recovered_lanes,clock=self.clock)
+                    from ..services.r4_startup_recovery import recover_startup_refusals
+                    await require_recovery()
+                    await recover_startup_refusals(self.store, self.host, channel,
+                        boot_id=self.boot_id, clock=self.clock)
+                    await require_recovery()
+                task = asyncio.create_task(recover_owned_obligations(),
+                    name='r4-control-recovery')
                 recovery_tasks.add(task)
                 try:
                     return await asyncio.shield(task)
                 except Exception as error:
                     code = getattr(error,'code',None)
                     self._recovery_error = code if type(code) is str and code in _STATUS_ERRORS else 'JOURNAL_UNAVAILABLE'
+                    logging.getLogger(__name__).warning(
+                        'Runtime owned recovery deferred: code=%s stage=%s type=%s attribute=%s owner_type=%s',
+                        self._recovery_error, getattr(error, 'stage', 'unknown'), type(error).__name__,
+                        getattr(error, 'name', None) if isinstance(error, AttributeError) else None,
+                        type(getattr(error, 'obj', None)).__name__ if isinstance(error, AttributeError) else None)
                     raise
+
+            async def report_reconciliation(request):
+                # Cancelling negotiation cancels its observer, not the worker
+                # currently fencing a producer or stopping a native container.
+                task = asyncio.create_task(self._report_reconciliation(request,
+                    validate_authority=verify_recovery, publish_receipts=publish_recovered),
+                    name='r4-launch-recovery')
+                recovery_tasks.add(task)
+                return await asyncio.shield(task)
+
             try:
                 self.connection = await asyncio.wait_for(self.connect(
                     _link_url(profile, self.executor_id), bootstrap.ticket,
                     server_id=self.server_id, executor_id=self.executor_id,
                     management_revision=protocol.management_revision,
                     snapshot_format=protocol.executor_snapshot_format, boot_id=self.boot_id,
-                    report_reconciliation=self._report_reconciliation,
+                    report_reconciliation=report_reconciliation,
                     reconciliation_accepted=self._reconciliation_accepted,
                     recover_before_report=recover_events,
                     **({'capacity_handler': self._capacity_control} if self.host.capacity_enabled else {})), min(30, remaining))
             finally:
+                recovery_active.clear()
                 # Keep HTTP, vault and journal owners alive through a canceled
                 # negotiation observer and any already-started ACK write.
                 if recovery_tasks:
@@ -415,13 +495,14 @@ class R4DaemonControl:
                     producer_instance_id=self.connection.state.connection_id)
                 await self._require(snapshot)
                 return delivery
-            delivery = await claim_refresh()
-            refresh_at = await self._publish(http, bootstrap, snapshot, delivery)
-            poll_refresh_at = self.clock() + 5
+            from .r4_inventory import R4InventoryOwner
+            inventory = R4InventoryOwner(self, http, snapshot, lambda: bootstrap, claim_refresh)
+            self.inventory_owner = inventory
             from .r4_execution import R4DaemonExecution
             self.execution = R4DaemonExecution(self, http, recovered_lanes=recovered_lanes)
             onboarding_task = None
             try:
+                inventory.start()
                 await self.execution.sync()
                 self.phase, self.error_code = 'CONTROL_READY', None
                 self.last_connected_at = time.time()
@@ -432,6 +513,8 @@ class R4DaemonControl:
                 onboarding_at = self.clock()
                 while not self._stopped.is_set() and self.connection.online:
                     await self._require(snapshot)
+                    if inventory.failure is not None:
+                        raise inventory.failure
                     if self.clock() >= onboarding_at and (onboarding_task is None or onboarding_task.done()):
                         onboarding_task = asyncio.create_task(self._continue_onboarding())
                         onboarding_at = self.clock() + 5
@@ -448,12 +531,6 @@ class R4DaemonControl:
                             logging.getLogger(__name__).warning('Server requires reconnect for ticket renewal; upgrade Nexus for uninterrupted continuity.')
                             return
                     await self.execution.sync()
-                    delivery = None
-                    if self.clock() >= poll_refresh_at:
-                        delivery = await claim_refresh()
-                        poll_refresh_at = self.clock() + 5
-                    if delivery is not None or self.clock() >= refresh_at:
-                        refresh_at = await self._publish(http, bootstrap, snapshot, delivery)
                     await self._wait(min(self.poll_seconds, max(0.001, min(renew_at, lane_renew_at) - self.clock())))
                 if not self._stopped.is_set():
                     failure = getattr(self.execution.owner, 'failure', None) or getattr(self.connection, 'failure', None)
@@ -476,6 +553,7 @@ class R4DaemonControl:
                     ' > '.join(f'{frame.name}:{frame.lineno}' for frame in traceback.extract_tb(error.__traceback__)))
                 raise
             finally:
+                inventory.begin_shutdown()
                 if onboarding_task is not None and not onboarding_task.done():
                     onboarding_task.cancel()
                     await asyncio.gather(onboarding_task, return_exceptions=True)
@@ -484,10 +562,16 @@ class R4DaemonControl:
                 # connection tickets. A still-live ticket may have been revoked
                 # remotely or may be the reason this link is being renewed.
                 self._retained_lanes.clear()
-                await self.execution.close(
-                    preserve_leases=not self._stopped.is_set() and not self.connection.online,
-                    stop_event=self._stopped)
+                try:
+                    await self.execution.close(
+                        preserve_leases=not self._stopped.is_set() and not self.connection.online,
+                        stop_event=self._stopped)
+                finally:
+                    # HTTP, profile and connection ownership outlive every
+                    # retained discovery/publication before reconnect replaces it.
+                    await inventory.aclose()
                 self.execution = None
+                self.inventory_owner = None
 
     async def _continue_onboarding(self):
         from ..services.background_onboarding import continue_pending_bindings

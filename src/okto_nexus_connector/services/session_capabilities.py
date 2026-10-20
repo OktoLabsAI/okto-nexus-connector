@@ -79,7 +79,8 @@ class ApprovedToolLaunchProvider:
         from nexus_connector_core import get_runtime_connection_contract
         if get_runtime_connection_contract(record.adapter_id)['tool_transport'] == 'none':
             guard()
-            result = await self.host.approved_launch(self.store, frame=frozen, candidates=candidates)
+            result = await self.host.approved_launch(self.store, frame=frozen, candidates=candidates,
+                                                     opening=expected)
             guard()
             return result
         if record.adapter_id == 'pi_rpc':
@@ -96,7 +97,8 @@ class ApprovedToolLaunchProvider:
             audience=audience, actions=actions,
             require_current=guard)
         guard()
-        if await asyncio.to_thread(_resolve, self.store, frozen, candidates) != expected:
+        if await asyncio.to_thread(_resolve, self.store, frozen, candidates,
+                                   opening=expected) != expected:
             raise ConnectorError('PROFILE_DRIFT', 'launch_configuration',
                                  'The approved launch configuration changed.')
         async def metadata(capability):
@@ -116,7 +118,8 @@ class ApprovedToolLaunchProvider:
                                      'The approved launch configuration changed.')
             return result
         result = await self.host.approved_launch(self.store, frame=frozen,
-            candidates=candidates, capability=cap, http=self.http, capability_metadata=metadata)
+            candidates=candidates, capability=cap, http=self.http, capability_metadata=metadata,
+            opening=expected)
         guard()
         return result
 

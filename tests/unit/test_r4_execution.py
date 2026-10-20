@@ -231,7 +231,9 @@ async def test_parallel_openings_do_not_block_ready_session_or_controls(executio
     try:
         for index in range(warm_count):
             await connection.emit({**opening, 'operation_id': f'open-{index}', 'session_id': f'cold-{index}'})
-        await asyncio.wait_for(entered.wait(), 15)
+        # Four independent cold starts can each persist Core journals on a
+        # loaded Windows runner. This guards deadlock, not startup latency.
+        await asyncio.wait_for(entered.wait(), 30)
         await connection.emit(operation(opening, 'turn.submit', {'text': 'Ready while replenishing'}))
         receipt = await observed(receipts, owner)
         assert receipt['operation_id'] == 'turn.submit'

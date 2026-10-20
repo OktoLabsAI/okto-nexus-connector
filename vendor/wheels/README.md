@@ -1,13 +1,12 @@
 # Current development dependency
 
-Core 0.0.11 is required by Nexus 0.3.0 and Connector 0.0.9.
-Shared wheel SHA-256: c475bc793605b6f375c4e88140764e90425f43d83b67dc96c86b2d95cc83f6d1.
-Built from feature/v0.0.11 with the local handoff capacity, recovery and
-Pi tool guidance, native launch lease renewal, streamed output batching and
-portable LF contract manifests. Both consumers use identical wheel bytes.
-The preopen recovery extension has its own versioned contract; base R4
-schema bytes remain unchanged. This is a local validation artifact, not
-a published release or independent-host qualification.
+Core 0.0.12 is required by Nexus 0.3.1 and Connector 0.0.10.
+Shared wheel SHA-256: fe0659ec366029a72475cdf300b0be1705e796d32044bf9c0ab0bc81d3b574b5.
+This wheel is the Core CI artifact from run 39336889894 on
+feature/v0.0.12 at commit 3239533. Linux, Windows and Intel macOS jobs,
+including the native Darwin owner-crash cuts, and the SBOM passed. Both
+consumers use identical wheel bytes. This is a development validation
+artifact, not a published release or independent-host qualification.
 
 ## Historical dependency records
 

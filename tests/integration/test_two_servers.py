@@ -136,11 +136,16 @@ async def two_server_harness(tmp_path: Path):
     harness.wss_a, harness.wss_b = wss_a, wss_b
     await harness.start()
     yield harness
-    await harness.stop()
-    await http_a.stop()
-    await http_b.stop()
+    # This fixture exercises namespace isolation, not an online peer's
+    # shutdown contract. Close the fake WebSocket peers first so their
+    # handlers cannot retain the daemon's control-stop teardown.
     await wss_a.stop()
     await wss_b.stop()
+    try:
+        await harness.stop()
+    finally:
+        await http_a.stop()
+        await http_b.stop()
 
 
 async def test_two_servers_isolated_namespaces(two_server_harness):

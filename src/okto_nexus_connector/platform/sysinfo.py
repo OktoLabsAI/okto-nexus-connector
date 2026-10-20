@@ -12,6 +12,7 @@ exposes PID reuse. Observing identity never authorizes signaling.
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 import os
 import sys
 from dataclasses import dataclass
@@ -103,20 +104,45 @@ def _windows_birth(pid: int) -> str | None:
     class FILETIME(ctypes.Structure):
         _fields_ = [("low", ctypes.c_uint32), ("high", ctypes.c_uint32)]
 
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    open_process = kernel.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+    wait = kernel.WaitForSingleObject
+    wait.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    wait.restype = wintypes.DWORD
+    get_times = kernel.GetProcessTimes
+    get_times.argtypes = [wintypes.HANDLE, *([ctypes.POINTER(FILETIME)] * 4)]
+    get_times.restype = wintypes.BOOL
+    close_handle = kernel.CloseHandle
+    close_handle.argtypes = [wintypes.HANDLE]
+    close_handle.restype = wintypes.BOOL
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    handle = ctypes.windll.kernel32.OpenProcess(  # type: ignore[attr-defined]
-        PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    SYNCHRONIZE = 0x00100000
+    WAIT_OBJECT_0, WAIT_TIMEOUT = 0, 0x102
+    handle = open_process(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+                          False, pid)
     if not handle:
         return None
     try:
-        created, exited, kernel, user = (FILETIME(), FILETIME(),
-                                         FILETIME(), FILETIME())
-        ok = ctypes.windll.kernel32.GetProcessTimes(  # type: ignore[attr-defined]
+        state = wait(handle, 0)
+        if state == WAIT_OBJECT_0:
+            return None
+        if state != WAIT_TIMEOUT:
+            raise ctypes.WinError(ctypes.get_last_error())
+        created, exited, kernel_time, user_time = (FILETIME(), FILETIME(),
+                                                   FILETIME(), FILETIME())
+        ok = get_times(
             handle, ctypes.byref(created), ctypes.byref(exited),
-            ctypes.byref(kernel), ctypes.byref(user))
+            ctypes.byref(kernel_time), ctypes.byref(user_time))
         if not ok:
             return None
+        state = wait(handle, 0)
+        if state == WAIT_OBJECT_0:
+            return None
+        if state != WAIT_TIMEOUT:
+            raise ctypes.WinError(ctypes.get_last_error())
         value = (created.high << 32) | created.low
         return f"filetime:{value}"
     finally:
-        ctypes.windll.kernel32.CloseHandle(handle)  # type: ignore[attr-defined]
+        close_handle(handle)

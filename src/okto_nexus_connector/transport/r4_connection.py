@@ -26,6 +26,9 @@ from .wss_r4 import R4ControlState
 from nexus_connector_core.session_release import (
     SESSION_RELEASE_REVISION, encode_session_release, decode_session_release,
 )
+from nexus_connector_core.startup_refusal_link import (
+    STARTUP_REFUSAL_REVISION, encode_startup_refusal, decode_startup_refusal,
+)
 
 
 _CONTROL = frozenset({'turn.steer', 'turn.interrupt', 'runtime.close',
@@ -82,6 +85,7 @@ class R4Connection:
         self._lane_attempts = {}
         self._pending = {}
         self._release_replies = {}
+        self._startup_replies = {}
         self._event_written = {}
         self._producers = set()
         self._reader = self._heartbeat = self._closer = None
@@ -251,8 +255,9 @@ class R4Connection:
                 frame = decode_control_frame(encoded, capabilities=self.state.control_capabilities)
                 kind = frame['type']
                 release_reply = kind in ('session.release.accepted', 'session.release.deferred')
-                envelope = frame['request'] if kind == 'lease.denied' or release_reply else frame
-                scope = envelope['scope'] if kind in ('lease.granted', 'lease.denied') or release_reply else frame
+                startup_reply = kind in ('startup.refuse.accepted', 'startup.refuse.deferred')
+                envelope = frame['request'] if kind == 'lease.denied' or release_reply or startup_reply else frame
+                scope = envelope['scope'] if kind in ('lease.granted', 'lease.denied') or release_reply else envelope
                 if any(scope.get(k) != self._base()[k] for k in ('server_id', 'executor_id')):
                     raise CoreError('SCOPE_MISMATCH', 'r4_link')
                 if kind != 'lease.granted' and any(envelope.get(k) != self._base()[k]
@@ -264,18 +269,34 @@ class R4Connection:
                     self._admit_capacity(frame, encoded)
                 elif kind == 'operation.submit':
                     self._admit(frame, encoded)
-                elif release_reply:
-                    pending = self._pending.get(('session.release.accepted', envelope['release_id']))
+                elif release_reply or startup_reply:
+                    reply_type = 'startup.refuse.accepted' if startup_reply else 'session.release.accepted'
+                    reply_id = envelope['request_id'] if startup_reply else envelope['release_id']
+                    pending = self._pending.get((reply_type, reply_id))
                     if pending is None:
-                        if self._release_replies.get(envelope['release_id']) != envelope:
-                            raise CoreError('STALE_GENERATION', 'r4_session_release')
+                        retired = self._startup_replies if startup_reply else self._release_replies
+                        if retired.get(reply_id) != envelope:
+                            raise CoreError('STALE_GENERATION', 'r4_control_reply')
                         continue  # Duplicate reply after a retry/lost ACK.
                     future, validate = pending
                     if validate is None:
-                        raise CoreError('SCOPE_MISMATCH', 'r4_session_release')
+                        raise CoreError('SCOPE_MISMATCH', 'r4_control_reply')
                     validate(frame)
                     if not future.done():
                         future.set_result(frame)
+                elif kind in ('event.artifact.ack','event.artifact.rejected'):
+                    pending = self._pending.get(('event.artifact.ack',frame['request_id']))
+                    # A late transfer ACK has no event/operation effect. It
+                    # must not disconnect healthy lanes after a timed-out upload.
+                    if pending is not None and not pending[0].done():
+                        future, validate = pending
+                        if kind == 'event.artifact.rejected':
+                            normalized = {k:v for k,v in frame.items() if k!='code'}
+                            validate(dict(normalized,type='event.artifact.ack'))
+                            future.set_exception(CoreError(frame['code'],'event_artifact',possible_effect=True))
+                        else:
+                            validate(frame)
+                            future.set_result(frame)
                 elif kind in ('lease.granted', 'lease.denied', 'binding.attached', 'connection.renewed'):
                     field = 'attach_request_id' if kind == 'binding.attached' else 'request_id'
                     pending = self._pending.get(('lease.granted' if kind == 'lease.denied' else kind, envelope[field]))
@@ -482,6 +503,46 @@ class R4Connection:
             request_id=request['release_id'], validate=validate, on_retire=retire,
             encode=encode_session_release, retry_timeouts=True, stop_event=stop_event,
             fence_on_error=False)
+
+    async def publish_startup_refusal(self, request, *, stop_event=None):
+        if STARTUP_REFUSAL_REVISION not in self.state.control_capabilities:
+            raise CoreError('VERSION_INCOMPATIBLE', 'startup_refusal')
+        request = decode_startup_refusal(encode_startup_refusal(request))
+        if request['type'] != 'startup.refuse' or any(request[k] != self._base()[k] for k in
+                ('server_id', 'executor_id', 'connection_id', 'connection_generation')):
+            raise CoreError('SCOPE_MISMATCH', 'startup_refusal')
+        def validate(reply):
+            if reply['request'] != request:
+                raise CoreError('SCOPE_MISMATCH', 'startup_refusal')
+        def retire():
+            if len(self._startup_replies) >= 256:
+                self._startup_replies.pop(next(iter(self._startup_replies)))
+            self._startup_replies[request['request_id']] = request
+        return await self._request(request, reply_type='startup.refuse.accepted',
+            request_id=request['request_id'], validate=validate, on_retire=retire,
+            encode=encode_startup_refusal, retry_timeouts=True, stop_event=stop_event,
+            fence_on_error=False)
+
+    async def publish_event_artifact(self, scope, event, raw):
+        from nexus_connector_core.event_artifacts import EVENT_ARTIFACT_REVISION, artifact_chunks, artifact_ack, encode_event_artifact
+        if EVENT_ARTIFACT_REVISION not in self.state.control_capabilities:
+            raise CoreError('VERSION_INCOMPATIBLE','event_artifact')
+        def current():
+            self._require_online()
+            lane = self._lanes.get(scope['binding_id'])
+            if lane is None or lane.agent_id != scope['agent_id'] or time.monotonic() >= lane.deadline_monotonic:
+                raise CoreError('BINDING_NOT_AUTHORIZED','event_artifact')
+        base = dict(self._base(),binding_id=scope['binding_id'],agent_id=scope['agent_id'])
+        for chunk in artifact_chunks(base,event,raw):
+            current()
+            expected = artifact_ack(chunk)
+            def validate(reply):
+                current()
+                if reply != expected:
+                    raise CoreError('EVENT_CONFLICT','event_artifact_ack')
+                return True
+            await self._request(chunk,reply_type='event.artifact.ack',request_id=chunk['request_id'],
+                validate=validate,encode=encode_event_artifact,fence_on_error=False,before_send=current)
 
     async def publish_events(self, *, binding_id, agent_id, session_id, stream_epoch, events):
         self._require_online()

@@ -1,0 +1,40 @@
+{
+  "checkpoint": "M3i independent daemon producer",
+  "source_tests": 91,
+  "installed_tests": 164,
+  "installed_seconds": 68.572,
+  "failures": 0,
+  "errors": 0,
+  "artifacts": [
+    {
+      "module": "nexus_connector_core",
+      "sha256": "13d72e63d1406a8cd6fcb154ce31bb218c0e042cce0bf946cc8e0350f69a3b9a",
+      "files": 158
+    },
+    {
+      "module": "okto_nexus_connector",
+      "sha256": "41331e7b9405e830d990141e48e7702d461559a779b66ee39ec8aedc9e52d7c2",
+      "files": 99
+    }
+  ],
+  "tests": [
+    "unit/test_executor_inventory_r4.py",
+    "unit/test_discovery_configuration.py",
+    "unit/test_inventory_refresh.py",
+    "unit/test_executor_onboarding.py",
+    "unit/test_r4_daemon_execution.py",
+    "unit/test_r4_daemon_control.py",
+    "unit/test_independent_inventory.py",
+    "unit/test_realization_service_r4.py",
+    "unit/test_execution_selection.py",
+    "unit/test_binding_onboarding.py",
+    "unit/test_r4_capacity_wait.py"
+  ],
+  "exit_code": 0,
+  "changed_inputs": [],
+  "inputs_sha256": "1fabbe86d8111ef79238698f71272c59a8de34e9d3e38ae89039f681dbfdc5fe",
+  "source_matches_wheel": true,
+  "global_installation_changed": false,
+  "joint_ui_gate": "pending",
+  "physical_remote_host": "not tested"
+}

@@ -93,7 +93,7 @@ class R4TicketStore:
                 raise ConnectorError("STALE_GENERATION", "r4_tickets",
                                      "The ticket request was superseded.")
 
-    def replace(self, expected, ticket_id, now):
+    def replace(self, expected, ticket_id, now, *, active=False):
         with self._transaction() as conn:
             current = self._decode(conn.execute("SELECT * FROM intents WHERE context_hash=?",
                                    (self._key(expected["context"]),)).fetchone(), expected["context"])
@@ -102,7 +102,7 @@ class R4TicketStore:
                                      "The ticket request was superseded.")
             # Wall time selects a recovery attempt; only the Server decides
             # whether the previous ticket expired or can be replaced.
-            expired = now >= current["created_at"] + current["context"]["expires_in"]
+            expired = not active and now >= current["created_at"] + current["context"]["expires_in"]
             value = self._request(current["context"], now, intent=current["client_intent_id"],
                                   replaces=None if expired else ticket_id)
             self._write(conn, value)

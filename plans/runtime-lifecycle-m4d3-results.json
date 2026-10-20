@@ -1,0 +1,76 @@
+[
+  {
+    "report": "runtime-lifecycle-m4d2-installed",
+    "manifest": {
+      "artifacts": [
+        {
+          "module": "nexus_connector_core",
+          "sha256": "fffcfad6a82a67fb4b9cc4b25b0718a3c3e30bf119dde71ee07dcb062b814898",
+          "files": 158
+        },
+        {
+          "module": "okto_nexus_connector",
+          "sha256": "41331e7b9405e830d990141e48e7702d461559a779b66ee39ec8aedc9e52d7c2",
+          "files": 99
+        }
+      ],
+      "tests": [
+        "unit/test_capacity_composition.py",
+        "unit/test_capacity_authority.py",
+        "unit/test_r4_capacity_wait.py",
+        "contract/test_capacity_control.py",
+        "unit/test_r4_launch_recovery.py",
+        "unit/test_r4_session_containment.py"
+      ],
+      "exit_code": 1,
+      "changed_inputs": [],
+      "isolated_interpreter": true,
+      "inputs_sha256": "317d0fccd0c96146d6b124ac9180b81b929b00597a4c0d3c5edf56e5ba648621"
+    },
+    "junit": {
+      "name": "pytest",
+      "errors": "0",
+      "failures": "2",
+      "skipped": "0",
+      "tests": "70",
+      "time": "274.970",
+      "timestamp": "2026-10-17T07:06:15.925374-03:00",
+      "hostname": "Alienware_m15"
+    }
+  },
+  {
+    "report": "runtime-lifecycle-m4d2-installed-retry",
+    "manifest": {
+      "artifacts": [
+        {
+          "module": "nexus_connector_core",
+          "sha256": "fffcfad6a82a67fb4b9cc4b25b0718a3c3e30bf119dde71ee07dcb062b814898",
+          "files": 158
+        },
+        {
+          "module": "okto_nexus_connector",
+          "sha256": "41331e7b9405e830d990141e48e7702d461559a779b66ee39ec8aedc9e52d7c2",
+          "files": 99
+        }
+      ],
+      "tests": [
+        "unit/test_r4_capacity_wait.py::test_four_waiting_turns_leave_worker_and_renewal_gates_free",
+        "unit/test_r4_launch_recovery.py::test_real_crashed_producer_is_recovered_through_connector_report[intent]"
+      ],
+      "exit_code": 0,
+      "changed_inputs": [],
+      "isolated_interpreter": true,
+      "inputs_sha256": "317d0fccd0c96146d6b124ac9180b81b929b00597a4c0d3c5edf56e5ba648621"
+    },
+    "junit": {
+      "name": "pytest",
+      "errors": "0",
+      "failures": "0",
+      "skipped": "0",
+      "tests": "2",
+      "time": "14.621",
+      "timestamp": "2026-10-17T07:16:10.637426-03:00",
+      "hostname": "Alienware_m15"
+    }
+  }
+]

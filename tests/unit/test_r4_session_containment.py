@@ -16,7 +16,8 @@ from nexus_connector_core.session_release import SESSION_RELEASE_REVISION, sessi
 
 
 @pytest.mark.parametrize('selection', [True], indirect=True)
-async def test_scoped_lease_denial_retries_failed_stop_without_closing_sibling(lifecycle, monkeypatch):
+@pytest.mark.parametrize('refusal', ['scoped', 'expired_scoped', 'revalidation_scoped'])
+async def test_scoped_lease_failure_retries_failed_stop_without_closing_sibling(lifecycle, monkeypatch, refusal):
     factory = lifecycle[4]
     async def independent_peer(prepared, session_id, context, *, stream_epoch):
         factory.native = Native()
@@ -25,7 +26,7 @@ async def test_scoped_lease_denial_retries_failed_stop_without_closing_sibling(l
     monkeypatch.setattr(factory, 'open', independent_peer)
     renewal_gate = asyncio.Event()
     daemon, store, frame, native, published, session, renewing, allow_denial, _ = await setup(
-        lifecycle, monkeypatch, hold=True, refuse='scoped', clock=LeaseClock(), renewal_gate=renewal_gate)
+        lifecycle, monkeypatch, hold=True, refuse=refusal, clock=LeaseClock(), renewal_gate=renewal_gate)
     first_peer = native.native
     original_stop = session.runtime.shutdown
     entered, release = asyncio.Event(), asyncio.Event()
@@ -52,8 +53,14 @@ async def test_scoped_lease_denial_retries_failed_stop_without_closing_sibling(l
         # slower host can correctly block original-work behind the held lease.
         renewal_gate.set()
         await renewal_entered(daemon, renewing)
+        await daemon.connection.emit(operation(frame, 'turn.submit', {'text':'Queued before lease failure'},
+                                               operation_id='queued-work'))
         allow_denial.set()
         await asyncio.wait_for(entered.wait(), 3)
+        queued = await observed(published, daemon.owner)
+        assert queued['operation_id'] == 'queued-work' and queued['stage'] == 'FAILED'
+        assert not queued['possible_effect'] and queued['retry_safe']
+        assert queued['error_code'] == ('LEASE_EXPIRED' if refusal == 'expired_scoped' else 'LEASE_REVALIDATION_REQUIRED')
         assert session.stopped.is_set() and not session.contained
         assert daemon.ready and daemon.owner.failure is None and daemon.connection.online
         ledger = await daemon.host.ensure_ledger()
@@ -105,7 +112,7 @@ async def test_scoped_lease_denial_retries_failed_stop_without_closing_sibling(l
                     assert error.code in ('RECONCILIATION_REQUIRED', 'EVENT_GAP')
                     await asyncio.sleep(.05)
         assert report['scope'] == scope and report['opening_operation_id'] == frame['operation_id']
-        assert report['receipt_count'] == 2  # Only this session's original open and turn.
+        assert report['receipt_count'] == 3  # Opening, original work and durable queued refusal.
         assert await reporter.report(**args) == report
         with pytest.raises(CoreError, match='SCOPE_MISMATCH'):
             await reporter.report(**dict(args, scope=dict(scope, binding_id='foreign')))

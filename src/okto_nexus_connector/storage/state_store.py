@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 15
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -243,6 +243,10 @@ class RuntimeIntentRecord:
 class ConnectorState:
     schema_version: int = SCHEMA_VERSION
     connector_id: str = ""
+    core_store_id: str = ""
+    core_audit_nonce: str = ""
+    core_audit_revision: int = 0
+    core_audit_digest: str = ""
     servers: dict[str, ServerProfileRecord] = field(default_factory=dict)
     identities: list[IdentityRecord] = field(default_factory=list)
     bindings: list[BindingRecord] = field(default_factory=list)
@@ -303,6 +307,17 @@ class StateStore:
         not exist and raised ``AttributeError``).
         """
         with self.locked():
+            previous = _load_unlocked(self.path)
+            if previous.core_store_id and state.core_store_id != previous.core_store_id:
+                raise ConnectorError('PROFILE_DRIFT', 'state_save',
+                                     'A full state snapshot cannot replace the physical Core store binding.')
+            if previous.core_audit_nonce and (
+                state.core_audit_nonce, state.core_audit_revision, state.core_audit_digest
+            ) != (
+                previous.core_audit_nonce, previous.core_audit_revision, previous.core_audit_digest
+            ):
+                raise ConnectorError('PROFILE_DRIFT', 'state_save',
+                                     'A full state snapshot cannot replace the physical audit anchor.')
             _write_unlocked(self.path, state)
 
     @contextmanager
@@ -359,6 +374,10 @@ def state_from_json(payload: dict[str, Any]) -> ConnectorState:
     state = ConnectorState()
     state.schema_version = SCHEMA_VERSION
     state.connector_id = str(payload.get("connector_id", ""))
+    state.core_store_id = str(payload.get("core_store_id", ""))
+    state.core_audit_nonce = payload.get("core_audit_nonce", "")
+    state.core_audit_revision = payload.get("core_audit_revision", 0)
+    state.core_audit_digest = payload.get("core_audit_digest", "")
     for item in payload.get("servers", {}).values():
         record = ServerProfileRecord(**item)
         state.servers[record.server_id] = record
@@ -400,6 +419,10 @@ def state_to_json(state: ConnectorState) -> dict[str, Any]:
     return {
         "schema_version": state.schema_version,
         "connector_id": state.connector_id,
+        "core_store_id": state.core_store_id,
+        "core_audit_nonce": state.core_audit_nonce,
+        "core_audit_revision": state.core_audit_revision,
+        "core_audit_digest": state.core_audit_digest,
         "servers": {key: asdict(value)
                     for key, value in state.servers.items()},
         "identities": [asdict(value) for value in state.identities],
