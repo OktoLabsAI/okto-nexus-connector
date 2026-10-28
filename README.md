@@ -4,7 +4,9 @@ Run Codex, Claude Code or Pi on the Connector computer while Nexus coordinates t
 
 ## Install
 
-Python 3.11 or newer is required. This release is `0.0.2` and requires `okto-nexus-connector-core==0.0.3`.
+Python 3.11 or newer is required. This release is `0.0.11` and requires `okto-nexus-connector-core==0.0.13`.
+
+Install the published release with `python -m pip install okto-nexus-connector==0.0.11`.
 
 From a checkout, using the included Core wheel:
 
@@ -14,7 +16,7 @@ okto-nexus-connector --version
 okto-nexus-connector doctor
 ```
 
-For supplied release wheels, install the exact Core wheel and Connector wheel with pip. Do not assume an unpublished artifact is available on PyPI. After an upgrade, stop and start the daemon so it loads the new code.
+For supplied release wheels, install the exact Core wheel and Connector wheel with pip. After an upgrade, stop and start the daemon so it loads the new code.
 
 Windows, Linux and macOS have platform-specific execution backends. Native execution still requires a successful containment preflight and a qualified harness installation. Discovery alone does not prove runtime readiness.
 
