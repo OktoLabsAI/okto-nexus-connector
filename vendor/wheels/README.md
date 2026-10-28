@@ -1,14 +1,18 @@
-# Current development dependency
+# Current release dependency
 
-Core 0.0.12 is required by Nexus 0.3.1 and Connector 0.0.10.
+Core 0.0.13 is required by Nexus 0.3.2 and Connector 0.0.11.
+The vendored wheel is the published PyPI artifact with SHA-256
+`69fb05f5a708cadc0ab0873c277739f7297bff45765a07e326edc00e6251b66f`.
+
+## Historical dependency records
+
+Core 0.0.12 was required by Nexus 0.3.1 and Connector 0.0.10.
 Shared wheel SHA-256: fe0659ec366029a72475cdf300b0be1705e796d32044bf9c0ab0bc81d3b574b5.
-This wheel is the Core CI artifact from run 39336889894 on
+This wheel was the Core CI artifact from run 39336889894 on
 feature/v0.0.12 at commit 3239533. Linux, Windows and Intel macOS jobs,
 including the native Darwin owner-crash cuts, and the SBOM passed. Both
 consumers use identical wheel bytes. This is a development validation
 artifact, not a published release or independent-host qualification.
-
-## Historical dependency records
 
 # One-shot development dependency
 
