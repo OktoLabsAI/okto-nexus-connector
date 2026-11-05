@@ -21,7 +21,7 @@ def observe(root, current, *, launch_owned=False):
             receipt, task = service.observe()
             control = service.control(receipt)
             native = {'name': receipt['name'], 'state': task.state, 'enabled': task.enabled,
-                'last_result': task.last_result, 'start_at_login': True,
+                'last_result': task.last_result, 'start_at_login': task.enabled,
                 'available_before_login': False, 'available_after_logout': False}
             if current.running and current.ipc_ok and current.supervisor != SUPERVISOR:
                 return replace(current, state='failed', reason='SUPERVISOR_MISMATCH', user_service=native)

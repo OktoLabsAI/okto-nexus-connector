@@ -31,13 +31,16 @@ async def run(root, token, *, supervised=False, service=None):
                 if (not receipt or receipt.get('token') != token
                         or receipt.get('state') != ('installed' if supervised else 'pending')):
                     return 2
-                context = validate_context(root, read_document(root / CONTEXT))
                 if supervised:
                     control = service.control(receipt)
                     logon = windows_logon_session()
                     if control['desired'] == 'draining' and control.get('logon_session') == logon:
                         return 0
-                    service.observe()
+                    _, task = service.observe(check_context=False)
+                    if not task.enabled:
+                        return 0
+                context = validate_context(root, read_document(root / CONTEXT))
+                if supervised:
                     if digest(context) != receipt['context_digest']:
                         return 2
                 elif (root / INSTALLATION).exists():

@@ -186,9 +186,26 @@ def status(root: Path) -> dict[str, object]:
         selected = UserService(root)
         receipt, task = selected.observe()
         return {'installed': receipt is not None, 'plan': _plan_json(service_plan),
+            'enabled': task.enabled if task else None,
             'native_state': task.state if task else None,
             'definition_digest': receipt['native_digest'] if receipt else None}
     return {"installed": installed, "plan": _plan_json(service_plan)}
+
+
+def set_enabled(root: Path, enabled: bool) -> dict[str, object]:
+    from .service_context import launch_exclusion
+    from .user_service import UserService, conflict
+    root = root.resolve()
+    service = UserService(root)
+    service._platform()
+    if not root.exists():
+        raise conflict('USER_SERVICE_NOT_INSTALLED', 'Install the selected user integration first.')
+    with launch_exclusion(root):
+        result = service.set_enabled(enabled)
+    return {**result, 'enablement_confirmed': True, 'instance_id': service.instance_id,
+        'name': service.name, 'process_action': 'none',
+        'next_action': ('Use daemon start for immediate execution.' if enabled else
+                        'Future task starts are disabled. Use daemon stop for canonical drain of a running instance.')}
 
 
 def _launchd_plist(root: Path) -> str:

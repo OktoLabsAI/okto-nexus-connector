@@ -89,6 +89,15 @@ class WindowsTasks:
             self._matching(folder, name, expected).Run(None)
         self._call(operation)
 
+    def set_enabled(self, name, expected, enabled):
+        if type(enabled) is not bool:
+            raise ValueError('Enablement must be boolean')
+        def operation(folder):
+            task = self._matching(folder, name, expected)
+            task.Enabled = enabled
+            return self._observation(task)
+        return self._call(operation)
+
     def delete(self, name, expected):
         def operation(folder):
             task = self._matching(folder, name, expected)

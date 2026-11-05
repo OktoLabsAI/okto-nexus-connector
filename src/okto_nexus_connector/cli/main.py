@@ -295,6 +295,8 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall = service_sub.add_parser("uninstall")
     uninstall.add_argument("--dry-run", action="store_true")
     service_sub.add_parser("status")
+    service_sub.add_parser('enable', help='enable the selected user task without starting it')
+    service_sub.add_parser('disable', help='disable future task starts; use daemon stop to drain active work')
 
     sub.add_parser('reconnect', help='gracefully restart the daemon to reconnect all configured connections')
     status = sub.add_parser('status', help='show live server and agent connection health')
@@ -431,6 +433,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == 'service' and args.subcommand in {'install', 'uninstall'}:
         if not result.get('dry_run') and not result.get('installed' if args.subcommand == 'install' else 'uninstalled'):
             return EXIT_UNAVAILABLE
+    if args.command == 'service' and args.subcommand in {'enable', 'disable'} and not result.get('enablement_confirmed'):
+        return EXIT_UNKNOWN_OUTCOME
     return EXIT_OK
 
 

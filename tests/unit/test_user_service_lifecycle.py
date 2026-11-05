@@ -10,6 +10,7 @@ import time
 from unittest.mock import Mock
 
 import pytest
+from nexus_connector_core.user_service_definition import windows_with_enabled
 
 from okto_nexus_connector.cli.main import main
 from okto_nexus_connector.daemon import manager
@@ -51,6 +52,13 @@ class FakeTasks:
         self.calls.append(('delete', name))
         del self.tasks[name]
 
+    def set_enabled(self, name, expected, enabled):
+        assert self.tasks[name].digest == expected
+        self.calls.append(('enabled', name, enabled))
+        self.tasks[name] = replace(self.tasks[name], enabled=enabled,
+            xml=windows_with_enabled(self.tasks[name].xml, enabled))
+        return self.tasks[name]
+
 
 @pytest.fixture
 def selected(tmp_path, monkeypatch):
@@ -66,6 +74,124 @@ def installed(selected):
     root, tasks, service = selected
     assert service_install.install(root, dry_run=False)['installed']
     return root, tasks, service, service.receipt()
+
+
+def test_enable_disable_preserve_context_control_and_do_not_launch(selected):
+    root, tasks, service, receipt = installed(selected)
+    control = (root / 'service-control.json').read_bytes()
+    context = (root / CONTEXT).read_bytes()
+    assert service_install.set_enabled(root, False)['enablement_confirmed']
+    assert service_install.status(root)['enabled'] is False
+    assert manager.status(root).user_service['start_at_login'] is False
+    assert service_install.set_enabled(root, False)['changed'] is False
+    with pytest.raises(ConnectorError) as refused:
+        service.start()
+    assert refused.value.code == 'SERVICE_DISABLED'
+    assert service_install.set_enabled(root, True)['enabled'] is True
+    assert service_install.set_enabled(root, True)['changed'] is False
+    assert tasks.calls == [('create', receipt['name']), ('enabled', receipt['name'], False), ('enabled', receipt['name'], True)]
+    assert (root / 'service-control.json').read_bytes() == control
+    assert (root / CONTEXT).read_bytes() == context
+    assert service.receipt()['token'] == receipt['token']
+
+
+def test_active_disable_does_not_stop_or_change_generation_control(selected):
+    root, tasks, service, receipt = installed(selected)
+    tasks.tasks[receipt['name']] = replace(tasks.tasks[receipt['name']], state=4)
+    control = (root / 'service-control.json').read_bytes()
+    result = service_install.set_enabled(root, False)
+    assert result['process_action'] == 'none' and result['enabled'] is False
+    assert tasks.read(receipt['name']).state == 4
+    assert (root / 'service-control.json').read_bytes() == control
+
+
+def test_enablement_response_loss_recovers_without_another_native_effect(selected, monkeypatch):
+    root, tasks, service, receipt = installed(selected)
+    setter = tasks.set_enabled
+    def lose(name, expected, enabled):
+        assert service.receipt()['enablement']['target'] is enabled
+        setter(name, expected, enabled)
+        raise OSError('response lost')
+    monkeypatch.setattr(tasks, 'set_enabled', lose)
+    with pytest.raises(OSError):
+        service_install.set_enabled(root, False)
+    assert manager.status(root).reason == 'SERVICE_ENABLEMENT_PENDING'
+    with pytest.raises(ConnectorError) as opposite:
+        service_install.set_enabled(root, True)
+    assert opposite.value.code == 'SERVICE_ENABLEMENT_PENDING'
+    assert service_install.set_enabled(root, False)['enablement_confirmed']
+    assert tasks.calls == [('create', receipt['name']), ('enabled', receipt['name'], False)]
+    assert 'enablement' not in service.receipt()
+
+
+def test_native_failure_before_effect_retries_retained_enablement(selected, monkeypatch):
+    root, tasks, service, receipt = installed(selected)
+    setter = tasks.set_enabled
+    monkeypatch.setattr(tasks, 'set_enabled', Mock(side_effect=OSError('not applied')))
+    with pytest.raises(OSError):
+        service_install.set_enabled(root, False)
+    monkeypatch.setattr(tasks, 'set_enabled', setter)
+    assert service_install.set_enabled(root, False)['enablement_confirmed']
+    assert tasks.calls == [('create', receipt['name']), ('enabled', receipt['name'], False)]
+
+
+def test_edit_after_enablement_response_loss_is_retained(selected, monkeypatch):
+    root, tasks, service, receipt = installed(selected)
+    setter = tasks.set_enabled
+    def edit(name, expected, enabled):
+        setter(name, expected, enabled)
+        tasks.tasks[name] = replace(tasks.tasks[name], xml=tasks.tasks[name].xml.replace('LeastPrivilege', 'HighestAvailable'))
+        raise OSError('response lost')
+    monkeypatch.setattr(tasks, 'set_enabled', edit)
+    with pytest.raises(OSError):
+        service_install.set_enabled(root, False)
+    edited = tasks.read(receipt['name'])
+    with pytest.raises(ConnectorError) as refusal:
+        service_install.set_enabled(root, False)
+    assert refusal.value.code == 'SERVICE_ENABLEMENT_UNCONFIRMED'
+    assert tasks.read(receipt['name']) == edited and len(tasks.calls) == 2
+    with pytest.raises(ConnectorError) as uninstall_refusal:
+        service.uninstall()
+    assert uninstall_refusal.value.code == 'SERVICE_ENABLEMENT_PENDING'
+
+
+def test_external_enablement_edit_without_our_intent_is_not_adopted(selected):
+    root, tasks, service, receipt = installed(selected)
+    task = tasks.read(receipt['name'])
+    tasks.tasks[receipt['name']] = replace(task, xml=windows_with_enabled(task.xml, False), enabled=False)
+    with pytest.raises(ConnectorError) as refusal:
+        service_install.set_enabled(root, False)
+    assert refusal.value.code == 'SERVICE_DEFINITION_CHANGED'
+    assert len(tasks.calls) == 1
+
+
+def test_disabled_queued_entry_does_not_bootstrap(selected, monkeypatch):
+    root, tasks, service, receipt = installed(selected)
+    assert service_install.set_enabled(root, False)['enablement_confirmed']
+    foreground = Mock(side_effect=AssertionError('Disabled entry started'))
+    monkeypatch.setattr(manager, 'run_foreground', foreground)
+    assert asyncio.run(run(root, receipt['token'], supervised=True, service=service)) == 0
+    foreground.assert_not_called()
+    assert not (root / 'run/daemon.lock').exists()
+
+
+def test_cli_disable_works_with_unavailable_context_then_enable_refuses(selected, capsys):
+    root, tasks, service, receipt = installed(selected)
+    context = read_document(root / CONTEXT)
+    context['executable'] = str(root / 'removed-python.exe')
+    write_document(root / CONTEXT, context)
+    assert main(['--state-dir', str(root), 'service', 'disable', '--json']) == 0
+    assert json.loads(capsys.readouterr().out)['enabled'] is False
+    assert main(['--state-dir', str(root), 'service', 'enable', '--json']) != 0
+    assert len(tasks.calls) == 2
+
+
+def test_enable_absent_instance_does_not_create_state(tmp_path, capsys):
+    root = tmp_path / 'absent'
+    assert main(['--state-dir', str(root), 'service', 'enable', '--json']) != 0
+    result = json.loads(capsys.readouterr().out)
+    assert 'USER_SERVICE_NOT_INSTALLED' in json.dumps(result)
+    assert not root.exists()
 
 
 def test_context_freezes_paths_and_backend_without_copying_credentials(tmp_path):

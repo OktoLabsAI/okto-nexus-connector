@@ -40,5 +40,9 @@ async def _run_service(args, output: Output, root: Path):
         return result
     if sub == "status":
         return service_install.status(root)
+    if sub in {'enable', 'disable'}:
+        result = service_install.set_enabled(root, sub == 'enable')
+        output.line('user service enabled' if result['enabled'] else 'user service disabled')
+        return result
     raise ConnectorError("CAPABILITY_UNSUPPORTED", "service",
                          f"unknown subcommand {sub!r}")

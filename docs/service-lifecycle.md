@@ -90,7 +90,23 @@ credential qualification.
 
 Linux systemd/macOS launchd installers remain legacy global templates. They have
 not received the R3 instance ownership/reconciliation contract and are not
-qualified by these Windows results. Enable/disable/reconciliation UX, recovery
+qualified by these Windows results. General definition reconciliation, recovery
 of interrupted pre-spawn receipts, upgrades, broader passive diagnostics and
 real remote/provider/login/logout campaigns remain in progress. Exact evidence
 and remaining scope are in `plans/agent_ops/user-service.md` and the Nexus R3 ledger.
+
+`service enable --json` and `service disable --json` change only the selected
+Windows task's enablement. They do not start, stop or cancel a current daemon;
+use `daemon start` and canonical `daemon stop` for those operations. The queued
+scheduled entry checks enablement before bootstrap. Disabled tasks remain owned
+and cannot silently fall back to a detached daemon. Disabling also works when
+the saved Python environment is unavailable; enabling validates its context.
+
+Each mutation retains an intent before changing the OS. Repeat the same command
+after a lost response to confirm an enablement-only result without another write.
+An opposite request or unrelated native edit cannot clear that pending operation.
+External enablement edits without a matching intent require review. The Core
+comparison retains every field except the specific task Settings/Enabled value;
+it cannot authorize privilege, command, principal or trigger changes. These
+controls use scoped fake-native tests and native validate-only checks; actual
+task registration/mutation campaigns remain separately qualified.

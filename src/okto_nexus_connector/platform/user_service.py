@@ -5,7 +5,8 @@ import os
 from pathlib import Path
 import secrets
 
-from nexus_connector_core.user_service_definition import UserServiceDefinition, windows_logon_task
+from nexus_connector_core.user_service_definition import (
+    UserServiceDefinition, windows_logon_task, windows_definition_digest, windows_enablement_matches)
 
 from ..errors import ConnectorError
 from .service_context import (CONTEXT, CONTROL, INSTALLATION, digest, read_document,
@@ -65,7 +66,7 @@ class UserService:
             raise conflict('LEGACY_SERVICE_REVIEW_REQUIRED',
                 'A legacy global Connector task exists. Review its state directory and migrate it explicitly before selecting another supervisor. It was not modified.')
 
-    def observe(self):
+    def observe(self, *, check_context=True):
         self._platform()
         receipt = self.receipt()
         task = self.tasks.read(self.name)
@@ -78,12 +79,60 @@ class UserService:
             raise conflict('INSTALLATION_PENDING', 'Repeat install/uninstall to reconcile the retained operation. Unconfirmed existing tasks require explicit review.')
         if task is None:
             raise conflict('SERVICE_DEFINITION_MISSING', 'Repeat uninstall to remove the retained receipt, then install explicitly.')
+        if receipt.get('enablement') is not None:
+            raise conflict('SERVICE_ENABLEMENT_PENDING', 'Repeat the same enable/disable operation to confirm its retained intent before another lifecycle change.')
         if task.digest != receipt.get('native_digest'):
             raise conflict('SERVICE_DEFINITION_CHANGED', 'Compare the task with native_xml in its receipt; restore or reconcile user edits before retrying.')
+        if check_context:
+            self._check_context(receipt)
+        return receipt, task
+
+    def _check_context(self, receipt):
         context = validate_context(self.root, read_document(self.root / CONTEXT))
         if digest(context) != receipt.get('context_digest'):
             raise conflict('SERVICE_CONTEXT_CHANGED', 'Restore the recorded context or uninstall before selecting a different environment.')
-        return receipt, task
+
+    def set_enabled(self, enabled):
+        if type(enabled) is not bool:
+            raise ValueError('Enablement must be boolean')
+        self._platform()
+        receipt = self.receipt()
+        if receipt is None:
+            self.observe()
+            raise conflict('USER_SERVICE_NOT_INSTALLED', 'Install this user integration before changing enablement.')
+        if receipt['state'] != 'installed':
+            raise conflict('INSTALLATION_PENDING', 'Complete the pending installation/removal before changing enablement.')
+        task = self.tasks.read(self.name)
+        if task is None:
+            raise conflict('SERVICE_DEFINITION_MISSING', 'Reconcile the missing installed task before changing enablement.')
+        pending = receipt.get('enablement')
+        if pending is not None:
+            if (not isinstance(pending, dict) or type(pending.get('target')) is not bool
+                    or pending.get('from_digest') != receipt.get('native_digest')):
+                raise conflict('INSTALLATION_RECEIPT_INVALID', 'Inspect the retained enablement intent; no task was changed.')
+            if pending['target'] != enabled:
+                raise conflict('SERVICE_ENABLEMENT_PENDING', 'Complete the retained enable/disable operation before requesting the opposite transition.')
+        else:
+            receipt, task = self.observe(check_context=enabled)
+            if task.enabled == enabled:
+                return {'enabled': enabled, 'changed': False, 'definition_digest': task.digest}
+        if enabled:
+            self._check_context(receipt)
+        if windows_definition_digest(receipt.get('native_xml')) != receipt.get('native_digest'):
+            raise conflict('INSTALLATION_RECEIPT_INVALID', 'The retained native export does not match its fingerprint.')
+        if pending is None:
+            receipt = {**receipt, 'enablement': {'target': enabled, 'from_digest': receipt['native_digest']}}
+            write_document(self.root / INSTALLATION, receipt)
+        if task.digest == receipt['native_digest']:
+            self.tasks.set_enabled(self.name, receipt['native_digest'], enabled)
+            task = self.tasks.read(self.name)
+        if (task is None or task.enabled != enabled
+                or not windows_enablement_matches(receipt['native_xml'], task.xml, enabled)):
+            raise conflict('SERVICE_ENABLEMENT_UNCONFIRMED', 'The observed task is not the retained enablement-only result. Review it; no overwrite or fallback was attempted.')
+        confirmed = {**receipt, 'native_digest': task.digest, 'native_xml': task.xml}
+        confirmed.pop('enablement', None)
+        write_document(self.root / INSTALLATION, confirmed)
+        return {'enabled': enabled, 'changed': True, 'definition_digest': task.digest}
 
     def definition(self, context, token):
         executable = Path(context['executable'])
@@ -156,7 +205,9 @@ class UserService:
         control = self.control(receipt)
         if task.active or control.get('launch_requested'):
             return True
-        if not task.enabled or task.state == 0:
+        if not task.enabled:
+            raise conflict('SERVICE_DISABLED', 'Use service enable for this instance before starting it.')
+        if task.state == 0:
             raise conflict('SUPERVISOR_UNCONFIRMED', 'Inspect the selected task state; it was not re-enabled or replaced.')
         write_document(self.root / CONTROL, {'revision': 1, 'token': receipt['token'],
             'desired': 'running', 'launch_requested': True})
@@ -178,6 +229,8 @@ class UserService:
             if task:
                 raise conflict('FOREIGN_SERVICE_DEFINITION', 'The unowned task was preserved.')
             return
+        if receipt.get('enablement') is not None:
+            raise conflict('SERVICE_ENABLEMENT_PENDING', 'Complete the retained enable/disable operation before removing the integration.')
         if task:
             if task.digest != receipt.get('native_digest'):
                 raise conflict('SERVICE_DEFINITION_CHANGED', 'Reconcile the selected task before removing it; the retained native_xml is available for comparison.')
