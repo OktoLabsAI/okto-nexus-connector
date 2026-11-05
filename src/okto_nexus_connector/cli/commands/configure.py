@@ -49,8 +49,25 @@ async def select_identity(args, output, root):
 async def run_configure(args, output, root):
     try:
         return await _run_configure(args,output,root)
-    except (CoreError,ValueError) as exc:
+    except (CoreError,ValueError):
         raise ConnectorError('VALIDATION_ERROR','configure','Invalid connection setting or template. Review the selected values.') from None
+
+
+def restore_server_request(args, saved, portable):
+    """Resume the reviewed destination; explicit new choices are conflicts."""
+    request = saved['request']
+    configuration = request['configuration']
+    fields = ('agent', 'executor_id', 'candidate_ref', 'inventory_revision', 'workspace_id', 'binding_id')
+    selected = {name: request['agent_id' if name == 'agent' else name] for name in fields}
+    selected.update(harness=configuration['adapter_id'], project=configuration['workspace_root'],
+                    workspace_label=configuration['workspace_label'], provider_home=configuration['provider_home'])
+    if (any(getattr(args, name, None) not in (None, '', value) for name, value in selected.items())
+            or args.file and portable != parse_portable_connection_configuration(configuration)):
+        raise ConnectorError('OPERATION_CONFLICT', 'configure',
+            'This request ID already has a reviewed configuration. Resume it unchanged or review a new request.')
+    for name, value in selected.items():
+        setattr(args, name, value)
+    return configuration
 
 
 async def _run_configure(args, output, root):
@@ -67,8 +84,17 @@ async def _run_configure(args, output, root):
     if host=='connector' and args.request_id and store.load().preferences.get(f'configure.{identity.server_id}.{identity.agent_id}.{args.request_id}'):
         from .configure_local import configure_local
         return await configure_local(args,output,root,store,identity,server,portable)
+    if host == 'server' and args.request_id:
+        saved = store.load().preferences.get(f'connection-setup.{identity.server_id}.{identity.agent_id}.{args.request_id}')
+        if saved:
+            configuration = restore_server_request(args, saved, portable)
+            output.line('Resuming request ' + args.request_id + ' for ' + args.agent + ' on the Nexus Server.')
+            result = await apply_configuration(args, output, root, configuration)
+            output.line('Configuration saved.' if result.get('saved') else 'Configuration is not confirmed; inspect the existing test.')
+            return result
     harness=args.harness or choice('Harness',[(r.adapter_id,r.display_name) for r in catalog_runtimes()],portable['adapter_id'])
-    if harness != portable['adapter_id']:portable['harness_settings']={}
+    if harness != portable['adapter_id']:
+        portable['harness_settings']={}
     portable['adapter_id']=harness
     if host=='connector':
         from .configure_local import configure_local
@@ -88,7 +114,8 @@ async def _run_configure(args, output, root):
         while True:
             hosts=await call('GET',f'/v1/agents/{quote(args.agent,safe="")}/executors?'+urlencode({'limit':100,**({'after_executor_id':cursor} if cursor else {})}))
             rows.extend(hosts['items'])
-            if not hosts['has_more']:break
+            if not hosts['has_more']:
+                break
             next_cursor=hosts.get('next_executor_id')
             if not next_cursor or next_cursor==cursor or len(rows)>=1000:
                 raise ConnectorError('OPERATION_CONFLICT','configure','Executor listing changed. Restart configuration.')
@@ -101,10 +128,12 @@ async def _run_configure(args, output, root):
         rows=[row for row in options['options'] if row['adapter_id']==harness and row['candidate_ref']]
         args.candidate_ref=args.candidate_ref or choice('3. Installation',[(r['candidate_ref'],r['label']) for r in rows])
         selected=next((r for r in rows if r['candidate_ref']==args.candidate_ref),None)
-        if not selected:raise ConnectorError('BINARY_NOT_FOUND','configure','The selected installation is not in the current inventory.')
+        if not selected:
+            raise ConnectorError('BINARY_NOT_FOUND','configure','The selected installation is not in the current inventory.')
         args.inventory_revision=options['inventory_revision']
         if selected['technical_state']!='READY_FOR_RUNTIME':
-            if not choice('Run the selected installation version check?',[(True,'Yes'),(False,'Cancel')],True):return {'saved':False,'canceled':True}
+            if not choice('Run the selected installation version check?',[(True,'Yes'),(False,'Cancel')],True):
+                return {'saved':False,'canceled':True}
             await call('POST',f'/v1/runtime/executors/{quote(args.executor_id,safe="")}/installations:check',
                 dict(agent_id=args.agent,adapter_id=harness,candidate_ref=args.candidate_ref,
                      inventory_revision=args.inventory_revision,approved=True))
@@ -118,8 +147,10 @@ async def _run_configure(args, output, root):
     args.provider_home=args.provider_home or text('Login directory on the Server (optional)',selected.get('provider_home_suggestion') or '') or None
     portable['alias']=text('5. Connection name',portable['alias'] or args.agent+'-'+harness,required=True)
     if selected.get('binding') and not args.binding_id:
-        if choice('Existing connection for this workspace',[(True,'Update existing connection'),(False,'Cancel')],True):args.binding_id=selected['binding']['binding_id']
-        else:return {'saved':False,'canceled':True}
+        if choice('Existing connection for this workspace',[(True,'Update existing connection'),(False,'Cancel')],True):
+            args.binding_id=selected['binding']['binding_id']
+        else:
+            return {'saved':False,'canceled':True}
     output.heading('6. Preferences and authorization')
     portable=preferences(portable,selected.get('harness_configuration') or discover_harness_configuration(harness))
     configuration=materialize_connection_configuration(portable,workspace_root=args.project,

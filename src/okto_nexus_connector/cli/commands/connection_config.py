@@ -53,19 +53,53 @@ async def apply_configuration(args, output, root, configuration):
         if not saved:
             current = await call('GET',f'/v1/connections/setup/{quote(args.agent,safe="")}' +
                 (f'?binding_id={quote(args.binding_id,safe="")}' if args.binding_id else ''))
-            saved = {'request':dict(selection,baseline=current['baseline']), 'stage':'test',
+            saved = {'request':dict(selection,baseline=current['baseline']), 'stage':'prepared',
                      'runtime_enabled': configuration['runtime_enabled'] if configuration['runtime_enabled'] is not None else current['runtime_default']}
             store.update(lambda s: s.preferences.update({storage_key:saved}))
         request = saved['request']
         if saved['stage'] == 'done':
             return saved['result']
-        if saved['stage'] == 'test' and saved.get('runtime_enabled', configuration['runtime_enabled']) and configuration['execution_location'] != 'remote':
-            test = await call('POST','/v1/connections/setup:test',request)
+        if saved['stage'] not in ('prepared', 'test', 'test_submitted', 'finish'):
+            raise ConnectorError('OPERATION_CONFLICT', 'connection_config', 'Unknown setup checkpoint.')
+        if saved['stage'] != 'prepared':
+            try:
+                receipt = await call('POST', '/v1/connections/setup:recover', request)
+            except ConnectorError as error:
+                if (error.code, error.stage) != ('NOT_FOUND', 'connection.setup_commit'):
+                    raise ConnectorError(error.code, 'connection_config.recover',
+                        'The existing setup receipt could not be verified. No setup step was repeated.',
+                        possible_effect=True, operation_id=args.request_id,
+                        action='Restore authorized access to a Server with setup recovery support, then resume the same request ID.') from None
+            else:
+                if (receipt.get('setup_run_id') != args.request_id or receipt.get('state') != 'committed'
+                        or not isinstance(receipt.get('result'), dict) or receipt['result'].get('saved') is not True
+                        or receipt['result'].get('agent_id') != args.agent):
+                    raise ConnectorError('VERSION_INCOMPATIBLE', 'connection_config.recover',
+                        'The Server returned an invalid setup receipt.', possible_effect=True,
+                        operation_id=args.request_id)
+                saved.update(stage='done', result=receipt['result'])
+                store.update(lambda s: s.preferences.update({storage_key: saved}))
+                return saved['result']
+        if saved['stage'] != 'finish' and saved.get('runtime_enabled', configuration['runtime_enabled']) and configuration['execution_location'] != 'remote':
+            if saved['stage'] == 'prepared':
+                # Persist before transmitting: even a lost reply may have run a model turn.
+                saved['stage'] = 'test_submitted'
+                store.update(lambda s: s.preferences.update({storage_key: saved}))
+                test = await call('POST', '/v1/connections/setup:test', request)
+            else:
+                try:
+                    test = await call('GET', f'/v1/connections/setup-tests/{quote(args.request_id,safe="")}')
+                except ConnectorError:
+                    raise ConnectorError('SETUP_TEST_UNCONFIRMED', 'connection_config.recover',
+                        'The previous test may have run, but its result is unavailable. It was not repeated.',
+                        possible_effect=True, operation_id=args.request_id,
+                        action='Inspect the previous attempt. A new test requires an explicit new request ID and review.') from None
             deadline = time.monotonic()+300
             last = None
             while test['status'] == 'running' and time.monotonic() < deadline:
                 if test['stage'] != last:
-                    output.line(test['stage']); last=test['stage']
+                    output.line(test['stage'])
+                    last = test['stage']
                 await asyncio.sleep(1)
                 test = await call('GET',f'/v1/connections/setup-tests/{quote(args.request_id,safe="")}')
             if test['status'] != 'succeeded':

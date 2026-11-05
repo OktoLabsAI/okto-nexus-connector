@@ -85,4 +85,21 @@ okto-nexus-connector --non-interactive connection-config apply --file connection
 
 Here all paths and installation identifiers refer to the Nexus server. Obtain EXE, CANDIDATE and REVISION from its inventory. The apply command uses the server test-and-finish workflow. Reuse the exact request ID/content after an uncertain response. A changed configuration needs a new ID.
 
+Server-hosted resume first reads the durable Finish receipt and returns the
+original result if it matches. No new binding, grant or test is created during
+that recovery. If no Finish receipt exists, a previously submitted test is only
+observed. Tests run a model turn; a missing or expired result, including after a
+Server restart, is `SETUP_TEST_UNCONFIRMED` and is never automatically repeated.
+Inspect the prior attempt before explicitly reviewing another test with a new
+request ID. Servers without receipt recovery support leave the saved attempt
+unconfirmed. `saved: true` means configuration committed; it does not mean a live
+session or completed task. These checkpoints contain configuration and secret
+references, never the imported operator key.
+
+For the Server-hosted wizard, resume with
+`configure --host server --identity operator --request-id ORIGINAL_ID`.
+It restores the reviewed agent, installation, folders and preferences before
+asking setup questions or checking an installation again. Explicit arguments
+that conflict with the saved choices are rejected.
+
 For Connector-hosted automation use the explicit executor/realization/binding flow in the [CLI guide](cli.md#advanced-r4-automation). `connection-config apply` does not discover and provision the CLI computer unattended.
