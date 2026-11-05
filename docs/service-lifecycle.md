@@ -90,8 +90,7 @@ credential qualification.
 
 Linux systemd/macOS launchd installers remain legacy global templates. They have
 not received the R3 instance ownership/reconciliation contract and are not
-qualified by these Windows results. General definition reconciliation, recovery
-of interrupted pre-spawn receipts, upgrades, broader passive diagnostics and
+qualified by these Windows results. General definition reconciliation, upgrades and
 real remote/provider/login/logout campaigns remain in progress. Exact evidence
 and remaining scope are in `plans/agent_ops/user-service.md` and the Nexus R3 ledger.
 
@@ -110,3 +109,27 @@ comparison retains every field except the specific task Settings/Enabled value;
 it cannot authorize privilege, command, principal or trigger changes. These
 controls use scoped fake-native tests and native validate-only checks; actual
 task registration/mutation campaigns remain separately qualified.
+
+## Recover an interrupted detached launch
+
+`daemon status --json` reports `launch_recovery.receipt_revision` for a retained
+pending launch. A timeout never revokes it automatically. If its launcher was
+interrupted before bootstrap, explicitly run:
+
+```powershell
+okto-nexus-connector --state-dir C:\absolute\connector-state daemon recover-start --expected-revision REVIEWED_REVISION --json
+```
+
+Recovery holds both the launch guard and daemon lifetime lock, verifies the
+selected instance and exact receipt revision, and marks only that pending launch
+aborted before bootstrap. A delayed child rechecks the receipt before creating
+state, vault or Core runtime and exits. The command neither kills/adopts a PID
+nor starts a replacement; use `daemon start` explicitly afterward. Installed
+tasks, changed receipts, active/uncertain owners and launches past bootstrap are
+preserved and refused. Runtime claims, identities, grants and uncertain effects
+continue through their canonical reconciliation paths.
+
+Repeating the same expected revision confirms a recorded recovery without a
+second write. After a persistence response is lost, status remains authoritative;
+repeat that same revision instead of deleting receipts. Recovery requires no
+provider credentials and does not rewrite the saved execution context.

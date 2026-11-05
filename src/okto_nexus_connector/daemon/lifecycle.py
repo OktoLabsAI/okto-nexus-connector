@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from contextlib import ExitStack
 import os
 from pathlib import Path
 import secrets
@@ -9,7 +10,7 @@ import time
 
 from ..errors import ConnectorError
 from ..ipc.client import IPCClient
-from ..platform.service_context import (CONTEXT, INSTALLATION, LAUNCH, launch_exclusion,
+from ..platform.service_context import (CONTEXT, INSTALLATION, LAUNCH, digest, launch_exclusion,
     launch_guard, read_document, saved_context, validate_context, write_document)
 from ..platform.user_service import SUPERVISOR, UserService
 
@@ -42,7 +43,12 @@ def observe(root, current, *, launch_owned=False):
             return current
         if receipt.get('state') == 'pending':
             return replace(current, state='starting', reason='STARTUP_PENDING', supervisor='detached',
-                next_action='Observe the retained launch. A wait timeout never launches a second process.')
+                launch_recovery={'receipt_revision': digest(receipt), 'state': 'pending', 'action': 'recover-start'},
+                next_action='Observe this launch, or explicitly recover-start with its receipt revision if the launcher was interrupted.')
+        if receipt.get('state') == 'aborted_before_bootstrap':
+            return replace(current, reason='STARTUP_ABORTED', supervisor='detached',
+                launch_recovery={'receipt_revision': receipt.get('recovered_from'), 'state': receipt['state']},
+                next_action='The pending launch was fenced. Start explicitly when ready; runtime work was not changed.')
         if receipt.get('state') == 'failed':
             return replace(current, state='failed', reason='STARTUP_FAILED', supervisor='detached',
                 next_action='Inspect daemon logs, then start explicitly after resolving the failure.')
@@ -50,6 +56,61 @@ def observe(root, current, *, launch_owned=False):
     except (ConnectorError, OSError, ValueError, ImportError) as error:
         return replace(current, state='failed', reason=getattr(error, 'code', 'LIFECYCLE_UNCONFIRMED'),
             next_action=getattr(error, 'action', None) or 'Inspect the retained lifecycle documents and selected supervisor.')
+
+
+def recover_start(root: Path, *, expected_revision: str):
+    """Revoke a reviewed pending launch while its bootstrap is excluded."""
+    from . import manager
+    from .lock import InstanceLock
+    current = manager._process_status(root, timeout=.2)
+    def refused(reason, action):
+        state = 'unknown' if current.state == 'stopped' and reason in {
+            'RECOVERY_OWNER_UNCONFIRMED', 'LAUNCH_REVISION_CONFLICT'} else current.state
+        return {**current.to_json(), 'state': state, 'recovered': False, 'reason': reason, 'next_action': action}
+    if not isinstance(expected_revision, str) or len(expected_revision) != 64 or any(
+            char not in '0123456789abcdef' for char in expected_revision):
+        return refused('INVALID_LAUNCH_REVISION', 'Use the receipt_revision returned by daemon status --json.')
+    path = root / 'run' / LAUNCH
+    if not path.exists():
+        return refused('NO_PENDING_LAUNCH', 'No retained detached launch exists for this instance.')
+    try:
+        with launch_exclusion(root), ExitStack() as owners:
+            if (root / INSTALLATION).exists():
+                return refused('RECOVERY_REQUIRES_DETACHED', 'Use the selected user-service lifecycle; its task was not changed.')
+            if current.state != 'stopped':
+                return refused('RECOVERY_OWNER_UNCONFIRMED', 'Inspect the current owner; recovery never stops a process.')
+            owner = InstanceLock(root / 'run')
+            if not owner.acquire():
+                return refused('RECOVERY_OWNER_UNCONFIRMED', 'A process owns the instance; observe it before recovery.')
+            owners.callback(owner.release)
+            receipt = read_document(path)
+            if (receipt.get('revision') != 1 or receipt.get('instance_id') != current.instance_id
+                    or not isinstance(receipt.get('token'), str) or not receipt['token']):
+                return refused('INVALID_LAUNCH_RECEIPT', 'Inspect the retained launch receipt; it was preserved.')
+            if receipt.get('state') == 'aborted_before_bootstrap':
+                original = {key: value for key, value in receipt.items() if key != 'recovered_from'}
+                original['state'] = 'pending'
+                confirmed = receipt.get('recovered_from') == expected_revision and digest(original) == expected_revision
+                if not confirmed:
+                    return refused('LAUNCH_REVISION_CONFLICT', 'The retained launch changed; inspect status again.')
+                changed = False
+            elif receipt.get('state') != 'pending' or 'recovered_from' in receipt:
+                return refused('RECOVERY_REQUIRES_PENDING', 'This launch already crossed bootstrap or terminated; use canonical lifecycle recovery.')
+            elif digest(receipt) != expected_revision:
+                return refused('LAUNCH_REVISION_CONFLICT', 'The retained launch changed; inspect status again.')
+            else:
+                write_document(path, {**receipt, 'state': 'aborted_before_bootstrap', 'recovered_from': expected_revision})
+                changed = True
+            return {**current.to_json(), 'recovered': True, 'changed': changed, 'reason': 'STARTUP_ABORTED',
+                'launch_recovery': {'receipt_revision': expected_revision, 'state': 'aborted_before_bootstrap'},
+                'next_action': 'Start explicitly when ready. No process was started/stopped and runtime state was not changed.'}
+    except ConnectorError as error:
+        if error.code != 'LIFECYCLE_BUSY':
+            raise
+        return refused('RECOVERY_OWNER_UNCONFIRMED', 'A launch owns the instance; observe it before recovery.')
+    except (OSError, ValueError):
+        return {**refused('RECOVERY_UNCONFIRMED', 'Inspect the retained receipt and repeat with the same revision to confirm.'),
+            'state': 'unknown'}
 
 
 def start(root: Path, *, timeout: float):

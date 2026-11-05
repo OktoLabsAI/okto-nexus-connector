@@ -287,6 +287,8 @@ def build_parser() -> argparse.ArgumentParser:
     daemon_sub.add_parser("status")
     daemon_sub.add_parser("stop").add_argument('--timeout', type=float, default=60)
     daemon_sub.add_parser('restart', help='drain, then start the same configured instance').add_argument('--timeout', type=float, default=45)
+    recovery = daemon_sub.add_parser('recover-start', help='fence a reviewed detached launch that has not entered bootstrap')
+    recovery.add_argument('--expected-revision', required=True, help='receipt_revision reviewed with daemon status --json')
 
     service = sub.add_parser("service", help="OS autostart management")
     service_sub = service.add_subparsers(dest="subcommand", required=True)
@@ -432,6 +434,8 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OK if result.get('state') == 'stopped' and not result.get('was_running') else EXIT_UNKNOWN_OUTCOME
     if args.command == 'daemon' and args.subcommand == 'restart' and result.get('state') != 'ready':
         return EXIT_UNKNOWN_OUTCOME
+    if args.command == 'daemon' and args.subcommand == 'recover-start':
+        return EXIT_OK if result.get('recovered') else EXIT_UNKNOWN_OUTCOME
     if args.command == 'service' and args.subcommand in {'install', 'uninstall'}:
         if not result.get('dry_run') and not result.get('installed' if args.subcommand == 'install' else 'uninstalled'):
             return EXIT_UNAVAILABLE

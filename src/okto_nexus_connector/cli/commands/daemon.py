@@ -21,7 +21,13 @@ async def run_daemon(args, output: Output, root: Path):
     if sub == "status":
         current = manager.status(root)
         output.line(f'daemon: {current.state}' + (f' ({current.reason})' if current.reason else ''))
+        if current.launch_recovery:
+            output.line(f"Launch receipt revision: {current.launch_recovery['receipt_revision']}")
         return current.to_json()
+    if sub == 'recover-start':
+        result = manager.recover_start(root, expected_revision=args.expected_revision)
+        output.line('Pending launch fenced.' if result.get('recovered') else 'Launch recovery not confirmed; inspect the report.')
+        return result
     if sub == "stop":
         result = manager.stop(root, timeout=getattr(args, 'timeout', 60))
         output.line("daemon stopped" if result.get("stopped") else

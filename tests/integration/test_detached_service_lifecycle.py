@@ -14,13 +14,21 @@ def test_concurrent_cli_start_reuse_restart_and_drain_keep_one_owner(tmp_path):
         'LOCALAPPDATA', 'APPDATA', 'PATH', 'LANG', 'LC_ALL', 'HOME'}}
     env['API_KEY_SENTINEL'] = 'must-not-be-copied'
     base = [sys.executable, '-I', '-m', 'okto_nexus_connector.cli.main', '--state-dir', str(root), 'daemon']
-    def invoke(action):
-        result = subprocess.run([*base, action, '--json'], cwd=tmp_path, env=env,
+    def invoke(action, *extra):
+        result = subprocess.run([*base, action, '--json', *extra], cwd=tmp_path, env=env,
             capture_output=True, text=True, timeout=70)
         assert result.returncode == 0, (result.stdout, result.stderr)
         return json.loads(result.stdout)
     assert invoke('status')['state'] == 'stopped'
     assert not root.exists()
+    from okto_nexus_connector.platform.service_context import LAUNCH, digest, write_document
+    from okto_nexus_connector.platform.service_identity import service_instance_id
+    (root / 'run').mkdir(parents=True)
+    interrupted = {'revision': 1, 'instance_id': service_instance_id(root),
+        'token': 'interrupted-token', 'state': 'pending', 'pid': None}
+    write_document(root / 'run' / LAUNCH, interrupted)
+    recovered = invoke('recover-start', '--expected-revision', digest(interrupted))
+    assert recovered['recovered'] and not (root / 'state.json').exists()
     launchers, stopped = [], False
     try:
         for _ in range(3):
@@ -38,6 +46,11 @@ def test_concurrent_cli_start_reuse_restart_and_drain_keep_one_owner(tmp_path):
         initial = results[0]
         assert invoke('status')['generation'] == initial['generation']
         assert invoke('start')['generation'] == initial['generation']
+        late = subprocess.run([sys.executable, '-I', '-m', 'okto_nexus_connector.daemon.service_process',
+            '--state-dir', str(root), '--token', interrupted['token']], cwd=tmp_path, env=env,
+            capture_output=True, text=True, timeout=20)
+        assert late.returncode == 2, (late.stdout, late.stderr)
+        assert invoke('status')['generation'] == initial['generation']
         assert 'must-not-be-copied' not in (root / 'service-context.json').read_text(encoding='utf-8')
         restarted = invoke('restart')
         assert restarted['generation'] != initial['generation']

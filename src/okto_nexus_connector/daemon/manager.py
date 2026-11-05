@@ -43,6 +43,7 @@ class DaemonStatus:
     supervisor: str = 'foreground'
     user_service: dict | None = None
     next_action: str | None = None
+    launch_recovery: dict | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -68,6 +69,7 @@ class DaemonStatus:
             "supervisor": self.supervisor,
             "user_service": self.user_service,
             "next_action": self.next_action,
+            "launch_recovery": self.launch_recovery,
         }
 
 
@@ -144,6 +146,11 @@ def connect(root: Path, *, timeout: float = 5.0) -> IPCClient:
     client = IPCClient(readiness.transport, readiness.address, token)
     client.connect()
     return client
+
+
+def recover_start(root: Path, *, expected_revision: str) -> dict[str, object]:
+    from .lifecycle import recover_start as recover
+    return recover(root.resolve(), expected_revision=expected_revision)
 
 
 def start(root: Path, *, timeout: float = START_TIMEOUT) -> dict[str, object]:
