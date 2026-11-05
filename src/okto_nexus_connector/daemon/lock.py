@@ -10,6 +10,7 @@ A stale PID file alone is never authority (plan 4.1).
 from __future__ import annotations
 
 import json
+import errno
 import os
 import secrets
 import stat
@@ -31,6 +32,9 @@ class Readiness:
     address: str  # socket path or "127.0.0.1:port"
     started_at: str
     connector_version: str
+    instance_id: str = ''
+    generation: str = ''
+    protocol_revision: int = 1
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -40,6 +44,9 @@ class Readiness:
             "address": self.address,
             "started_at": self.started_at,
             "connector_version": self.connector_version,
+            "instance_id": self.instance_id,
+            "generation": self.generation,
+            "protocol_revision": self.protocol_revision,
         }
 
 
@@ -47,6 +54,7 @@ class InstanceLock:
     """Exclusive daemon lock for one state directory."""
 
     def __init__(self, run_dir: Path):
+        run_dir = Path(run_dir).resolve()
         self.run_dir = run_dir
         self.lock_path = run_dir / "daemon.lock"
         self.readiness_path = run_dir / "daemon.json"
@@ -55,25 +63,30 @@ class InstanceLock:
 
     # -- lock ------------------------------------------------------------
 
-    def acquire(self) -> bool:
+    def acquire(self, *, create: bool = True) -> bool:
         """Try to become the lock owner; False when another owner exists."""
-        self.run_dir.mkdir(parents=True, exist_ok=True)
-        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_BINARY", 0)
+        if self.held:
+            raise RuntimeError('This lock is already held')
+        if create:
+            self.run_dir.mkdir(parents=True, exist_ok=True)
+        flags = (os.O_CREAT if create else 0) | os.O_RDWR | getattr(os, "O_BINARY", 0) | getattr(os, 'O_NOFOLLOW', 0)
         fd = os.open(self.lock_path, flags, 0o600)
         try:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise OSError('Daemon lock must be a regular non-hardlinked file')
             if os.name == "nt":
                 import msvcrt
                 os.lseek(fd, 0, os.SEEK_SET)
-                try:
-                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-                except OSError:
-                    return False
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
             else:
                 import fcntl
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except OSError:
-                    return False
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            os.close(fd)
+            if error.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                return False
+            raise
         except BaseException:
             os.close(fd)
             raise
@@ -100,6 +113,22 @@ class InstanceLock:
     @property
     def held(self) -> bool:
         return self._fd is not None
+
+    def locked(self) -> bool | None:
+        """Read-only ownership probe. Inaccessible is unknown, never free."""
+        if self.held:
+            return True
+        probe = InstanceLock(self.run_dir)
+        try:
+            if not probe.acquire(create=False):
+                return True
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return None
+        else:
+            probe.release()
+            return False
 
     def owner_identity(self) -> ProcessIdentity | None:
         """Identity of the process holding the lock, if observable."""
@@ -134,6 +163,9 @@ class InstanceLock:
                 address=str(payload["address"]),
                 started_at=str(payload.get("started_at", "")),
                 connector_version=str(payload.get("connector_version", "")),
+                instance_id=str(payload.get('instance_id', '')),
+                generation=str(payload.get('generation', '')),
+                protocol_revision=int(payload.get('protocol_revision', 0)),
             )
         except (ValueError, KeyError, TypeError, UnicodeError):
             return None
@@ -147,7 +179,7 @@ class InstanceLock:
     def live_owner(self) -> Readiness | None:
         """Readiness proven to belong to a live process with same birth."""
         readiness = self.read_readiness()
-        if readiness is None:
+        if readiness is None or self.locked() is not True:
             return None
         identity = ProcessIdentity(readiness.pid, readiness.birth_token)
         return readiness if same_process(identity) else None

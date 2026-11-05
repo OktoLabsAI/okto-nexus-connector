@@ -92,6 +92,30 @@ print(connector.__version__)
     assert version.returncode == 0
     assert "okto-nexus-connector" in version.stdout
 
+    # Qualify the actual installed lifecycle from outside the checkout, with
+    # no identities, Server, provider credentials or personal service manager.
+    lifecycle_env = {key: value for key, value in isolated_env.items() if key.upper() in {
+        'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'USERPROFILE',
+        'LOCALAPPDATA', 'APPDATA', 'PATH', 'LANG', 'LC_ALL', 'HOME'}}
+    state_root = tmp_path / 'installed lifecycle'
+    def lifecycle(action):
+        result = subprocess.run([str(cli), '--state-dir', str(state_root), 'daemon', action, '--json'],
+            cwd=tmp_path, env=lifecycle_env, capture_output=True, text=True, timeout=75)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        return json.loads(result.stdout)
+    assert lifecycle('status')['state'] == 'stopped'
+    assert not state_root.exists()
+    try:
+        started = lifecycle('start')
+        assert started['state'] == 'ready' and started['remote_link'] == 'not_checked'
+        assert lifecycle('status')['generation'] == started['generation']
+        assert lifecycle('start')['generation'] == started['generation']
+    finally:
+        stopped = lifecycle('stop')
+    assert stopped['shutdown_outcome'] == 'drained'
+    assert lifecycle('status')['state'] == 'stopped'
+    assert (state_root / 'state.json').is_file()
+
     # Core owns the MCP client; Connector must not pull in Nexus Server.
     freeze = subprocess.run([str(python), "-I", "-m", "pip", "freeze"],
                             cwd=tmp_path, env=isolated_env,

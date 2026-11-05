@@ -31,6 +31,7 @@ def test_release_is_idempotent(tmp_path: Path):
 
 def test_readiness_identity_roundtrip(tmp_path: Path):
     lock = InstanceLock(tmp_path)
+    assert lock.acquire()
     identity = current_process_identity()
     lock.write_readiness(Readiness(
         pid=identity.pid, birth_token=identity.birth_token,
@@ -38,6 +39,34 @@ def test_readiness_identity_roundtrip(tmp_path: Path):
         connector_version="test"))
     live = lock.live_owner()
     assert live is not None and live.pid == identity.pid
+    lock.release()
+    assert lock.live_owner() is None
+
+
+def test_failed_lock_attempt_closes_descriptor(tmp_path, monkeypatch):
+    import os
+    lock = InstanceLock(tmp_path)
+    assert lock.acquire()
+    closed = []
+    real_close = os.close
+    def close(fd):
+        closed.append(fd)
+        return real_close(fd)
+    monkeypatch.setattr(os, 'close', close)
+    try:
+        for _ in range(20):
+            assert not InstanceLock(tmp_path).acquire()
+        assert len(closed) == 20
+    finally:
+        lock.release()
+
+
+def test_inspection_does_not_create_absent_state(tmp_path):
+    root = tmp_path / 'missing'
+    lock = InstanceLock(root)
+    assert lock.locked() is False
+    assert lock.live_owner() is None
+    assert not root.exists()
 
 
 def test_stale_pid_not_live_owner(tmp_path: Path):

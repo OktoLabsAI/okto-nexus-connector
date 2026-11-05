@@ -50,3 +50,24 @@ def test_error_envelope_shape():
     assert payload["error"]["code"] == "AGENT_AUTH_REQUIRED"
     ok = response_ok(3, {"x": 1})
     assert ok["done"] is True
+
+
+def test_ipc_call_timeout_is_observation_only_and_bounded():
+    import socket
+    import time
+    from okto_nexus_connector.ipc.client import IPCClient
+    local, peer = socket.socketpair()
+    client = IPCClient('loopback', '127.0.0.1:1', 'synthetic-local-test-token')
+    client._socket = local
+    local.settimeout(.02)
+    started = time.monotonic()
+    try:
+        with pytest.raises(ConnectorError):
+            client.call('ping', timeout=.05)
+        assert time.monotonic() - started < 1
+        # Timeout did not close the transport or emit a shutdown request.
+        assert peer.recv(4096).count(b'"op":"ping"') == 1
+        assert client._socket is local
+    finally:
+        client.close()
+        peer.close()

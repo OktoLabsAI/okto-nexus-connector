@@ -10,6 +10,8 @@ after the Server's durable-ingress ``event.ack`` (A.10).
 
 from __future__ import annotations
 
+import json
+
 import asyncio
 import logging
 import time
@@ -342,10 +344,15 @@ class DaemonApp:
             await self.ipc.start(paths.pid_dir(self.root), token,
                                  transport=self._ipc_transport)
             identity = _current_identity()
+            from ..platform.service_identity import service_instance_id
+            import secrets
+            self.service_identity = service_instance_id(self.root)
+            self.service_generation = secrets.token_hex(16)
             self.lock.write_readiness(Readiness(
                 pid=identity.pid, birth_token=identity.birth_token,
                 transport=self.ipc.transport, address=self.ipc.address,
-                started_at=_now(), connector_version=__version__))
+                started_at=_now(), connector_version=__version__,
+                instance_id=self.service_identity, generation=self.service_generation))
             self._start_transports()
             self._audit_task = asyncio.create_task(
                 self._stage_audit_anchor(), name='connector-audit-anchor')
@@ -431,6 +438,11 @@ class DaemonApp:
                 pending += 1
         logger.info("daemon stopped: %s (pending=%d)", dict(outcomes),
                     pending)
+        from .lock import _atomic_write
+        _atomic_write(self.root / 'run' / 'shutdown.json', json.dumps({
+            'revision': 1, 'generation': self.service_generation,
+            'state': 'DRAINED' if not pending else 'RECOVERY_REQUIRED',
+            'outcomes': dict(outcomes), 'pending': pending}).encode('utf-8'))
         # CN1/CN-05.04: a nonzero exit reports unresolved ownership —
         # the Core's guardian/containment retains the resources and the
         # next lifecycle call converges them; we never claim success.
@@ -843,6 +855,11 @@ class DaemonApp:
             yield response_ok(request.seq, {
                 "pong": True, "version": __version__,
                 "pid": _current_identity().pid,
+                "instance_id": getattr(self, 'service_identity', None),
+                "generation": getattr(self, 'service_generation', None),
+                "protocol_revision": 1,
+                "remote_link": "not_checked",
+                "work_admission": "closed" if self._draining else "canonical_scope_checks_required",
                 "uptime_seconds": round(time.time() - self.started_at, 1),
                 "draining": self._draining})
         elif op == "status":
@@ -943,6 +960,13 @@ class DaemonApp:
             await self.reload_state()
             yield response_ok(request.seq, {"reloaded": True})
         elif op == "shutdown":
+            # Legacy empty requests remain supported on the authenticated local
+            # IPC channel; lifecycle clients add a generation fence.
+            if params and (params.get('instance_id') != getattr(self, 'service_identity', None)
+                           or params.get('generation') != getattr(self, 'service_generation', None)):
+                yield response_error(request.seq, ConnectorError('CONFLICT', 'shutdown',
+                    'The instance generation changed; inspect it before stopping.'))
+                return
             self.request_stop()
             yield response_ok(request.seq, {"stopping": True})
         else:

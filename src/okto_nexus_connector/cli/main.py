@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .. import __version__
 from ..errors import ConnectorError
-from .output import EXIT_OK, EXIT_USAGE, Output
+from .output import EXIT_OK, EXIT_USAGE, EXIT_UNAVAILABLE, EXIT_UNKNOWN_OUTCOME, Output
 from .presentation import styled
 
 
@@ -422,6 +422,10 @@ def main(argv: list[str] | None = None) -> int:
         output.line('\nDetails: doctor --verbose | JSON: doctor --json')
     else:
         output.result(result)
+    if args.command == 'daemon' and args.subcommand == 'status':
+        return EXIT_OK if result.get('state') in {'ready', 'stopped'} else EXIT_UNAVAILABLE
+    if args.command == 'daemon' and args.subcommand == 'stop' and not result.get('stopped'):
+        return EXIT_OK if result.get('state') == 'stopped' and not result.get('was_running') else EXIT_UNKNOWN_OUTCOME
     return EXIT_OK
 
 

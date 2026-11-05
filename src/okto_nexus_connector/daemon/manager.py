@@ -18,9 +18,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from .. import __version__
 from ..errors import ConnectorError
-from ..ipc.client import IPCClient, ping
-from ..platform import paths
+from ..ipc.client import IPCClient
+from ..platform.service_identity import service_instance_id
 from .lock import InstanceLock, wait_for_readiness
 
 START_TIMEOUT = 45.0
@@ -37,6 +38,10 @@ class DaemonStatus:
     uptime: float | None
     ipc_ok: bool
     draining: bool = False
+    state: str = 'unknown'
+    reason: str | None = None
+    instance_id: str = ''
+    generation: str = ''
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -49,34 +54,60 @@ class DaemonStatus:
             "uptime_seconds": self.uptime,
             "ipc_ok": self.ipc_ok,
             "draining": self.draining,
+            "state": self.state,
+            "reason": self.reason,
+            "component": "connector",
+            "instance_id": self.instance_id,
+            "generation": self.generation,
+            "installed_version": __version__,
+            "active_version": self.version or None,
+            "ready_for_queries": self.ipc_ok,
+            "remote_link": "not_checked",
+            "work_state": "not_checked",
         }
 
 
 def _lock(root: Path) -> InstanceLock:
-    return InstanceLock(paths.pid_dir(root))
+    return InstanceLock(root.resolve() / 'run')
 
 
-def status(root: Path, *, probe: bool = True) -> DaemonStatus:
+def status(root: Path, *, probe: bool = True, timeout: float = 2.0) -> DaemonStatus:
     lock = _lock(root)
+    instance_id = service_instance_id(root)
+    locked = lock.locked()
     readiness = lock.live_owner()
     if readiness is None:
-        return DaemonStatus(False, None, "", "", "", "", None, False)
+        return DaemonStatus(False, None, "", "", "", "", None, False,
+            state='stopped' if locked is False else 'starting' if locked is True else 'unknown',
+            reason='NO_SERVICE_OWNER' if locked is False else 'INSTANCE_OWNERSHIP_UNCONFIRMED',
+            instance_id=instance_id)
     ipc_ok = False
     draining = False
-    if probe:
+    reason = None
+    if (readiness.instance_id != instance_id or not readiness.generation):
+        reason = 'INSTANCE_MISMATCH'
+    elif readiness.connector_version != __version__ or readiness.protocol_revision != 1:
+        reason = 'VERSION_INCOMPATIBLE'
+    elif probe:
         try:
             token = lock.load_token()
             with IPCClient(readiness.transport, readiness.address,
-                           token) as client:
-                response = client.call("ping")
-                ipc_ok = bool(response.get("ok"))
+                           token, connect_timeout=timeout) as client:
+                response = client.call("ping", timeout=timeout)
                 result = response.get("result", {})
                 if isinstance(result, dict):
-                    draining = bool(result.get("draining", False))
+                    ipc_ok = (response.get('ok') is True and result.get('pong') is True
+                        and result.get('pid') == readiness.pid
+                        and result.get('instance_id') == instance_id
+                        and result.get('generation') == readiness.generation
+                        and result.get('version') == __version__ and result.get('protocol_revision') == 1)
+                    draining = result.get("draining") is True
+                if not ipc_ok:
+                    reason = 'IPC_IDENTITY_MISMATCH'
         except (ConnectorError, OSError):
-            ipc_ok = False
+            reason = 'IPC_UNREACHABLE'
     return DaemonStatus(
-        running=ipc_ok or not probe,
+        running=True,
         pid=readiness.pid,
         transport=readiness.transport,
         address=readiness.address,
@@ -84,7 +115,10 @@ def status(root: Path, *, probe: bool = True) -> DaemonStatus:
         started_at=readiness.started_at,
         uptime=None,
         ipc_ok=ipc_ok,
-        draining=draining)
+        draining=draining,
+        state='stopping' if draining else 'ready' if ipc_ok else 'degraded',
+        reason=reason,
+        instance_id=instance_id, generation=readiness.generation)
 
 
 def connect(root: Path, *, timeout: float = 5.0) -> IPCClient:
@@ -105,7 +139,16 @@ def start(root: Path, *, timeout: float = START_TIMEOUT) -> dict[str, object]:
     """Ensure the daemon is running; spawn detached when needed."""
     lock = _lock(root)
     current = status(root)
-    if current.running:
+    if current.state != 'stopped':
+        deadline = time.monotonic() + timeout
+        while current.state in {'starting', 'degraded'} and current.reason in {
+                'INSTANCE_OWNERSHIP_UNCONFIRMED', 'IPC_UNREACHABLE'} and time.monotonic() < deadline:
+            time.sleep(.1)
+            current = status(root, timeout=min(2, max(.01, deadline - time.monotonic())))
+        if current.state != 'ready':
+            raise ConnectorError('DAEMON_UNAVAILABLE', 'start',
+                f'The existing instance is {current.state}: {current.reason}.',
+                action='Inspect daemon status. No competing daemon was started or stopped.')
         return {"started": False, "already_running": True,
                 "pid": current.pid, **{k: v for k, v in
                                        current.to_json().items()
@@ -145,8 +188,8 @@ def start(root: Path, *, timeout: float = START_TIMEOUT) -> dict[str, object]:
                    "supervisor, or start from a terminal that permits an "
                    "independent daemon.") from exc
     readiness = wait_for_readiness(lock, timeout=timeout)
-    token = lock.load_token()
-    if not ping(readiness, token):
+    observed = status(root)
+    if observed.state != 'ready':
         raise ConnectorError("DAEMON_UNAVAILABLE", "start",
                              f"daemon pid {readiness.pid} did not answer IPC",
                              action="Inspect 'daemon run' output in the "
@@ -154,7 +197,7 @@ def start(root: Path, *, timeout: float = START_TIMEOUT) -> dict[str, object]:
     return {"started": True, "pid": readiness.pid,
             "spawned_pid": process.pid,
             "transport": readiness.transport,
-            "address": readiness.address}
+            "address": readiness.address, **observed.to_json()}
 
 
 def stop(root: Path, *, timeout: float = 60.0) -> dict[str, object]:
@@ -163,20 +206,33 @@ def stop(root: Path, *, timeout: float = 60.0) -> dict[str, object]:
     readiness = lock.live_owner()
     if readiness is None:
         return {"stopped": False, "was_running": False,
-                "note": "no live daemon found"}
+                "state": 'stopped' if lock.locked() is False else 'unknown',
+                "note": "No confirmed live owner; runtime work has not been inspected."}
+    observed = status(root)
+    if observed.state not in {'ready', 'stopping'}:
+        return {'stopped': False, 'was_running': True, **observed.to_json(),
+                'note': 'IPC identity/readiness is unconfirmed; shutdown was not requested.'}
     token = lock.load_token()
     shutdown_report: dict[str, object] = {}
     try:
         with IPCClient(readiness.transport, readiness.address,
                        token, ) as client:
-            client.call("shutdown")
+            client.call("shutdown", {'instance_id': observed.instance_id,
+                                      'generation': observed.generation}, timeout=min(5, timeout))
     except (ConnectorError, OSError):
         pass
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if lock.live_owner() is None:
-            return {"stopped": True, "was_running": True,
-                    "report": shutdown_report}
+        if lock.locked() is False:
+            import json
+            try:
+                receipt = json.loads((root / 'run' / 'shutdown.json').read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                receipt = {}
+            drained = receipt.get('generation') == readiness.generation and receipt.get('state') == 'DRAINED'
+            return {"stopped": drained, "was_running": True,
+                    'state': 'stopped', 'shutdown_outcome': 'drained' if drained else 'unconfirmed',
+                    "report": receipt if receipt.get('generation') == readiness.generation else {}}
         time.sleep(0.2)
     return {"stopped": False, "was_running": True,
             "note": "daemon did not exit in time; it may still be draining",

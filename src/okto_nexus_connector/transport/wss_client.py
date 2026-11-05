@@ -563,20 +563,29 @@ class NXLTransport:
 
     async def stop(self) -> None:
         self._stop.set()
+        attachments = {lane.attach_task for lane in self._lanes.values()
+                       if lane.attach_task is not None}
         for lane in self._lanes.values():
             lane.reattach_requested = False
             if lane.retry_timer is not None:
                 lane.retry_timer.cancel()
                 lane.retry_timer = None
-            if lane.attach_task is not None:
-                lane.attach_task.cancel()
         if self._task is not None:
-            self._task.cancel()
+            if not self._task.cancelling():
+                self._task.cancel()
             try:
                 await self._task
             except (asyncio.CancelledError, Exception):
                 pass
             self._task = None
+        # The session joins its in-flight producers. An attach outside a
+        # session is still ours to join. A second cancel during HTTP __aexit__
+        # can interrupt socket cleanup and strand the peer's keep-alive stream.
+        for task in attachments:
+            if not task.done() and not task.cancelling():
+                task.cancel()
+        if attachments:
+            await asyncio.gather(*attachments, return_exceptions=True)
         if self._websocket is not None:
             await self._websocket.close()
             self._websocket = None
@@ -761,7 +770,8 @@ class NXLTransport:
                 except (asyncio.CancelledError, Exception):
                     pass
             for task in list(self._inflight):
-                task.cancel()
+                if not task.cancelling():
+                    task.cancel()
             for task in list(self._inflight):
                 try:
                     await task

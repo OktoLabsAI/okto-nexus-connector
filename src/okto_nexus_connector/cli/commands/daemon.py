@@ -21,11 +21,7 @@ async def run_daemon(args, output: Output, root: Path):
         return await manager.run_foreground(root)
     if sub == "status":
         current = manager.status(root)
-        if not current.running:
-            output.line("daemon: not running")
-        else:
-            output.line(f"daemon: running (pid {current.pid}, "
-                        f"{current.transport})")
+        output.line(f'daemon: {current.state}' + (f' ({current.reason})' if current.reason else ''))
         return current.to_json()
     if sub == "stop":
         result = manager.stop(root)
