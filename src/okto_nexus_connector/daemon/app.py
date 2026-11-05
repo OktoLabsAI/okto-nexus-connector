@@ -29,7 +29,7 @@ from ..identity.vault import open_vault
 from ..ipc.protocol import response_error, response_ok, response_stream
 from ..ipc.server import IPCServer
 from ..platform import paths
-from ..redaction import redact_mapping, redact_text
+from ..redaction import redact_text
 from ..services.approval_state import PendingApproval
 from ..services.core_host import CoreRuntimeHost
 from ..services.runtime_service import RuntimeManager, receipt_nxl_frame
@@ -277,8 +277,13 @@ class EventBridge:
 
 
 class DaemonApp:
-    def __init__(self, root: Path, *, ipc_transport: str = 'auto'):
+    def __init__(self, root: Path, *, ipc_transport: str = 'auto', acquired_lock=None, supervisor='foreground'):
+        root = root.resolve()
+        if acquired_lock is not None and (not acquired_lock.held or acquired_lock.run_dir != root / 'run'):
+            raise ValueError('The supplied owner does not match this Connector state')
         self.root = root
+        self.service_supervisor = supervisor
+        self._external_lock = acquired_lock is not None
         self._ipc_transport = ipc_transport
         self.store = StateStore(paths.state_file(root))
         state = self.store.load()
@@ -302,7 +307,7 @@ class DaemonApp:
         self.r4_controls = {}
         self.r4_executions = {}
         self.ipc = IPCServer(self.dispatch)
-        self.lock = InstanceLock(paths.pid_dir(root))
+        self.lock = acquired_lock or InstanceLock(paths.pid_dir(root))
         self.started_at = time.time()
         self._stopped = asyncio.Event()
         self._audit_stop = asyncio.Event()
@@ -325,7 +330,7 @@ class DaemonApp:
             return await self._run_forever()
 
     async def _run_forever(self) -> int:
-        if not self.lock.acquire():
+        if not self._external_lock and not self.lock.acquire():
             live = self.lock.live_owner()
             if live is not None:
                 raise ConnectorError(
@@ -362,7 +367,8 @@ class DaemonApp:
             if self._audit_task is not None:
                 await self._audit_task
             self.lock.clear_readiness()
-            self.lock.release()
+            if not self._external_lock:
+                self.lock.release()
 
     async def _stage_audit_anchor(self) -> None:
         """Retained background evidence; it never gates connector readiness."""
@@ -856,6 +862,7 @@ class DaemonApp:
                 "instance_id": getattr(self, 'service_identity', None),
                 "generation": getattr(self, 'service_generation', None),
                 "protocol_revision": 1,
+                "supervisor": getattr(self, 'service_supervisor', 'foreground'),
                 "remote_link": "not_checked",
                 "work_admission": "closed" if self._draining else "canonical_scope_checks_required",
                 "uptime_seconds": round(time.time() - self.started_at, 1),

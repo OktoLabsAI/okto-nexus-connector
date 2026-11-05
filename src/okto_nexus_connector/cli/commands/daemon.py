@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from ...daemon import manager
@@ -13,7 +12,7 @@ from ..output import Output
 async def run_daemon(args, output: Output, root: Path):
     sub = args.subcommand
     if sub == "start":
-        result = manager.start(root)
+        result = manager.start(root, timeout=getattr(args, 'timeout', 45))
         output.line("daemon ready" if result.get("started") else
                     "daemon already running")
         return result
@@ -24,9 +23,13 @@ async def run_daemon(args, output: Output, root: Path):
         output.line(f'daemon: {current.state}' + (f' ({current.reason})' if current.reason else ''))
         return current.to_json()
     if sub == "stop":
-        result = manager.stop(root)
+        result = manager.stop(root, timeout=getattr(args, 'timeout', 60))
         output.line("daemon stopped" if result.get("stopped") else
                     "daemon stop incomplete — see report")
+        return result
+    if sub == 'restart':
+        result = manager.restart(root, timeout=getattr(args, 'timeout', 45))
+        output.line('daemon ready' if result.get('state') == 'ready' else 'daemon restart incomplete — see report')
         return result
     raise ConnectorError("CAPABILITY_UNSUPPORTED", "daemon",
                          f"unknown subcommand {sub!r}")

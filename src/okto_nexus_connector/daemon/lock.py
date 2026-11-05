@@ -53,10 +53,10 @@ class Readiness:
 class InstanceLock:
     """Exclusive daemon lock for one state directory."""
 
-    def __init__(self, run_dir: Path):
+    def __init__(self, run_dir: Path, *, lock_name='daemon.lock'):
         run_dir = Path(run_dir).resolve()
         self.run_dir = run_dir
-        self.lock_path = run_dir / "daemon.lock"
+        self.lock_path = run_dir / lock_name
         self.readiness_path = run_dir / "daemon.json"
         self.token_path = run_dir / "ipc-token"
         self._fd: int | None = None
@@ -118,7 +118,7 @@ class InstanceLock:
         """Read-only ownership probe. Inaccessible is unknown, never free."""
         if self.held:
             return True
-        probe = InstanceLock(self.run_dir)
+        probe = InstanceLock(self.run_dir, lock_name=self.lock_path.name)
         try:
             if not probe.acquire(create=False):
                 return True
@@ -224,7 +224,18 @@ def _atomic_write(path: Path, data: bytes) -> None:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temp, path)
+        deadline = time.monotonic() + 1.0
+        while True:
+            try:
+                os.replace(temp, path)
+                break
+            except OSError as error:
+                # Windows status readers briefly deny DELETE sharing. Keep the
+                # previous receipt intact and never loop forever on an ACL error.
+                if (os.name != 'nt' or getattr(error, 'winerror', None) not in {5, 32}
+                        or time.monotonic() >= deadline):
+                    raise
+                time.sleep(.01)
         temp = None
     finally:
         if temp is not None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from ...errors import ConnectorError
@@ -84,6 +83,6 @@ async def _dispatch(args, output: Output):
 def _state_dir(args) -> Path:
     from ...platform import paths
     explicit = getattr(args, "state_dir", None)
-    if args.command == 'daemon' and args.subcommand == 'status':
+    if args.command == 'service' or (args.command == 'daemon' and args.subcommand in {'status', 'stop'}):
         return (Path(explicit).expanduser() if explicit is not None else paths.default_state_dir()).resolve()
     return paths.state_dir(explicit)

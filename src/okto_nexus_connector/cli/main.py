@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import sys
 from pathlib import Path
 
@@ -224,7 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
     bind_create.add_argument("--pi-node", default=None)
     bind_create.add_argument("--alias", required=True)
     bind_create.add_argument("--project", type=Path, default=None)
-    bind_list = bind_sub.add_parser("list")
+    bind_sub.add_parser("list")
     bind_show = bind_sub.add_parser("show")
     bind_show.add_argument("alias")
     bind_remove = bind_sub.add_parser("remove")
@@ -283,10 +282,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     daemon = sub.add_parser("daemon", help="local daemon lifecycle")
     daemon_sub = daemon.add_subparsers(dest="subcommand", required=True)
-    daemon_sub.add_parser("start", help="background; returns after readiness")
+    daemon_sub.add_parser("start", help="background; returns after readiness").add_argument('--timeout', type=float, default=45)
     daemon_sub.add_parser("run", help="foreground (containers/diagnostics)")
     daemon_sub.add_parser("status")
-    daemon_sub.add_parser("stop")
+    daemon_sub.add_parser("stop").add_argument('--timeout', type=float, default=60)
+    daemon_sub.add_parser('restart', help='drain, then start the same configured instance').add_argument('--timeout', type=float, default=45)
 
     service = sub.add_parser("service", help="OS autostart management")
     service_sub = service.add_subparsers(dest="subcommand", required=True)
@@ -426,6 +426,11 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_OK if result.get('state') in {'ready', 'stopped'} else EXIT_UNAVAILABLE
     if args.command == 'daemon' and args.subcommand == 'stop' and not result.get('stopped'):
         return EXIT_OK if result.get('state') == 'stopped' and not result.get('was_running') else EXIT_UNKNOWN_OUTCOME
+    if args.command == 'daemon' and args.subcommand == 'restart' and result.get('state') != 'ready':
+        return EXIT_UNKNOWN_OUTCOME
+    if args.command == 'service' and args.subcommand in {'install', 'uninstall'}:
+        if not result.get('dry_run') and not result.get('installed' if args.subcommand == 'install' else 'uninstalled'):
+            return EXIT_UNAVAILABLE
     return EXIT_OK
 
 

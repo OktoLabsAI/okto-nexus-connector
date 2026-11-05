@@ -15,7 +15,7 @@ def test_plan_matches_current_os(tmp_path: Path):
     plan = service_install.plan(tmp_path)
     system = platform.system()
     expected = {"Linux": "systemd-user", "Darwin": "launchd-user",
-                "Windows": "schtasks-logon"}
+                "Windows": "windows-task-scheduler"}
     assert plan.mechanism == expected.get(system) or plan.mechanism in \
         expected.values()
     payload = service_install._plan_json(plan)
@@ -44,19 +44,21 @@ def test_unsupported_platform_refuses(tmp_path: Path, monkeypatch):
 
 def test_systemd_unit_content(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(platform, "system", lambda: "Linux")
+    monkeypatch.setattr(service_install, '_linger_enabled', lambda: False)
     plan = service_install.plan(tmp_path)
     unit = service_install._systemd_unit(tmp_path)
     assert "Restart=on-failure" in unit
     assert f"OKTO_NEXUS_CONNECTOR_STATE={tmp_path}" in unit
     assert "WantedBy=default.target" in unit
-    assert plan.survives_logout is True
+    assert plan.survives_logout is False
 
 
 def test_windows_task_is_logon_scoped(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(platform, "system", lambda: "Windows")
     plan = service_install.plan(tmp_path)
-    command = service_install._schtasks_create(tmp_path)
-    assert "/SC" in command and "ONLOGON" in command
-    assert "/RL" in command and "LIMITED" in command
+    assert plan.name.startswith('OktoNexus-connector-')
+    assert plan.instance_id.startswith('svc_')
+    assert plan.command[0].lower().endswith('pythonw.exe')
+    assert '--state-dir' in plan.command and str(tmp_path.resolve()) in plan.command
     assert plan.survives_logout is False  # honest: runs at logon only
-    assert plan.survives_boot is True
+    assert plan.survives_boot is False

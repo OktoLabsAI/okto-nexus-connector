@@ -1,0 +1,333 @@
+"""Injected OS mutations and disposable instance state; no personal task writes."""
+from __future__ import annotations
+
+import asyncio
+from dataclasses import replace
+import json
+import os
+import threading
+import time
+from unittest.mock import Mock
+
+import pytest
+
+from okto_nexus_connector.cli.main import main
+from okto_nexus_connector.daemon import manager
+from okto_nexus_connector.daemon.lock import InstanceLock
+from okto_nexus_connector.daemon.lock import _atomic_write
+from okto_nexus_connector.daemon.service_process import run
+from okto_nexus_connector.errors import ConnectorError
+from okto_nexus_connector.platform import service_install
+from okto_nexus_connector.platform.service_context import (
+    CONTEXT, INSTALLATION, LAUNCH, execution_context, launch_exclusion,
+    launch_environment, read_document, validate_context, write_document)
+from okto_nexus_connector.platform.user_service import UserService, SUPERVISOR
+from okto_nexus_connector.platform.windows_tasks import TaskObservation
+
+
+class FakeTasks:
+    def __init__(self):
+        self.tasks, self.calls = {}, []
+
+    def read(self, name):
+        return self.tasks.get(name)
+
+    def validate(self, name, xml):
+        pass
+
+    def create(self, name, xml):
+        assert name not in self.tasks
+        self.calls.append(('create', name))
+        self.tasks[name] = TaskObservation(xml, 3, True, 0)
+        return self.tasks[name]
+
+    def start(self, name, expected):
+        assert self.tasks[name].digest == expected
+        self.calls.append(('start', name))
+        self.tasks[name] = replace(self.tasks[name], state=2)
+
+    def delete(self, name, expected):
+        assert self.tasks[name].digest == expected and not self.tasks[name].active
+        self.calls.append(('delete', name))
+        del self.tasks[name]
+
+
+@pytest.fixture
+def selected(tmp_path, monkeypatch):
+    if os.name != 'nt':
+        pytest.skip('Windows user-task host paths/principal')
+    root = tmp_path / 'connector'
+    tasks = FakeTasks()
+    monkeypatch.setattr('okto_nexus_connector.platform.user_service.WindowsTasks', lambda: tasks)
+    return root, tasks, UserService(root, tasks=tasks)
+
+
+def installed(selected):
+    root, tasks, service = selected
+    assert service_install.install(root, dry_run=False)['installed']
+    return root, tasks, service, service.receipt()
+
+
+def test_context_freezes_paths_and_backend_without_copying_credentials(tmp_path):
+    context = execution_context(tmp_path, env={**os.environ, 'API_KEY': 'secret-sentinel',
+        'PYTHONPATH': 'injected', 'OKTO_NEXUS_CONNECTOR_VAULT': 'file'})
+    assert 'secret-sentinel' not in json.dumps(context)
+    assert 'PYTHONPATH' not in context['environment']
+    assert context['environment']['OKTO_NEXUS_CONNECTOR_VAULT'] == 'file'
+    assert context['cwd'] == str(tmp_path.resolve())
+    assert validate_context(tmp_path, context) == context
+
+
+def test_existing_proxy_reference_is_resolved_for_launch_but_never_persisted(tmp_path):
+    from okto_nexus_connector.storage.state_store import StateStore
+    StateStore(tmp_path / 'state.json').update(lambda state: state.preferences.update(
+        {'network.proxy': {'mode': 'manual', 'url_env': 'CORP_PROXY'}}))
+    inherited = {'CORP_PROXY': 'https://user:synthetic-secret@proxy.example:443', 'API_KEY': 'not-copied'}
+    context = execution_context(tmp_path, env={**os.environ, **inherited})
+    resolved = launch_environment(tmp_path, context, inherited=inherited)
+    assert resolved['CORP_PROXY'] == inherited['CORP_PROXY']
+    assert 'API_KEY' not in resolved
+    assert 'synthetic-secret' not in json.dumps(context)
+    assert 'synthetic-secret' not in (tmp_path / 'state.json').read_text(encoding='utf-8')
+
+
+def test_proxy_reference_cannot_replace_interpreter_environment(tmp_path):
+    from okto_nexus_connector.storage.state_store import StateStore
+    StateStore(tmp_path / 'state.json').update(lambda state: state.preferences.update(
+        {'network.proxy': {'mode': 'manual', 'url_env': 'PYTHONPATH'}}))
+    with pytest.raises(ConnectorError, match='PROXY_CONFIGURATION_INVALID'):
+        launch_environment(tmp_path, execution_context(tmp_path), inherited={'PYTHONPATH': 'http://proxy.example'})
+
+
+def test_status_of_service_and_dry_run_do_not_create_root(tmp_path, capsys):
+    root = tmp_path / 'absent'
+    assert main(['--state-dir', str(root), 'service', 'status', '--json']) == 0
+    assert not root.exists()
+    assert main(['--state-dir', str(root), 'service', 'install', '--dry-run', '--json']) == 0
+    assert not root.exists()
+    assert main(['--state-dir', str(root), 'daemon', 'stop', '--json']) == 0
+    assert not root.exists()
+
+
+def test_launch_selection_without_receipt_is_observed_as_starting(tmp_path):
+    with launch_exclusion(tmp_path):
+        current = manager.status(tmp_path)
+        assert current.state == 'starting' and current.reason == 'CONCURRENT_START'
+
+
+def test_pending_launch_is_not_repeated_or_given_terminal_environment(tmp_path, monkeypatch):
+    spawn = Mock(return_value=Mock(pid=999999))
+    monkeypatch.setattr(manager, '_spawn', spawn)
+    monkeypatch.setenv('API_KEY', 'secret-sentinel')
+    for _ in range(2):
+        with pytest.raises(ConnectorError, match='STARTUP_PENDING'):
+            manager.start(tmp_path, timeout=.02)
+    spawn.assert_called_once()
+    context, command = spawn.call_args.args
+    assert 'secret-sentinel' not in json.dumps(context)
+    assert command[1:4] == ['-I', '-m', 'okto_nexus_connector.daemon.service_process']
+    assert read_document(tmp_path / 'run' / LAUNCH)['state'] == 'pending'
+
+
+def test_production_foreground_owns_lock_before_state_or_vault_initialization(tmp_path, monkeypatch):
+    owner = InstanceLock(tmp_path / 'run')
+    assert owner.acquire()
+    factory = Mock(side_effect=AssertionError('bootstrap before ownership'))
+    monkeypatch.setattr('okto_nexus_connector.daemon.app.DaemonApp', factory)
+    try:
+        with pytest.raises(ConnectorError, match='DAEMON_ALREADY_RUNNING'):
+            asyncio.run(manager.run_foreground(tmp_path))
+        factory.assert_not_called()
+        assert not (tmp_path / 'state.json').exists()
+        assert not (tmp_path / 'vault').exists()
+    finally:
+        owner.release()
+
+
+def test_install_repeated_is_scoped_and_noop(selected):
+    root, tasks, service, receipt = installed(selected)
+    context = (root / CONTEXT).read_bytes()
+    assert service_install.install(root, dry_run=False)['already_installed']
+    assert tasks.calls == [('create', service.name)]
+    assert (root / CONTEXT).read_bytes() == context
+    assert not (root / 'state.json').exists()
+    assert service.name != UserService(root / 'other', tasks=tasks).name
+
+
+def test_foreign_and_legacy_tasks_never_get_overwritten(selected):
+    root, tasks, service = selected
+    tasks.tasks[service.name] = TaskObservation('<foreign/>', 3, True, 0)
+    with pytest.raises(ConnectorError, match='FOREIGN_SERVICE_DEFINITION'):
+        service_install.install(root, dry_run=False)
+    del tasks.tasks[service.name]
+    tasks.tasks['okto-nexus-connector'] = TaskObservation('<legacy/>', 3, True, 0)
+    with pytest.raises(ConnectorError, match='LEGACY_SERVICE_REVIEW_REQUIRED'):
+        service_install.install(root, dry_run=False)
+    assert not root.exists() and not tasks.calls
+
+
+@pytest.mark.parametrize('operation', ['start', 'install', 'uninstall'])
+def test_edited_native_definition_prevents_mutation(selected, operation):
+    root, tasks, service, receipt = installed(selected)
+    current = tasks.tasks[service.name]
+    tasks.tasks[service.name] = replace(current, xml=current.xml.replace('<Hidden>false</Hidden>', '<Hidden>true</Hidden>'))
+    with pytest.raises(ConnectorError, match='SERVICE_DEFINITION_CHANGED'):
+        getattr(service, operation)()
+    assert tasks.calls == [('create', service.name)]
+
+
+def test_installed_start_never_spawns_detached_or_resubmits_pending(selected, monkeypatch):
+    root, tasks, service, receipt = installed(selected)
+    spawn = Mock(side_effect=AssertionError('detached fallback'))
+    monkeypatch.setattr(manager, '_spawn', spawn)
+    for _ in range(2):
+        with pytest.raises(ConnectorError, match='SUPERVISOR_PENDING'):
+            manager.start(root, timeout=.02)
+    assert tasks.calls == [('create', service.name), ('start', service.name)]
+    assert manager.status(root).supervisor == SUPERVISOR and not spawn.called
+
+
+def test_native_creation_failure_retains_same_intent_and_unknown_task(selected, monkeypatch):
+    root, tasks, service = selected
+    real = tasks.create
+    def lost(name, xml):
+        real(name, xml)
+        raise OSError('response lost')
+    monkeypatch.setattr(tasks, 'create', lost)
+    with pytest.raises(OSError):
+        service_install.install(root, dry_run=False)
+    assert service.receipt()['state'] == 'installing'
+    with pytest.raises(ConnectorError, match='INSTALLATION_PENDING'):
+        service_install.install(root, dry_run=False)
+    assert len(tasks.calls) == 1
+
+
+def test_persisted_native_creation_response_completes_without_registration(selected):
+    root, tasks, service, receipt = installed(selected)
+    write_document(root / INSTALLATION, {**receipt, 'state': 'installing'})
+    assert service_install.install(root, dry_run=False)['installed']
+    assert len(tasks.calls) == 1
+
+
+def test_uninstall_requires_inactive_task_and_preserves_data(selected):
+    root, tasks, service, receipt = installed(selected)
+    (root / 'state.json').write_text('retained state')
+    tasks.tasks[service.name] = replace(tasks.tasks[service.name], state=4)
+    with pytest.raises(ConnectorError, match='SUPERVISOR_STILL_ACTIVE'):
+        service_install.uninstall(root, dry_run=False)
+    tasks.tasks[service.name] = replace(tasks.tasks[service.name], state=3)
+    assert service_install.uninstall(root, dry_run=False)['uninstalled']
+    assert (root / 'state.json').read_text() == 'retained state'
+    assert (root / CONTEXT).exists()
+    assert service_install.uninstall(root, dry_run=False)['uninstalled']
+    assert tasks.calls == [('create', service.name), ('delete', service.name)]
+
+
+def test_lost_delete_response_recovers_positive_absence(selected):
+    root, tasks, service, receipt = installed(selected)
+    write_document(root / INSTALLATION, {**receipt, 'state': 'removing'})
+    del tasks.tasks[service.name]
+    assert service_install.uninstall(root, dry_run=False)['uninstalled']
+    assert not (root / INSTALLATION).exists()
+
+
+def test_supervised_stop_latch_suppresses_same_login_and_allows_later_login(selected, monkeypatch):
+    root, tasks, service, receipt = installed(selected)
+    (root / 'run').mkdir(exist_ok=True)
+    service.begin_stop('generation')
+    foreground = Mock(side_effect=AssertionError('suppressed retry admitted work'))
+    monkeypatch.setattr(manager, 'run_foreground', foreground)
+    assert asyncio.run(run(root, receipt['token'], supervised=True, service=service)) == 0
+    foreground.assert_not_called()
+    async def same_foreground(path, *, acquired_lock, supervisor):
+        assert acquired_lock.held and supervisor == SUPERVISOR
+        assert path == root and os.getcwd() == str(root)
+        assert 'PYTHONPATH' not in os.environ
+        service.begin_stop('next-generation')
+        return 1
+    monkeypatch.setattr(manager, 'run_foreground', same_foreground)
+    monkeypatch.setattr('okto_nexus_connector.daemon.service_process.windows_logon_session', lambda: 'later-login')
+    assert asyncio.run(run(root, receipt['token'], supervised=True, service=service)) == 0
+    assert read_document(root / 'run' / 'service-exit.json')['exit_code'] == 1
+
+
+def test_native_preflight_on_worker_thread_creates_no_task_or_state(tmp_path):
+    if os.name != 'nt':
+        pytest.skip('Windows native validate-only')
+    service = UserService(tmp_path / 'absent')
+    async def preflight():
+        assert await asyncio.to_thread(service.tasks.read, service.name) is None
+        await asyncio.to_thread(service.prepare)
+        assert await asyncio.to_thread(service.tasks.read, service.name) is None
+    asyncio.run(preflight())
+    assert not service.root.exists()
+
+
+def test_lost_native_start_response_is_not_submitted_again(selected, monkeypatch):
+    root, tasks, service, receipt = installed(selected)
+    start = Mock(side_effect=OSError('response lost'))
+    monkeypatch.setattr(tasks, 'start', start)
+    for _ in range(2):
+        with pytest.raises(ConnectorError):
+            manager.start(root, timeout=.02)
+    start.assert_called_once()
+    assert manager.status(root).reason == 'SUPERVISOR_PENDING'
+
+
+def test_cli_native_failure_is_structured_and_does_not_print_raw_error(selected, monkeypatch, capsys):
+    root, tasks, service = selected
+    monkeypatch.setattr(tasks, 'create', Mock(side_effect=OSError('secret-sentinel')))
+    code = main(['--state-dir', str(root), '--non-interactive', 'service', 'install', '--json'])
+    capture = capsys.readouterr()
+    assert code != 0 and 'SERVICE_OPERATION_UNCONFIRMED' in capture.out
+    assert 'secret-sentinel' not in capture.out + capture.err
+    assert service.receipt()['state'] == 'installing'
+
+
+def test_stop_latches_before_ipc_and_preserves_canonical_drain(selected, monkeypatch):
+    root, tasks, service, receipt = installed(selected)
+    current = manager.DaemonStatus(True, os.getpid(), 'loopback', '127.0.0.1:1', '0.0.12', '', None,
+        True, state='ready', instance_id=service.instance_id, generation='current', supervisor=SUPERVISOR)
+    observed = [current]
+    monkeypatch.setattr(manager, '_process_status', lambda *_a, **_k: observed[0])
+    monkeypatch.setattr(InstanceLock, 'load_token', lambda _: 'synthetic-local-token')
+    client = Mock()
+    client.__enter__ = Mock(return_value=client)
+    client.__exit__ = Mock(return_value=False)
+    def shutdown(*_a, **_k):
+        assert service.control(receipt)['desired'] == 'draining'
+        write_document(root / 'run' / 'shutdown.json', {'generation': 'current', 'state': 'DRAINED'})
+        observed[0] = replace(current, running=False, ipc_ok=False, state='stopped', generation='')
+        return {'ok': True}
+    client.call.side_effect = shutdown
+    monkeypatch.setattr('okto_nexus_connector.daemon.lifecycle.IPCClient', Mock(return_value=client))
+    result = manager.stop(root, timeout=1)
+    assert result['shutdown_outcome'] == 'drained' and result['stopped']
+    assert tasks.calls == [('create', service.name)]
+
+
+def test_install_does_not_register_when_canonical_drain_is_pending(selected, monkeypatch):
+    root, tasks, service = selected
+    monkeypatch.setattr(manager, '_process_status', lambda *_: Mock(state='ready'))
+    monkeypatch.setattr(manager, 'stop', Mock(return_value={'state': 'stopping', 'wait_timed_out': True}))
+    assert not service_install.install(root, dry_run=False)['installed']
+    assert not tasks.calls and not root.exists()
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows reader sharing contract')
+def test_atomic_lifecycle_write_waits_for_transient_reader(tmp_path):
+    target = tmp_path / 'receipt.json'
+    _atomic_write(target, b'old')
+    reader = target.open('rb')
+    def close_reader():
+        time.sleep(.05)
+        reader.close()
+    closer = threading.Thread(target=close_reader)
+    closer.start()
+    try:
+        _atomic_write(target, b'new')
+    finally:
+        closer.join(timeout=2)
+        reader.close()
+    assert target.read_bytes() == b'new'
+    assert not list(tmp_path.glob('.tmp-*'))

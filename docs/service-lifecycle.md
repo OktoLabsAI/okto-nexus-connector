@@ -30,8 +30,67 @@ existing state, vault, execution records, remote registrations and native
 reconciliation remain authoritative. Transport shutdown joins attachment cleanup
 without issuing a second cancellation during HTTP connection closure.
 
-R3 qualification so far covers Windows disposable-process readiness/reuse/drain
-and the installed wheel. The instance-scoped OS service definitions, saved
-execution context, full launch serialization, broader passive diagnostics and
-real remote/provider/login/logout campaigns remain in progress. Existing service
-templates must not be interpreted as evidence for logout or boot survival.
+## Detached start and foreground ownership
+
+`daemon start --timeout 45`, `daemon stop --timeout 60` and
+`daemon restart --timeout 45` select the same instance. A launch guard serializes
+concurrent CLI callers before a child exists. Its durable receipt prevents a
+wait timeout or lost response from spawning a second daemon. The child acquires
+the lifetime OS lock before constructing state/vault/runtime services, then
+uses the existing foreground application. Explicit restart requires confirmed
+canonical drain before selecting a new generation.
+
+The first launch saves resolved Python/environment/state/working-directory
+references. Later starts reuse them. Provider secrets and shell startup hooks
+are not copied. Existing proxy policy resolves its named environment references
+at launch; values are not saved in the service context. Existing vault backend
+selection and fallback consent remain authoritative. Changing a proxy reference
+requires that variable to be available to the launching OS context.
+
+`daemon run` remains the foreground entrypoint for an external supervisor. It
+refuses a competing instance or a selected installed Windows task. An interrupted
+launch with uncertain ownership remains pending for observation/reconciliation;
+deleting receipts or killing a PID is not a supported recovery shortcut.
+
+## Windows user task
+
+With the selected global `--state-dir`, `service install --dry-run` previews the
+definition. `service install` asks for confirmation before enabling a task for this user's
+future logins; `daemon start` starts it immediately. `service status --json`
+observes installation, and `service uninstall` removes only the selected
+owned task after controlled drain. Uninstall retains application state, vault,
+history, logs and saved execution context. Dry run/status do not create an
+absent state directory. For an already authorized scripted installation, use
+the existing global `--non-interactive` option.
+
+Task names include canonical instance identity. The receipt records the effective
+principal and native definition fingerprint. External edits, an unowned selected
+task or a legacy global task require explicit review. They are not overwritten
+or adopted automatically. An installed start routes through Task Scheduler;
+uncertain native outcomes retain their receipts instead of falling back to a
+detached process. Native mutations recheck the fingerprint, but the OS does not
+offer an atomic fingerprint-conditional operation against concurrent external
+editors.
+
+Stop records suppression of same-login recovery before authenticated IPC drain.
+The installed worker exits without reopening admission after that stop; a new
+login is a separate trigger. Neither logout survival nor availability before
+login is promised. Bounded automatic crash recovery follows the shared Core
+definition; qualification of actual crash/login behavior is still pending.
+
+## Qualification boundaries
+
+Windows disposable-process tests cover concurrent start, launcher exit, reuse,
+restart, generation-correlated drain and the wheel installed outside the checkout.
+Fake-native tests cover ownership conflicts, changed definitions, lost responses,
+stop suppression and data preservation. Native Task Scheduler checks use only
+`TASK_VALIDATE_ONLY`, including calls from worker threads; they do not install a
+task. These are distinct from actual terminal closure, login/logout or service
+credential qualification.
+
+Linux systemd/macOS launchd installers remain legacy global templates. They have
+not received the R3 instance ownership/reconciliation contract and are not
+qualified by these Windows results. Enable/disable/reconciliation UX, recovery
+of interrupted pre-spawn receipts, upgrades, broader passive diagnostics and
+real remote/provider/login/logout campaigns remain in progress. Exact evidence
+and remaining scope are in `plans/agent_ops/user-service.md` and the Nexus R3 ledger.
