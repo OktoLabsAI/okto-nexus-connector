@@ -6,6 +6,7 @@
 |---|---|---|
 | Check address/version | `reach --server URL` | Public HTTP probe, no key required |
 | First guided connection | `connect --server URL --agent AGENT` | Imports key and guides remote runtime setup |
+| Return to a configured project | `connect` | Validates the saved identity/binding and reuses the original request |
 | Configure with an imported identity or JSON | `configure --identity ALIAS` | Interactive wizard on this computer by default |
 | See actual connection progress | `status` | Queries server and daemon |
 | Inspect failures | `logs --errors`, `doctor --probe` | Local logs and diagnostic probes |

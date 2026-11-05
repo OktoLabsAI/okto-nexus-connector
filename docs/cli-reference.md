@@ -197,7 +197,8 @@ options:
 ## okto-nexus-connector connect
 
 ```text
-usage: okto-nexus-connector connect [-h] --server SERVER [--agent AGENT]
+usage: okto-nexus-connector connect [-h] [--server SERVER]
+                                    [--identity IDENTITY] [--agent AGENT]
                                     [--alias ALIAS]
                                     [--binding-alias BINDING_ALIAS]
                                     [--harness HARNESS]
@@ -217,7 +218,10 @@ usage: okto-nexus-connector connect [-h] --server SERVER [--agent AGENT]
 
 options:
   -h, --help            show this help message and exit
-  --server SERVER       Nexus Server base URL
+  --server SERVER       Nexus Server base URL; reused from a saved project or
+                        identity
+  --identity IDENTITY   reuse this imported local identity without entering
+                        its key again
   --agent AGENT         agent id hint from the Server screen
   --alias ALIAS         local identity alias (default: agent id)
   --binding-alias BINDING_ALIAS

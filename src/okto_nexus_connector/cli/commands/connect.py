@@ -9,6 +9,7 @@ explicit intent to open a runtime; connecting alone never spawns one
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from ...errors import ConnectorError
@@ -26,6 +27,7 @@ from ...storage.state_store import StateStore
 from ...transport.https_client import NexusHTTPClient, origin_of
 from ..output import Output
 from ..prompts import confirm, select
+from . import connect_reuse
 
 
 def _read_key(args, output: Output) -> str:
@@ -58,15 +60,23 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
             'connect is an interactive R4 connection wizard.',
             action='Use connection-config apply with explicit parameters for automation.')
     store = StateStore(paths.state_file(root))
-    # 1. Identity import with /me validation and hint comparison.
-    key = _read_key(args, output)
+    state = store.load()
+    retained = connect_reuse.saved_request(args, state, select)
+    identity = connect_reuse.selected_identity(args, state, retained)
+    if retained:
+        args.request_id = retained[1]
+        connect_reuse.validate_choices(args, retained[3], state)
+    if not args.server:
+        raise ConnectorError('SERVER_REQUIRED', 'connect',
+            'Select --server for a new connection, or --identity for an imported identity.')
+    reuse = identity is not None and not connect_reuse.credential_supplied(args)
     import os as _os
     forced_file = _os.environ.get(
         "OKTO_NEXUS_CONNECTOR_VAULT", "").strip().lower() == "file"
     # CN1/A14: --non-interactive NEVER prompts. An unapproved vault
     # fallback in headless mode is a prescriptive error, not an implicit
     # approval (test_19: no confirm call with non_interactive=False).
-    if (forced_file or not vault_backend_names()) and not \
+    if not reuse and (forced_file or not vault_backend_names()) and not \
             store.load().preferences.get("vault.fallback_file.approved"):
         if not args.non_interactive:
             approved = confirm(
@@ -87,15 +97,29 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
     vault = open_vault(paths.vault_dir(root),
                       approved_fallback=bool(store.load().preferences.get(
                           "vault.fallback_file.approved", False)))
+    before = connect_reuse.identity_snapshot(state, identity) if reuse else None
+    key = await asyncio.to_thread(vault.resolve, identity.secret_handle) if reuse else _read_key(args, output)
+    current_binding = None
     async with NexusHTTPClient(args.server) as http:
-        identity_result = await import_identity(
-            http, vault, store, key=key,
-            alias=args.alias or _default_alias(args),
-            agent_hint=args.agent)
-        # Record/refresh the server profile from the authenticated /me.
-        _remember_server(store, args.server, identity_result.server_id)
-        output.line(f"identity ok: {identity_result.identity.alias} -> "
-                    f"{identity_result.me_agent_id}")
+        if reuse:
+            me = await http.me(key)
+            if (me.server_id, me.agent_id, me.credential_epoch) != (identity.server_id, identity.agent_id, identity.credential_epoch):
+                raise ConnectorError('AGENT_ID_MISMATCH', 'connect',
+                    'The stored credential does not match the selected identity and credential revision.')
+            if connect_reuse.identity_snapshot(store.load(), identity) != before:
+                raise ConnectorError('STALE_GENERATION', 'connect', 'The selected identity changed during authentication.')
+        else:
+            identity_result = await import_identity(
+                http, vault, store, key=key,
+                alias=identity.alias if identity else args.alias or _default_alias(args),
+                agent_hint=args.agent)
+            _remember_server(store, args.server, identity_result.server_id)
+            identity = identity_result.identity
+        if retained:
+            if store.load().preferences.get(retained[0]) != retained[3]:
+                raise ConnectorError('STALE_GENERATION', 'connect', 'The saved request changed during authentication.')
+            current_binding = await connect_reuse.verify_binding(http, key, store, identity, retained)
+        output.line(f"identity ok: {identity.alias} -> {identity.agent_id}")
 
 
     # The current Server accepts R4 registrations, realizations and binding
@@ -106,7 +130,6 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
     from .configure import template
     from .configure_local import configure_local
 
-    identity = identity_result.identity
     request_id = getattr(args, 'request_id', None)
     saved = store.load().preferences.get(
         f'configure.{identity.server_id}.{identity.agent_id}.{request_id}') if request_id else None
@@ -125,6 +148,15 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
         operator_identity=getattr(args, 'operator_identity', None),
         operator_proof_ref=getattr(args, 'operator_proof_ref', None))
     result = await configure_local(wizard, output, root, store, identity, args.server, portable)
+    if retained and result.get('saved'):
+        from ...daemon import manager
+        from . import configure_startup
+        from .configure_local import ipc
+        await asyncio.to_thread(manager.start, root)
+        await ipc(root, 'state.reload')
+        result = dict(result, reused=True, current_binding=current_binding)
+        result = await configure_startup.result(root, store.load().preferences[retained[0]], result)
+        output.line('Reused the saved project connection. Current execution grants and provider readiness remain subject to Nexus admission.')
     if result.get('saved') and args.start:
         from .runtime import start_runtime
         result['runtime_start'] = await start_runtime(output, root,

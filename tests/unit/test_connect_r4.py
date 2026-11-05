@@ -7,6 +7,7 @@ from okto_nexus_connector.cli.main import build_parser
 from okto_nexus_connector.cli.output import Output
 from okto_nexus_connector.cli.commands import connect, configure_local
 from okto_nexus_connector.errors import ConnectorError
+from okto_nexus_connector.storage.state_store import ConnectorState
 
 
 @pytest.mark.parametrize('resume', [False, True])
@@ -14,7 +15,7 @@ async def test_connect_uses_canonical_r4_wizard(monkeypatch, tmp_path, resume):
     args = build_parser().parse_args(['connect','--server','http://nexus.test:8202','--agent','claude-coder',
         '--project',str(tmp_path),'--request-id','resume-me','--start-at-login'])
     identity = NS(alias='claude-coder',server_id='server',agent_id='claude-coder')
-    state = NS(preferences={'vault.fallback_file.approved':True})
+    state = ConnectorState(preferences={'vault.fallback_file.approved':True})
     if resume:
         state.preferences['configure.server.claude-coder.resume-me'] = {'stage':'apply'}
     store = NS(load=lambda:state)

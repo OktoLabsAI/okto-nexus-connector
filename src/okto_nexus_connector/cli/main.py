@@ -95,8 +95,8 @@ def build_parser() -> argparse.ArgumentParser:
     configure.add_argument('--operator-proof-ref', help='operator approval reference from the binding proposal')
 
     connect = sub.add_parser("connect", help="guided first-use flow")
-    connect.add_argument("--server", required=True,
-                         help="Nexus Server base URL")
+    connect.add_argument("--server", help="Nexus Server base URL; reused from a saved project or identity")
+    connect.add_argument("--identity", help="reuse this imported local identity without entering its key again")
     connect.add_argument("--agent", default=None,
                          help="agent id hint from the Server screen")
     connect.add_argument("--alias", default=None,

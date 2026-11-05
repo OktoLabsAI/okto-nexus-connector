@@ -44,6 +44,12 @@ okto-nexus-connector logs --errors
 
 `CONNECTED` confirms the connection. A running daemon, an approved request, or a successful `reach` alone does not confirm that the harness can execute a turn.
 
+On later visits, run `okto-nexus-connector connect` in the same project. It reuses
+the saved Server, identity, key and request, checks current binding approval, and
+starts/reuses the daemon without repeating setup. Use `--identity ALIAS` or
+`--request-id ID` to select explicitly. Revoked or changed scope requires resolution;
+reconnect does not renew execution grants.
+
 ## Documentation
 
 - [CLI usage guide](docs/cli.md): identities, daily operations, automation, proxy and cleanup.

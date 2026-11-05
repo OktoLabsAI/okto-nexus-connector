@@ -98,6 +98,28 @@ Server startup on that host with `okto-nexus connect --start-at-login`.
 
 ## Resume
 
+Run `okto-nexus-connector connect` again in a previously configured project.
+The saved canonical association supplies the Server, identity and original
+request ID. If several saved connections match, select the intended one.
+`--identity ALIAS` selects an imported identity; `--request-id ID` selects a
+retained request explicitly. `--server` remains necessary for a new destination
+that has no saved association.
+
+Reconnect reads the existing protected vault entry and authenticates it with the
+Server. It does not ask for the key again, run installation probes, recreate the
+binding, reapply the preset or renew grants. For a completed request, before
+starting/reusing the daemon it checks that the current Server binding is approved and matches this host's
+canonical mapping and physical project directory. Current configuration and
+authorization revisions are reported separately from the historical setup result.
+This is configuration reuse, not a proof that a provider turn can execute.
+
+A revoked credential, unavailable Server, changed installation mapping, disabled
+binding or conflicting explicit choices stops the operation. There is no fallback
+to another identity, key prompt or fresh setup. Credential replacement remains an
+explicit action; credential source flags explicitly request import and validation.
+Saved startup choices and later enablement changes retain their existing service
+semantics. Pending approval resumes the original request and checkpoints.
+
 ### Operator decision from another terminal
 
 The pending response preserves the original `request_id` and `required_approvals`,
