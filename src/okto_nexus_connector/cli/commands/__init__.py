@@ -83,6 +83,6 @@ async def _dispatch(args, output: Output):
 def _state_dir(args) -> Path:
     from ...platform import paths
     explicit = getattr(args, "state_dir", None)
-    if args.command == 'service' or (args.command == 'daemon' and args.subcommand in {'status', 'stop'}):
+    if args.command in {'service', 'status', 'logs', 'doctor'} or (args.command == 'daemon' and args.subcommand in {'status', 'stop'}):
         return (Path(explicit).expanduser() if explicit is not None else paths.default_state_dir()).resolve()
     return paths.state_dir(explicit)

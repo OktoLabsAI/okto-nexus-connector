@@ -296,6 +296,31 @@ class StateStore:
         with self.locked():
             return _load_unlocked(self.path)
 
+    def read_snapshot(self) -> ConnectorState:
+        """Observe one complete snapshot without creating state or lock files.
+
+        Diagnostic readers may see the previous atomic snapshot. Mutations must
+        continue to use the locked load/update paths for concurrency control.
+        """
+        from .read_only import open_readonly
+        try:
+            with open_readonly(self.path) as stream:
+                raw = stream.read(4 * 1024 * 1024 + 1)
+        except FileNotFoundError:
+            return ConnectorState()
+        except OSError as error:
+            raise ConnectorError('STATE_UNAVAILABLE', 'state_read',
+                'The state snapshot is inaccessible; its contents are unknown.',
+                action='Check access to the selected state directory.') from error
+        if len(raw) > 4 * 1024 * 1024:
+            raise ConnectorError('CAPACITY_EXCEEDED', 'state_read')
+        try:
+            return state_from_json(json.loads(raw.decode('utf-8')))
+        except (ValueError, TypeError, KeyError, AttributeError) as error:
+            raise ConnectorError('STATE_INVALID', 'state_read',
+                'The state snapshot cannot be decoded; it has been preserved.',
+                action='Inspect or recover the selected state snapshot.') from error
+
     def save(self, state: ConnectorState) -> None:
         """Replace the whole state snapshot atomically under the lock.
 
@@ -463,7 +488,19 @@ def _write_unlocked_bytes(path: Path, data: bytes) -> None:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temp, path)
+        # A passive reader does not create/take our writer lock. Windows may
+        # reject replacing its open snapshot even with FILE_SHARE_DELETE. Give
+        # that bounded read time to close; preserve the previous snapshot if
+        # access remains denied. No unlink/downgrade or non-atomic fallback.
+        deadline = time.monotonic() + 1
+        while True:
+            try:
+                os.replace(temp, path)
+                break
+            except PermissionError:
+                if os.name != 'nt' or time.monotonic() >= deadline:
+                    raise
+                time.sleep(.01)
         temp = None
     finally:
         if temp is not None:

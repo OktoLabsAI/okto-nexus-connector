@@ -101,6 +101,10 @@ No Nexus records or authorizations are deleted/revoked. Reconfiguring creates a 
 
 `--state-dir PATH` overrides `OKTO_NEXUS_CONNECTOR_STATE` and the platform default. Use one consistent directory for CLI, daemon and service. Logs are `logs/daemon.log`, rotated at 2 MiB with three backups. `logs --errors` includes warnings. Review host paths/identifiers before sharing diagnostics.
 
+Status, logs and default doctor do not initialize this directory or start a process. `STATE_UNAVAILABLE` means the existing snapshot could not be read; `STATE_INVALID` means it could not be decoded. Both preserve the file. `LOG_UNAVAILABLE` leaves work state unknown. Check the selected path and its access permissions before changing lifecycle state. A partial log view reports truncation and is not a complete execution history.
+
+Passive state reads can observe the previous atomic snapshot while a writer is updating it. They do not participate in mutation transactions. On Windows the writer briefly retries a replacement denied by a concurrent reader; persistent denial retains the previous file and reports failure. No diagnostic migrates or repairs state implicitly.
+
 ## Reconnect all connections
 
 `HARNESS_ERROR` means the server connection is available but a harness operation

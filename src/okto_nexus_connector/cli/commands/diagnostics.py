@@ -1,25 +1,30 @@
 """Read-only connection overview and bounded daemon log inspection."""
 import asyncio
-from collections import deque
 from datetime import datetime, timezone
 
 from ...daemon import manager
+from ...daemon.log_reader import read_log
 from ...errors import ConnectorError
+from ...identity.vault import open_vault
 from ...platform import paths
 from ...redaction import redact_mapping, redact_text
 from ...storage.state_store import StateStore
 from ...transport.https_client import NexusHTTPClient
-from .identity import _vault
+from ..output import EXIT_UNAVAILABLE
 
 
-async def _query_connections(root, store, state):
+async def _query_connections(root, state):
     """Bound the whole status probe; a cached attachment alone is not connectivity."""
     gate = asyncio.Semaphore(8)
     async def query(identity):
         try:
             async with asyncio.timeout(4), gate:
                 profile = state.servers[identity.server_id]
-                key = await asyncio.to_thread(_vault(root, store).resolve, identity.secret_handle)
+                def resolve_key():
+                    vault = open_vault(root / 'vault', approved_fallback=bool(
+                        state.preferences.get('vault.fallback_file.approved', False)))
+                    return vault.resolve(identity.secret_handle)
+                key = await asyncio.to_thread(resolve_key)
                 async with NexusHTTPClient(profile.base_url) as http:
                     result = await http._request('GET', '/v1/connections/status', key=key)
                 if result.get('agent_id') != identity.agent_id or not isinstance(result.get('connections'), list):
@@ -27,6 +32,8 @@ async def _query_connections(root, store, state):
                 return identity.alias, result
         except (ConnectorError, OSError, TimeoutError, KeyError) as error:
             return identity.alias, dict(error=getattr(error, 'code', 'SERVER_UNREACHABLE'), connections=[])
+        except (ValueError, TypeError):
+            return identity.alias, dict(error='AGENT_AUTH_REQUIRED', connections=[])
     return dict(await asyncio.gather(*(query(i) for i in state.identities if not i.revoked)))
 
 
@@ -38,8 +45,10 @@ def render_status(result, output):
     names = {'codex_app_server': 'Codex', 'claude_stream': 'Claude Code', 'pi_rpc': 'Pi'}
     output.heading('Connector status')
     daemon = result['daemon']
-    output.line(f"Daemon: {'running' if daemon['running'] else 'stopped'}" +
+    output.line(f"Daemon: {daemon['state']}" +
                 (f" (PID {daemon['pid']})" if daemon.get('pid') else ''))
+    if daemon.get('next_action'):
+        output.line(f"Next: {daemon['next_action']}")
     if daemon.get('ipc_error'):
         output.line(f"IPC error: {daemon['ipc_error']}")
     output.heading('Servers')
@@ -81,10 +90,11 @@ def render_status(result, output):
 
 async def run_status(args, output, root):
     store = StateStore(paths.state_file(root))
-    state = store.load()
+    state = store.read_snapshot()
     current = manager.status(root)
-    live, ipc_error = {}, None
-    if current.running:
+    live, ipc_error = {}, current.reason if current.running and not current.ipc_ok else None
+    observed_daemon = 'DAEMON_' + current.state.upper()
+    if current.ipc_ok:
         try:
             client = manager.connect(root)
             try:
@@ -98,14 +108,14 @@ async def run_status(args, output, root):
         except (ConnectorError, OSError) as exc:
             ipc_error = redact_text(str(exc))
     controls = live.get('r4_controls', {})
-    checked = await _query_connections(root, store, state)
+    checked = await _query_connections(root, state)
     connections = []
     servers = []
     for server_id, profile in state.servers.items():
         control = controls.get(server_id, {})
         servers.append(dict(server=profile.base_url, server_id=server_id,
             state=control.get('state', ('UNKNOWN' if ipc_error else 'NOT_REGISTERED')
-                              if current.running else 'DAEMON_STOPPED'),
+                              if current.ipc_ok else observed_daemon),
             control_ready=control.get('control_ready', False),
             error=control.get('error_code'), attempts=control.get('attempts', 0),
             last_connected_at=_stamp(control.get('last_connected_at')),
@@ -136,7 +146,7 @@ async def run_status(args, output, root):
                 request.update(status=progress.get('status', 'awaiting_approval'),
                                error=progress.get('code'), background=True)
         status = ('REVOKED' if identity.revoked else 'CONNECTED' if connected else
-                  'DAEMON_STOPPED' if not current.running else
+                  observed_daemon if not current.ipc_ok else
                   'CONNECTION_ERROR' if control.get('error_code') else
                   'ONBOARDING_ERROR' if any(p['status'] == 'error' for p in pending) else
                   'SETUP_PENDING' if not bindings else 'NOT_ATTACHED')
@@ -146,7 +156,8 @@ async def run_status(args, output, root):
                   'ONBOARDING_ERROR': 'Review the request error and Nexus approval. Expired or rejected requests need a new connection request.',
                   'SETUP_PENDING': ('Approve the request in Nexus. The daemon completes setup automatically.'
                                     if pending else 'Run connect to complete this agent setup.'),
-                  'NOT_ATTACHED': 'Review the Remote connection and runtime authorization in Nexus.'}.get(status, '')
+                  'NOT_ATTACHED': 'Review the Remote connection and runtime authorization in Nexus.'}.get(
+                      status, current.next_action or 'Inspect daemon status and logs before taking action.')
         observed = checked.get(identity.alias, {})
         known = {b.binding_id: b for b in bindings}
         selected = [r for r in getattr(state, 'binding_intents', [])
@@ -159,13 +170,13 @@ async def run_status(args, output, root):
             item = dict(remote.get(binding_id, {}))
             binding = known.get(binding_id)
             failure_state = ('STATUS_UNAVAILABLE' if observed.get('error') in ('NOT_FOUND','VERSION_INCOMPATIBLE') else
-                             'AUTHENTICATION_REQUIRED' if observed.get('error') in ('AUTH_FAILED','AGENT_AUTH_REQUIRED','PERMISSION_DENIED') else 'SERVER_UNREACHABLE')
+                             'AUTHENTICATION_REQUIRED' if observed.get('error') in ('AUTH_FAILED','AGENT_AUTH_REQUIRED','PERMISSION_DENIED','APPROVAL_REQUIRED') else 'SERVER_UNREACHABLE')
             actual = item.get('status', 'NOT_FOUND' if not observed.get('error') else failure_state)
             if identity.revoked:
                 actual = 'REVOKED'
             elif actual not in ('REVOKED','DISABLED','REJECTED','EXPIRED','AWAITING_APPROVAL'):
-                if not current.running:
-                    actual = 'DAEMON_STOPPED'
+                if not current.ipc_ok:
+                    actual = observed_daemon
                 elif control.get('error_code'):
                     actual = 'CONNECTION_ERROR'
                 elif binding_id in control.get('execution_errors', {}):
@@ -197,16 +208,18 @@ async def run_status(args, output, root):
                       for b in bindings],
             pending_requests=pending,
             action=action))
-    result = dict(daemon={'running': current.running, 'pid': current.pid, 'ipc_error': ipc_error},
+    result = dict(daemon={**current.to_json(), 'ipc_error': ipc_error},
                   servers=servers, agents=agents, connections=connections,
                   logs=str(root / 'logs' / 'daemon.log'))
     if not output.json_mode and not output.verbose:
         render_status(redact_mapping(result), output)
-        return None
+        return None if current.state in {'ready', 'stopped'} else EXIT_UNAVAILABLE
     if not output.json_mode:
         output.heading('Connector status - details')
-        output.line(f"Daemon: {'running' if current.running else 'stopped'}" +
+        output.line(f"Daemon: {current.state}" +
                     (f' (PID {current.pid})' if current.pid else ''))
+        if current.next_action:
+            output.line(f'Next: {current.next_action}')
         if ipc_error:
             output.line(f'IPC error: {ipc_error}')
         for server in servers:
@@ -240,31 +253,33 @@ async def run_status(args, output, root):
                 output.line(f"  Error: {connection['error']}")
         output.line(f"Logs: {result['logs']}")
         output.line('JSON: status --json | Live logs: logs --follow | Diagnostics: doctor --probe')
-        return None
+        return None if current.state in {'ready', 'stopped'} else EXIT_UNAVAILABLE
     return redact_mapping(result)
 
 
 async def run_logs(args, output, root):
     path = root / 'logs' / 'daemon.log'
-    offset, file_id = 0, None
-    first = True
+    cursor, last_status = None, None
     while True:
         lines = []
         try:
-            with path.open('r', encoding='utf-8', errors='replace') as stream:
-                stat = path.stat()
-                identity = (stat.st_dev, stat.st_ino)
-                if first:
-                    lines = list(deque(stream, maxlen=args.tail))
-                else:
-                    if identity != file_id or stat.st_size < offset:
-                        offset = 0
-                    stream.seek(offset)
-                    lines = list(deque(stream, maxlen=args.tail))
-                offset, file_id = stream.tell(), identity
+            lines, cursor, observed = read_log(path, args.tail, cursor)
         except FileNotFoundError:
-            if first:
-                output.line('No daemon log yet. Start or restart the updated daemon to enable logging.')
+            observed = {'state': 'missing', 'work_state': 'not_checked'}
+        except OSError as error:
+            if not args.follow:
+                raise ConnectorError('LOG_UNAVAILABLE', 'logs',
+                    'The daemon log is inaccessible; work state is unknown.',
+                    action='Check access to the selected log file.') from error
+            observed = {'state': 'unavailable', 'code': 'LOG_UNAVAILABLE', 'work_state': 'not_checked'}
+        if observed != last_status:
+            if output.json_mode:
+                output.stream_record({'type': 'daemon_log_status', **observed})
+            elif observed['state'] != 'available':
+                output.line(f"Daemon log: {observed['state']}; work state is unknown.")
+            elif observed['truncated']:
+                output.line('Daemon log: bounded view; some records were omitted.')
+            last_status = observed
         for line in lines:
             if args.errors and not any(f' {level} ' in line for level in ('WARNING', 'ERROR', 'CRITICAL')):
                 continue
@@ -276,5 +291,4 @@ async def run_logs(args, output, root):
         output.stream.flush()
         if not args.follow:
             return None
-        first = False
         await asyncio.sleep(1)

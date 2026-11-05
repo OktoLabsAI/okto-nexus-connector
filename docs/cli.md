@@ -48,7 +48,11 @@ Default output groups related information and uses readable tables for status, d
 
 Color is automatic on compatible interactive terminals, including Windows terminals with virtual terminal support. Redirected output and pipes contain no color codes. Set `NO_COLOR` (even an empty value) or `TERM=dumb` to disable color. Tables use ASCII separators and wrap long values; narrow terminals use labeled rows. Status words always convey meaning without color. No additional terminal library is required.
 
-JSON status contains `connections` and is useful for automation. Exit code 0 indicates the command completed, not necessarily that every connection is online; inspect result/status fields. Exit codes: 1 application error, 2 usage/interruption, 3 daemon/executor unavailable, 4 uncertain outcome. Streaming JSON output uses one record per line where supported.
+JSON status contains `connections` and is useful for automation. Exit code 0 indicates the command completed, not necessarily that every connection is online; inspect result/status fields. Exit codes: 1 application error, 2 usage/interruption, 3 daemon/executor unavailable or inaccessible state/log, 4 uncertain outcome. `status` returns 3 when the local lifecycle is neither confirmed ready nor stopped, in human and JSON modes. Streaming JSON output uses one record per line where supported.
+
+`status`, `logs` and default `doctor` observe the selected instance without creating its state directory, lock, vault or daemon. `status` may read existing credentials to query the configured Server; it honors recorded vault consent. `doctor --probe` explicitly enables Server and selected-binary checks, and also honors that consent. An unknown/starting/degraded daemon stays distinct from a confirmed stopped daemon; unavailable IPC or logs do not prove absence of work.
+
+`logs` reads at most the newest 256 KiB per poll and emits only complete records up to 16 KiB. The JSON Lines stream includes `daemon_log_status` records for availability, rotation and truncation, alongside `daemon_log` records. Missing logs are a successful observation; inaccessible logs return 3 without `--follow`. A follower reports the access failure and continues observing. Byte limits, oversized records or slow readers can omit records; rotation backups remain available for separate inspection. Ctrl+C ends observation without stopping the daemon.
 
 ## Import and maintain identity
 

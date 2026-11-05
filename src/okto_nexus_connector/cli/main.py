@@ -426,6 +426,8 @@ def main(argv: list[str] | None = None) -> int:
         output.result(result)
     if args.command == 'daemon' and args.subcommand == 'status':
         return EXIT_OK if result.get('state') in {'ready', 'stopped'} else EXIT_UNAVAILABLE
+    if args.command == 'status':
+        return EXIT_OK if result['daemon']['state'] in {'ready', 'stopped'} else EXIT_UNAVAILABLE
     if args.command == 'daemon' and args.subcommand == 'stop' and not result.get('stopped'):
         return EXIT_OK if result.get('state') == 'stopped' and not result.get('was_running') else EXIT_UNKNOWN_OUTCOME
     if args.command == 'daemon' and args.subcommand == 'restart' and result.get('state') != 'ready':

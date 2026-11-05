@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import platform
 import sys
-import time
 from pathlib import Path
 
 from ... import __version__
@@ -18,6 +17,7 @@ from ...daemon import manager
 from ...errors import ConnectorError
 from ...identity.vault import open_vault, vault_backend_names
 from ...platform import paths
+from ...redaction import redact_mapping
 from ...services.discovery_service import discover_inventory
 from ...storage.state_store import StateStore
 from ...transport.https_client import NexusHTTPClient
@@ -44,7 +44,7 @@ async def run_doctor(args, output: Output, root: Path):
     check("environment", "state-dir",
           "ok" if state_dir_ok else "fail", str(root),
           "" if state_dir_ok else
-          f"create {root} or set OKTO_NEXUS_CONNECTOR_STATE")
+          "not initialized; run 'connect' when ready to configure this instance")
 
     # core
     try:
@@ -72,7 +72,7 @@ async def run_doctor(args, output: Output, root: Path):
     # state & vault
     store = StateStore(paths.state_file(root))
     try:
-        state = store.load()
+        state = store.read_snapshot()
         check("state", "schema", "ok", f"v{state.schema_version}")
         check("state", "connector_id", "ok" if state.connector_id else
               "unknown", state.connector_id or "not initialized yet")
@@ -92,14 +92,22 @@ async def run_doctor(args, output: Output, root: Path):
               "approve the restricted-file fallback during 'identity add' "
               "or install an OS keyring backend")
     try:
-        vault = open_vault(paths.vault_dir(root),
+        vault = open_vault(root / 'vault',
                            approved_fallback=bool(state and
                            state.preferences.get("vault.fallback_file."
                                                  "approved", False)))
-        check("vault", "namespaces", "ok",
-              str(len(vault.list_namespaces())))
+        # Keyrings cannot enumerate namespaces; their empty list proves nothing
+        # about credential availability. File enumeration does not unlock keys.
+        if vault.backend_name() == 'restricted-file':
+            check("vault", "namespaces", "ok" if (root / 'vault' / 'secrets.json').is_file() else "unknown",
+                  str(len(vault.list_namespaces())))
+        else:
+            check("vault", "namespaces", "unknown", "OS keyring enumeration unavailable")
     except ConnectorError as error:
         check("vault", "status", "fail", error.message, error.action or "")
+    except (OSError, ValueError, TypeError) as error:
+        check("vault", "status", "fail", type(error).__name__,
+              "inspect access and format of the existing vault; no changes were made")
 
     # identities & servers
     if state is not None:
@@ -189,10 +197,12 @@ async def run_doctor(args, output: Output, root: Path):
 
     # daemon & transports
     current = manager.status(root)
-    check("daemon", "process", "ok" if current.running else "warn",
-          f"pid {current.pid}" if current.pid else "not running",
-          "" if current.running else "run 'daemon start'")
-    if current.running:
+    check("daemon", "process", "ok" if current.ipc_ok else "warn",
+          current.state + (f"; pid {current.pid}" if current.pid else '') +
+          (f"; {current.reason}" if current.reason else ''),
+          current.next_action or ("run 'daemon start'" if current.state == 'stopped' else
+          "" if current.ipc_ok else "inspect daemon status and logs; ownership or readiness is unconfirmed"))
+    if current.ipc_ok:
         try:
             client = manager.connect(root)
             try:
@@ -216,7 +226,7 @@ async def run_doctor(args, output: Output, root: Path):
         except (ConnectorError, OSError) as exc:
             check("daemon", "ipc", "fail", str(exc))
     else:
-        check("transport", "status", "unknown", "daemon not running")
+        check("transport", "status", "unknown", f"daemon {current.state}; transport not observed")
 
     passed = sum(1 for c in checks if c["status"] == "ok")
     failed = sum(1 for c in checks if c["status"] == "fail")
@@ -226,7 +236,7 @@ async def run_doctor(args, output: Output, root: Path):
         "ok": passed, "warn": warned, "fail": failed, "unsupported": unsupported,
         "version": __version__}}
     output.line(f"doctor: {passed} ok, {warned} warn, {failed} fail, {unsupported} unsupported")
-    return summary
+    return redact_mapping(summary)
 
 
 async def _probe_server(record, state, root):
@@ -235,11 +245,13 @@ async def _probe_server(record, state, root):
     if identity is None:
         return "warn", "no imported identity", "run 'identity add'"
     try:
-        vault = open_vault(paths.vault_dir(root),
-                           approved_fallback=True)
+        vault = open_vault(root / 'vault', approved_fallback=bool(
+            state.preferences.get('vault.fallback_file.approved', False)))
         key = vault.resolve(identity.secret_handle)
     except ConnectorError as error:
         return "warn", f"vault: {error.message}", error.action or ""
+    except (OSError, ValueError, TypeError):
+        return 'warn', 'vault: existing credential is inaccessible or invalid', 'inspect the selected vault'
     try:
         async with NexusHTTPClient(record.base_url) as http:
             me = await http.me(key)

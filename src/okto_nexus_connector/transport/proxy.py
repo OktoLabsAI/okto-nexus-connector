@@ -48,7 +48,7 @@ def load_policy(root: Path | None = None) -> dict:
     selected = root or _root.get()
     if selected is None or not (selected / 'state.json').exists():
         return {}
-    policy = StateStore(selected / 'state.json').load().preferences.get(KEY, {})
+    policy = StateStore(selected / 'state.json').read_snapshot().preferences.get(KEY, {})
     if not isinstance(policy, dict):
         raise ConnectorError('PROXY_CONFIGURATION_INVALID', 'proxy', 'Invalid proxy configuration.')
     return policy
