@@ -26,6 +26,7 @@ from .identity import _vault
 from .connection_config import apply_configuration
 from .binding_conflicts import resolve_conflict
 from .workspace_selection import select_workspace
+from . import configure_startup
 
 
 async def ipc(root,method,body=None):
@@ -48,6 +49,22 @@ def local_directory(label,provided,default='',optional=False):
             raise ConnectorError('WORKSPACE_UNAVAILABLE','configure',f'{label} must be an existing absolute directory.')
         default=''
         print('Use an existing absolute directory.')
+
+
+def check_saved_choices(args, saved):
+    configuration = saved['configuration']
+    selected = dict(candidate_ref=saved['candidate_ref'], workspace_id=saved['workspace_id'],
+        binding_id=saved['replace_binding_id'], workspace_label=configuration['workspace_label'],
+        harness=configuration['adapter_id'])
+    conflict = any(getattr(args, key, None) not in (None, '', value) for key, value in selected.items())
+    for key, field in (('project', 'workspace_root'), ('provider_home', 'provider_home')):
+        value = getattr(args, key, None)
+        if value and (not configuration[field] or Path(value).expanduser().resolve() != Path(configuration[field]).resolve()):
+            conflict = True
+    if conflict:
+        raise ConnectorError('OPERATION_CONFLICT', 'configure',
+            'Explicit choices conflict with this confirmed configuration request.',
+            action='Resume with the original identity, installation and project choices.')
 
 
 async def configure_local(args,output,root,store,identity,server,portable):
@@ -92,16 +109,24 @@ async def configure_local(args,output,root,store,identity,server,portable):
                      ('Installation', selected), ('Nexus workspace', f"{label} ({args.workspace_id or 'new'})"),
                      ('Local folder', project), ('Login directory', home or 'Harness default')])
         output.line('An authenticated operator reviews this connection on their own Nexus terminal. Setup continues automatically after approval.')
+        startup = configure_startup.choose(args, output, root, choice)
         if not choice('7. Finish local setup and submit this connection?',[(True,'Finish'),(False,'Cancel')],False):
             return {'saved':False,'canceled':True}
         saved=dict(configuration=configuration,candidate_ref=selected,inventory_revision=calculate_inventory_revision(candidates),
             stage='register',identity=args.identity,host_label=socket.gethostname(),workspace_id=args.workspace_id,
             replace_binding_id=args.binding_id,conflict_checked=True)
+        if startup:
+            saved.update(login_start_plan=startup,
+                login_start_operation=dict(state='pending', plan_revision=startup['plan_revision']))
         store.update(lambda s:s.preferences.update({storage_key:saved}))
     elif saved['identity']!=args.identity:
         raise ConnectorError('OPERATION_CONFLICT','configure','Resume with the original identity.')
+    else:
+        check_saved_choices(args, saved)
     output.line('Request ID: '+args.request_id)
-    if saved['stage']=='done':return saved['result']
+    await configure_startup.resume(args, root, saved,
+        lambda: store.update(lambda s: s.preferences.update({storage_key: saved})))
+    if saved['stage']=='done':return await configure_startup.result(root, saved, saved['result'])
     c=saved['configuration']
     vault=_vault(root,store)
     def checkpoint(stage,**values):
@@ -181,19 +206,19 @@ async def configure_local(args,output,root,store,identity,server,portable):
             for approval_id in proofs:
                 output.line('Operator approval ID: ' + approval_id)
                 output.line('On the operator client: okto-nexus operator approval ' + approval_id + ' --profile OPERATOR_PROFILE')
-            return dict(saved=False,status='awaiting_operator_approval',request_id=args.request_id,
+            return await configure_startup.result(root, saved, dict(saved=False,status='awaiting_operator_approval',request_id=args.request_id,
                 required_approvals=proposal['required_approvals'],background=True,
                 operator_review=dict(server_id=identity.server_id, approval_ids=proofs,
                     command='okto-nexus operator approval APPROVAL_ID --profile OPERATOR_PROFILE',
                     credential_location='operator_client'),
-                message='The operator can review and decide this request from their authenticated Nexus terminal. Keep operator credentials on that client.')
+                message='The operator can review and decide this request from their authenticated Nexus terminal. Keep operator credentials on that client.'))
         checkpoint('policies',binding=applied['binding'])
     if saved.get('single_approval'):
         checkpoint('done', result=dict(saved=True, request_id=args.request_id,
             connection_name=c['alias'], binding=saved['binding'], runtime_started=False))
         await ipc(root,'state.reload')
         output.line('Connection approved and configured. The daemon will attach it automatically.')
-        return saved['result']
+        return await configure_startup.result(root, saved, saved['result'])
     operator=args.operator_identity
     if not operator:
         aliases=[i for i in store.load().identities if i.server_id==identity.server_id and not i.revoked]
@@ -213,4 +238,4 @@ async def configure_local(args,output,root,store,identity,server,portable):
     checkpoint('done',result={**result,'request_id':args.request_id,'connection_name':c['alias'],'runtime_started':False})
     await ipc(root,'state.reload')
     output.line('Connection configured. Start it with: okto-nexus-connector runtime start '+c['alias'])
-    return saved['result']
+    return await configure_startup.result(root, saved, saved['result'])

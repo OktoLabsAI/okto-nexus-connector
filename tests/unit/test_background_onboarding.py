@@ -44,6 +44,20 @@ async def test_background_continues_after_cli_exit_and_does_not_apply_twice(pend
     assert calls[1]['operator_proof_ref'] == 'apr_test'
 
 
+async def test_operator_completion_preserves_independent_local_startup_checkpoint(pending):
+    store, state, record, _, gate = pending
+    key = 'configure.server.agent.configure_test'
+    startup = dict(state='done', plan_revision='local-review-revision')
+    state.preferences[key] = dict(stage='apply', single_approval=True, proposal=record.proposal,
+        login_start_operation=startup, login_start_plan={'scope': {'root': 'local-only'}})
+    gate['error'] = None
+    await background.continue_pending_bindings(store, None, server_id='server', executor_id='host')
+    saved = state.preferences[key]
+    assert saved['stage'] == 'done' and saved['result']['saved']
+    assert saved['login_start_operation'] == startup
+    assert saved['login_start_plan']['scope']['root'] == 'local-only'
+
+
 @pytest.mark.parametrize('code', ['PERMISSION_DENIED', 'CONFLICT', 'PROFILE_DRIFT'])
 async def test_rejection_expiry_and_drift_stop_background_retries(pending, code):
     store, state, _, calls, gate = pending

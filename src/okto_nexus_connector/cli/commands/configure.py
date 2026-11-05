@@ -74,6 +74,10 @@ async def _run_configure(args, output, root):
     if args.non_interactive or args.json:
         raise ConnectorError('VALIDATION_ERROR','configure','configure is an interactive terminal wizard.',
             action='Use connection-config apply with --file and explicit destination flags for automation.')
+    if args.host == 'server' and getattr(args, 'start_at_login', None):
+        raise ConnectorError('REMOTE_STARTUP_NOT_LOCAL', 'configure',
+            'This startup choice applies to the local Connector host.',
+            action='Review Server login startup on its own host with okto-nexus connect --start-at-login.')
     portable=parse_portable_connection_configuration(read_configuration_file(args.file)) if args.file else template()
     output.heading('Nexus connection setup')
     output.line('Ctrl+C cancels. Enter - to clear an optional default.')

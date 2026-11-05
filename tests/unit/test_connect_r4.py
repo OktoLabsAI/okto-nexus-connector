@@ -12,7 +12,7 @@ from okto_nexus_connector.errors import ConnectorError
 @pytest.mark.parametrize('resume', [False, True])
 async def test_connect_uses_canonical_r4_wizard(monkeypatch, tmp_path, resume):
     args = build_parser().parse_args(['connect','--server','http://nexus.test:8202','--agent','claude-coder',
-        '--project',str(tmp_path),'--request-id','resume-me'])
+        '--project',str(tmp_path),'--request-id','resume-me','--start-at-login'])
     identity = NS(alias='claude-coder',server_id='server',agent_id='claude-coder')
     state = NS(preferences={'vault.fallback_file.approved':True})
     if resume:
@@ -40,6 +40,7 @@ async def test_connect_uses_canonical_r4_wizard(monkeypatch, tmp_path, resume):
         assert actual_store is store and actual_identity is identity
         assert wizard_args.identity=='claude-coder' and wizard_args.request_id=='resume-me'
         assert wizard_args.project==str(tmp_path)
+        assert wizard_args.start_at_login is True
         assert server=='http://nexus.test:8202'
         if not resume:
             assert wizard_args.candidate_ref=='install-ref'
@@ -50,8 +51,9 @@ async def test_connect_uses_canonical_r4_wizard(monkeypatch, tmp_path, resume):
     assert result['status']=='awaiting_operator_approval'
 
 
-async def test_noninteractive_connect_fails_before_credentials_or_writes(monkeypatch,tmp_path):
-    args=build_parser().parse_args(['--non-interactive','connect','--server','http://nexus.test'])
+@pytest.mark.parametrize('mode', ['--non-interactive', '--json'])
+async def test_noninteractive_connect_fails_before_credentials_or_writes(monkeypatch,tmp_path,mode):
+    args=build_parser().parse_args([mode,'connect','--server','http://nexus.test'])
     monkeypatch.setattr(connect,'_read_key',lambda *a:pytest.fail('unexpected credential access'))
     with pytest.raises(ConnectorError,match='interactive R4'):
         await connect.run_connect(args,Output(json_mode=False),tmp_path)

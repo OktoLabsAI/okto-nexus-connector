@@ -25,7 +25,7 @@ okto-nexus-connector configure --identity assistant --file connection.json
 3. Select the exact installation on this machine.
 4. Select an existing Nexus workspace (including one used by another remote harness), or choose **Create new workspace**. Then enter an existing absolute folder on this machine and optional provider login directory. Enter `-` to clear an optional default.
 5. Select harness preferences, session policy, Nexus tool access and requested execution limits.
-6. Review and Finish. The CLI registers the host, checks the installation, starts the daemon, publishes the workspace and submits the binding proposal.
+6. Review and Finish. On Windows, optionally include startup at user login. The CLI records the confirmed choices, applies any selected local startup transition, registers the host, checks the installation, starts/reuses the daemon, publishes the workspace and submits the binding proposal.
 7. The authenticated operator reviews the printed approval ID in their Nexus terminal. For current requests, one approval covers the displayed configuration and limits. The daemon applies it and attaches in the background; no operator key or second approval is needed on this computer.
 
 Cancel before Finish to avoid submitting the binding. An identity explicitly imported earlier remains stored. Replacement preserves identity, harness and workspace; close active sessions first. The previous binding stays unchanged until replacement succeeds.
@@ -35,6 +35,50 @@ The workspace is the shared logical identity in Nexus; its folder belongs to thi
 Listing existing workspaces requires `workspaces.list` permission (or operator access). When listing is unavailable, the wizard offers an explicit choice to enter a known workspace ID or create a new workspace. `--workspace-id ID` selects it directly. Connection approval is still required; selecting a workspace does not grant execution access. Resuming a saved request preserves its workspace selection.
 
 The terminal can close after submission, but the daemon must remain running. `awaiting_inventory` means submission has not reached approval yet. `saved: true` means configuration was applied, not that a model-response test passed. Verify `status` and send a message in Meta-harness.
+
+## Optional startup at user login
+
+On Windows, `connect` and Connector-hosted `configure` offer this choice in the
+initial review. `--start-at-login` preselects it; `--no-start-at-login` keeps the
+current service mode. The final confirmation still reviews the user, instance,
+state directory, interpreter, working directory and concrete effects. Canceling
+before Finish changes no user task. Declining startup leaves on-demand use available
+and does not disable an existing task.
+
+These wizards require interactive, human-readable output. `connect` and `configure`
+reject `--json` or `--non-interactive` before accessing credentials; use the
+explicit automation commands for scripts.
+
+```sh
+okto-nexus-connector configure --identity assistant --start-at-login
+```
+
+After the local confirmation is saved, the existing installer drains the selected
+Connector, registers its user logon task and starts it through Task Scheduler.
+An already enabled task is reused; a disabled task requires the displayed enable
+effect. Active work can delay the drain; no forced termination is used. This
+local host choice applies even while the separate Nexus operator approval is
+pending. It does not authorize agent execution or submit a model turn.
+
+The original request retains a separate startup checkpoint. After a timeout or
+uncertain reply, resume with `configure --identity assistant --request-id ID`.
+It recovers the same installation before onboarding continues, without creating a
+second task or replacing a pending binding intent. Unknown native registration
+requires inspection through the existing service controls; the CLI does not
+adopt an unconfirmed task or fall back to a detached daemon. Conflicting project,
+installation or startup choices are refused before this recovery.
+
+After a completed transition, reconnect preserves a task that the user later
+disables or removes. Use `service enable`, `service disable` or `service uninstall`
+explicitly to change it. Startup status reports the current integration separately
+from the completed request. Startup settings remain local and are excluded from
+portable connection JSON and from the proposal sent to Nexus.
+
+This uses the current user's Windows logon task, without elevation or an OS
+service account. It does not promise availability before login or after logout.
+Actual login/logout/crash qualification remains pending. POSIX integration through this wizard
+is not qualified. `configure --host server --start-at-login` is refused: review
+Server startup on that host with `okto-nexus connect --start-at-login`.
 
 ## Resume
 

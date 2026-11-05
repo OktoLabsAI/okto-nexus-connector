@@ -152,6 +152,7 @@ usage: okto-nexus-connector configure [-h] [--file FILE] [--identity IDENTITY]
                                       [--request-id REQUEST_ID]
                                       [--operator-identity OPERATOR_IDENTITY]
                                       [--operator-proof-ref OPERATOR_PROOF_REF]
+                                      [--start-at-login | --no-start-at-login]
                                       [--json] [--verbose]
 
 options:
@@ -185,6 +186,10 @@ options:
                         after binding approval
   --operator-proof-ref OPERATOR_PROOF_REF
                         operator approval reference from the binding proposal
+  --start-at-login      include this Connector user logon task in the
+                        connection review
+  --no-start-at-login   keep the current service mode; existing tasks are
+                        preserved
   --json                machine-readable JSON output
   --verbose             include technical details
 ```
@@ -207,6 +212,7 @@ usage: okto-nexus-connector connect [-h] --server SERVER [--agent AGENT]
                                     [--request-id REQUEST_ID]
                                     [--operator-identity OPERATOR_IDENTITY]
                                     [--operator-proof-ref OPERATOR_PROOF_REF]
+                                    [--start-at-login | --no-start-at-login]
                                     [--json] [--verbose]
 
 options:
@@ -239,6 +245,10 @@ options:
                         imported operator identity for Nexus configuration
   --operator-proof-ref OPERATOR_PROOF_REF
                         operator approval reference from Nexus
+  --start-at-login      include this Connector user logon task in the
+                        connection review
+  --no-start-at-login   keep the current service mode; existing tasks are
+                        preserved
   --json                machine-readable JSON output
   --verbose             include technical details
 ```

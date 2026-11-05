@@ -9,7 +9,6 @@ explicit intent to open a runtime; connecting alone never spawns one
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from ...errors import ConnectorError
@@ -54,7 +53,7 @@ def _read_key(args, output: Output) -> str:
 
 
 async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
-    if args.non_interactive:
+    if args.non_interactive or getattr(args, 'json', False):
         raise ConnectorError('VALIDATION_ERROR', 'connect',
             'connect is an interactive R4 connection wizard.',
             action='Use connection-config apply with explicit parameters for automation.')
@@ -64,7 +63,6 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
     import os as _os
     forced_file = _os.environ.get(
         "OKTO_NEXUS_CONNECTOR_VAULT", "").strip().lower() == "file"
-    from ...identity.vault import vault_backend_names
     # CN1/A14: --non-interactive NEVER prompts. An unapproved vault
     # fallback in headless mode is a prescriptive error, not an implicit
     # approval (test_19: no confirm call with non_interactive=False).
@@ -120,6 +118,7 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
         candidate_ref = effective_installation_ref(candidate)
         portable.update(adapter_id=adapter_id, alias=args.binding_alias or _binding_alias(adapter_id))
     wizard = SimpleNamespace(identity=identity.alias, agent=args.agent, request_id=request_id,
+        start_at_login=getattr(args, 'start_at_login', None),
         candidate_ref=candidate_ref, project=str(args.project.resolve()) if args.project else None,
         workspace_label=None, provider_home=getattr(args, 'provider_home', None),
         workspace_id=None, binding_id=None,

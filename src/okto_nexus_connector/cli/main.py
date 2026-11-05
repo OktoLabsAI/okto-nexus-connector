@@ -128,6 +128,13 @@ def build_parser() -> argparse.ArgumentParser:
     connect.add_argument('--operator-identity', help='imported operator identity for Nexus configuration')
     connect.add_argument('--operator-proof-ref', help='operator approval reference from Nexus')
 
+    for wizard in (configure, connect):
+        startup = wizard.add_mutually_exclusive_group()
+        startup.add_argument('--start-at-login', dest='start_at_login', action='store_true', default=None,
+            help='include this Connector user logon task in the connection review')
+        startup.add_argument('--no-start-at-login', dest='start_at_login', action='store_false',
+            help='keep the current service mode; existing tasks are preserved')
+
     identity = sub.add_parser("identity", help="imported identity management")
     identity_sub = identity.add_subparsers(dest="subcommand", required=True)
     add = identity_sub.add_parser("add", help="import a canonical key")
