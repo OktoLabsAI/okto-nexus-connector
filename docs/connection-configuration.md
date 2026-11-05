@@ -26,7 +26,7 @@ okto-nexus-connector configure --identity assistant --file connection.json
 4. Select an existing Nexus workspace (including one used by another remote harness), or choose **Create new workspace**. Then enter an existing absolute folder on this machine and optional provider login directory. Enter `-` to clear an optional default.
 5. Select harness preferences, session policy, Nexus tool access and requested execution limits.
 6. Review and Finish. The CLI registers the host, checks the installation, starts the daemon, publishes the workspace and submits the binding proposal.
-7. Approve in Nexus. For current requests, one approval covers the displayed configuration and limits. The daemon applies it and attaches in the background; no operator key or second approval is needed on this computer.
+7. The authenticated operator reviews the printed approval ID in their Nexus terminal. For current requests, one approval covers the displayed configuration and limits. The daemon applies it and attaches in the background; no operator key or second approval is needed on this computer.
 
 Cancel before Finish to avoid submitting the binding. An identity explicitly imported earlier remains stored. Replacement preserves identity, harness and workspace; close active sessions first. The previous binding stays unchanged until replacement succeeds.
 
@@ -37,6 +37,32 @@ Listing existing workspaces requires `workspaces.list` permission (or operator a
 The terminal can close after submission, but the daemon must remain running. `awaiting_inventory` means submission has not reached approval yet. `saved: true` means configuration was applied, not that a model-response test passed. Verify `status` and send a message in Meta-harness.
 
 ## Resume
+
+### Operator decision from another terminal
+
+The pending response preserves the original `request_id` and `required_approvals`,
+and supplies `operator_review` with the Server ID and approval IDs. On the
+operator's client, using Nexus `0.3.3` with binding proposal reviews:
+
+```sh
+okto-nexus operator login --profile team --server https://nexus.example --username human
+okto-nexus operator approval APPROVAL_ID --profile team
+okto-nexus operator approval APPROVAL_ID --profile team --decision approve
+```
+
+The last command presents the scope and asks for confirmation. Use `--decision
+reject` to refuse. For scripts, retrieve `--json` first, then pass its
+`review_revision` as `--confirm REVISION`. Keep the operator session on that
+client; the Connector continues with its existing participant key. A local
+participant confirmation cannot approve the request. The dashboard remains an
+optional interface to the same canonical decision.
+
+After a lost reply, inspect the same approval ID. The operator command recovers a
+matching committed decision; the background Connector applies the original
+binding intent. Neither path creates a replacement proposal to hide uncertainty.
+Approval does not submit project work or prove that a provider is ready.
+
+### Resume the Connector request
 
 Keep the printed request ID. After resolving an error, resume that request:
 

@@ -91,7 +91,7 @@ async def configure_local(args,output,root,store,identity,server,portable):
         output.table(['Setting', 'Value'], [('Agent', identity.agent_id), ('Server', server),
                      ('Installation', selected), ('Nexus workspace', f"{label} ({args.workspace_id or 'new'})"),
                      ('Local folder', project), ('Login directory', home or 'Harness default')])
-        output.line('Approve this connection and its requested execution limits once in Nexus. Setup will continue automatically.')
+        output.line('An authenticated operator reviews this connection on their own Nexus terminal. Setup continues automatically after approval.')
         if not choice('7. Finish local setup and submit this connection?',[(True,'Finish'),(False,'Cancel')],False):
             return {'saved':False,'canceled':True}
         saved=dict(configuration=configuration,candidate_ref=selected,inventory_revision=calculate_inventory_revision(candidates),
@@ -177,10 +177,16 @@ async def configure_local(args,output,root,store,identity,server,portable):
         except ConnectorError as exc:
             if exc.code != 'APPROVAL_REQUIRED':
                 raise
-            output.line('Request submitted. Approve it in Nexus; the daemon will complete the connection in the background. You can close this terminal.')
+            output.line('Request submitted. The daemon will complete the connection after the operator decides. You can close this terminal.')
+            for approval_id in proofs:
+                output.line('Operator approval ID: ' + approval_id)
+                output.line('On the operator client: okto-nexus operator approval ' + approval_id + ' --profile OPERATOR_PROFILE')
             return dict(saved=False,status='awaiting_operator_approval',request_id=args.request_id,
                 required_approvals=proposal['required_approvals'],background=True,
-                message='The daemon will complete this connection automatically after approval in Nexus.')
+                operator_review=dict(server_id=identity.server_id, approval_ids=proofs,
+                    command='okto-nexus operator approval APPROVAL_ID --profile OPERATOR_PROFILE',
+                    credential_location='operator_client'),
+                message='The operator can review and decide this request from their authenticated Nexus terminal. Keep operator credentials on that client.')
         checkpoint('policies',binding=applied['binding'])
     if saved.get('single_approval'):
         checkpoint('done', result=dict(saved=True, request_id=args.request_id,

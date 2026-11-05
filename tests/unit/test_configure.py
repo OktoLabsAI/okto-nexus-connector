@@ -135,6 +135,9 @@ async def test_local_wizard_resumes_approval_without_recreating_connection(local
     result=await local.configure_local(args,output,root,store,identity,'http://127.0.0.1:8202',portable)
     assert result['status']=='awaiting_operator_approval'
     assert result['background'] is True
+    assert result['operator_review']['approval_ids'] == ['apr_test']
+    assert result['operator_review']['credential_location'] == 'operator_client'
+    assert 'okto-nexus operator approval apr_test --profile OPERATOR_PROFILE' in output.stream.getvalue()
     assert 'finish' not in calls
     gate['approved']=True
     result=await local.configure_local(args,output,root,store,identity,'http://127.0.0.1:8202',portable)
