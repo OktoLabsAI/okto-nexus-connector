@@ -256,8 +256,6 @@ class EventBridge:
                 if len(batch) < self._MAX_INFLIGHT_PER_STREAM:
                     break
 
-        loop.call_later(self._ACK_RETRY_SECONDS, wake.set)
-
     async def drain(self) -> None:
         """CN5-04.03: drain closes the BRIDGE (its own lifecycle): the
         timers are cancelled, `_closed` forbids resurrection, and only
