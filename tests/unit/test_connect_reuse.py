@@ -79,6 +79,16 @@ async def test_bare_connect_reuses_project_and_current_authority_without_rewrite
     assert 'synthetic-canonical-key' not in r.output.stream.getvalue()
 
 
+async def test_customization_cannot_rewrite_retained_project_by_reconnect(retained):
+    r = retained
+    r.args.customize = True
+    before = r.store.path.read_bytes()
+    with pytest.raises(ConnectorError) as error:
+        await run(r)
+    assert error.value.code == 'OPERATION_CONFLICT'
+    assert not r.calls and r.store.path.read_bytes() == before
+
+
 @pytest.mark.parametrize('option,value', [('identity', 'selected'), ('alias', 'selected'), ('agent', 'agent')])
 async def test_explicit_saved_identity_reuses_vault(retained, option, value):
     r = retained

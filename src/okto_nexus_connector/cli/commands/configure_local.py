@@ -74,7 +74,11 @@ async def configure_local(args,output,root,store,identity,server,portable):
     storage_key=f'configure.{identity.server_id}.{identity.agent_id}.{args.request_id}'
     saved=store.load().preferences.get(storage_key)
     if saved is None:
-        portable['alias']=text('Connection name',portable['alias'] or identity.agent_id+'-'+portable['adapter_id'],required=True)
+        preset_flow = getattr(args, 'project_preset_flow', False)
+        customize = not preset_flow or getattr(args, 'customize', False)
+        portable['alias'] = portable['alias'] or identity.agent_id+'-'+portable['adapter_id']
+        if customize:
+            portable['alias']=text('Connection name',portable['alias'],required=True)
         conflict=resolve_conflict(store,identity,portable | {'workspace_root': args.project},output,
             request_id=args.request_id,binding_id=args.binding_id)
         if conflict.get('canceled'):return {'saved':False,'canceled':True}
@@ -86,6 +90,10 @@ async def configure_local(args,output,root,store,identity,server,portable):
         discovery=records[0].discovery_configuration if len(records)==1 else {}
         observations=records[0].installation_observations if len(records)==1 else ()
         candidates=await configured_candidates(discovery,observations=observations)
+        expected_inventory = getattr(args, 'discovery_inventory_revision', None)
+        if expected_inventory and calculate_inventory_revision(candidates) != expected_inventory:
+            raise ConnectorError('STALE_GENERATION', 'configure',
+                'The host inventory changed after selection. Review the current installation before continuing.')
         matches=[c for c in candidates if c.adapter_id==portable['adapter_id']]
         selected=args.candidate_ref or choice('3. Installation on this machine',[
             (effective_installation_ref(c),f'{c.executable}'+(f' — {c.launch_script}' if c.launch_script else '')+f' ({c.version or "version check required"})') for c in matches])
@@ -97,17 +105,37 @@ async def configure_local(args,output,root,store,identity,server,portable):
                 args.workspace_id, args.workspace_label = await select_workspace(
                     args, output, http, key, choice=choice, text=text)
         project=local_directory('Workspace folder on this machine',args.project,str(Path.cwd()))
-        label=args.workspace_label or text('Workspace name',Path(project).name,required=True)
-        home=local_directory('Provider login directory (optional)',args.provider_home,
-            discover_provider_home(portable['adapter_id']) or '',optional=True)
-        output.heading('6. Harness preferences and requested Nexus policies')
-        portable=preferences(portable,discover_harness_configuration(portable['adapter_id']))
+        label=args.workspace_label or (Path(project).name or 'Project' if not customize else
+                                      text('Workspace name',Path(project).name,required=True))
+        default_home = discover_provider_home(portable['adapter_id']) or ''
+        provided_home = args.provider_home if customize or args.provider_home is not None else default_home
+        home=local_directory('Provider login directory (optional)',provided_home,default_home,optional=True)
+        if customize:
+            output.heading('6. Harness preferences and requested Nexus policies')
+            portable=preferences(portable,discover_harness_configuration(portable['adapter_id']))
         configuration=materialize_connection_configuration(portable,execution_location='remote',
             workspace_root=project,workspace_label=label,provider_home=home)
         output.heading('Review connection')
-        output.table(['Setting', 'Value'], [('Agent', identity.agent_id), ('Server', server),
+        for name, value in [('Agent', identity.agent_id), ('Server', server),
                      ('Installation', selected), ('Nexus workspace', f"{label} ({args.workspace_id or 'new'})"),
-                     ('Local folder', project), ('Login directory', home or 'Harness default')])
+                     ('Local folder', project), ('Login directory', home or 'Harness default')]:
+            output.line(name + ': ' + value)
+        if preset_flow:
+            installation = next(c for c in matches if effective_installation_ref(c) == selected)
+            output.line('Executable: ' + installation.executable +
+                        (' + ' + installation.launch_script if installation.launch_script else ''))
+            for name, value in [
+                ('Model', portable['harness_settings'].get('model') or 'Harness default'),
+                ('Harness overrides', str(portable['harness_settings']) if portable['harness_settings'] else 'None; retain harness and project configuration'),
+                ('Conversation context', portable['session_policy'] or 'Global setting'),
+                ('Nexus tool approval', portable['tool_access']),
+                ('Execution authorization',
+                    ('No expiry' if portable['authorization']['no_expiry'] else f"{portable['authorization']['minutes']} minutes")
+                    + ' / ' + ('Unlimited actions' if portable['authorization']['unlimited_actions'] else f"{portable['authorization']['actions']} actions")),
+                ('Automatic replies', str(portable['automatic_reply']))]:
+                output.line(name + ': ' + value)
+            output.line('After confirmation: check installation version/protocol, register this host and submit the binding and execution authorization for operator review. No project task is sent.')
+            output.line('Provider login and session readiness are not yet confirmed. Use connect --customize for optional settings before submitting a new request.')
         output.line('An authenticated operator reviews this connection on their own Nexus terminal. Setup continues automatically after approval.')
         project_preset = None
         if not getattr(args, 'file', None):

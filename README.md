@@ -33,7 +33,7 @@ okto-nexus-connector connect --server http://192.168.0.146:8202 --agent claude-c
 
 Replace the address and agent name with your values. `--agent` is a name/hint, not a credential. The CLI requests the canonical agent key through hidden input. On another computer, `127.0.0.1` means that other computer, not the Nexus server.
 
-4. Select the installation, workspace, login directory and preferences. On Windows, optionally choose startup at user login in the same review, then confirm submission. Keeping the current service mode preserves on-demand use.
+4. Review the current project and recommended installation. Choose an installation only when several match, and select the Nexus workspace when necessary. Defaults preserve harness settings and request 60 minutes/20 actions with Nexus tool approval. Use `--customize` to edit preferences. On Windows, optionally choose startup at user login in the same review, then confirm submission. Version/protocol checks and host registration start after confirmation; keeping the current service mode preserves on-demand use.
 5. Give the printed approval ID to the operator. On their authenticated client, they can run `okto-nexus operator approval APPROVAL_ID --profile NAME --decision approve`. The CLI can exit while the daemon completes setup asynchronously. See [terminal approval](docs/connection-configuration.md#operator-decision-from-another-terminal).
 6. Check the connection, then send a message through Nexus Meta-harness:
 

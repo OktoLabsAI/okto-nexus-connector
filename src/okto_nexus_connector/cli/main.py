@@ -125,6 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
                          help="approve using the provider's own home dir")
     connect.add_argument('--provider-home', help='provider login directory on this computer')
     connect.add_argument('--request-id', help='resume the same R4 onboarding request')
+    connect.add_argument('--customize', action='store_true', help='edit advanced preferences before reviewing a new project connection')
     connect.add_argument('--operator-identity', help='imported operator identity for Nexus configuration')
     connect.add_argument('--operator-proof-ref', help='operator approval reference from Nexus')
 

@@ -210,7 +210,7 @@ usage: okto-nexus-connector connect [-h] [--server SERVER]
                                     [--project PROJECT] [--start]
                                     [--trusted-provider-home]
                                     [--provider-home PROVIDER_HOME]
-                                    [--request-id REQUEST_ID]
+                                    [--request-id REQUEST_ID] [--customize]
                                     [--operator-identity OPERATOR_IDENTITY]
                                     [--operator-proof-ref OPERATOR_PROOF_REF]
                                     [--start-at-login | --no-start-at-login]
@@ -245,6 +245,8 @@ options:
                         provider login directory on this computer
   --request-id REQUEST_ID
                         resume the same R4 onboarding request
+  --customize           edit advanced preferences before reviewing a new
+                        project connection
   --operator-identity OPERATOR_IDENTITY
                         imported operator identity for Nexus configuration
   --operator-proof-ref OPERATOR_PROOF_REF

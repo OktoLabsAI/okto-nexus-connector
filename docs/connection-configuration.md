@@ -18,7 +18,32 @@ okto-nexus-connector configure --identity assistant --file connection.json
 
 `assistant` is the local identity alias. The wizard reuses its stored key. Adding a new identity asks for a server URL and hidden agent key; identity import stores the key before the rest of setup.
 
-## Wizard sequence
+## Project review with connect
+
+Run `connect` in the project directory. A sole discovered installation is proposed
+without a selection question. Several installations require one explicit choice;
+`--harness` filters the inventory and `--executable` selects a matching local path.
+Pi discovery preserves the Node/script pair, including distinct scripts sharing
+one Node binary. Discovery uses this executor's saved roots and observations.
+Paths absent from that inventory require reviewing discovery configuration first.
+
+The current folder, a workspace label, discovered provider directory and project
+defaults appear in the final review with full paths. Existing Nexus workspaces
+still require a deliberate selection; a shared path/name never proves access.
+Defaults leave model and native harness settings unset, use per-sender sessions,
+request Nexus tool approval and limit execution authorization to 60 minutes/20
+actions. Use `connect --customize` to edit optional preferences through the same
+wizard, or `configure` for the full sequence below.
+
+Discovery and selection never run the executable. Version/protocol checks occur
+after Finish through the existing persisted checkpoint. A changed inventory
+requires a fresh review. Discovery does not prove provider login or session
+readiness, and accepting the review does not submit project work. Canceling keeps
+host registration, probes and daemon startup untouched; an identity explicitly
+imported beforehand remains stored. Reconnect retains the original choices and
+does not accept `--customize` as an implicit edit of an already reviewed request.
+
+## Full wizard sequence with configure
 
 1. Select/import an identity, then select a harness.
 2. Choose a connection name. Compatible existing bindings offer **Replace existing binding** or **Abort setup** (default). Pending or incompatible bindings are reported without overwriting them.

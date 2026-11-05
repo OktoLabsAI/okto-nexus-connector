@@ -20,9 +20,9 @@ from ...identity.import_flow import (
 from ...identity.vault import open_vault, vault_backend_names
 from ...platform import paths
 from ...services.discovery_service import (
-    discover_inventory, known_adapter, pi_candidate, probe_version,
-    select_explicit,
+    display_name, known_adapter, resolve_selection,
 )
+from ...services.discovery_configuration import configured_candidates
 from ...storage.state_store import StateStore
 from ...transport.https_client import NexusHTTPClient, origin_of
 from ..output import Output
@@ -64,6 +64,9 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
     retained = connect_reuse.saved_request(args, state, select)
     identity = connect_reuse.selected_identity(args, state, retained)
     if retained:
+        if getattr(args, 'customize', False):
+            raise ConnectorError('OPERATION_CONFLICT', 'connect',
+                'This request already has reviewed settings. Resume it unchanged; use configure for an explicit configuration change.')
         args.request_id = retained[1]
         connect_reuse.validate_choices(args, retained[3], state)
     if not args.server:
@@ -136,13 +139,22 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
     candidate_ref = None
     portable = template()
     if not saved:
+        records = [r for r in store.load().execution_executors if r.server_id == identity.server_id]
+        if len(records) > 1:
+            raise ConnectorError('PROFILE_DRIFT', 'connect', 'The local executor registration is ambiguous.')
+        args.discovery_configuration = records[0].discovery_configuration if records else {}
+        args.installation_observations = records[0].installation_observations if records else ()
         adapter_id, candidate, version = await _choose_harness(args, output)
-        output.line(f'harness selected: {adapter_id} ({candidate.executable}, version {version})')
+        output.line(f'Harness recommendation: {display_name(adapter_id)} ({candidate.executable}'
+                    + (f', {candidate.launch_script}' if getattr(candidate, 'launch_script', None) else '') + ').')
+        output.line('Discovery does not confirm provider login or session readiness. Version and protocol checks run after the review is accepted.')
         candidate_ref = effective_installation_ref(candidate)
         portable.update(adapter_id=adapter_id, alias=args.binding_alias or _binding_alias(adapter_id))
     wizard = SimpleNamespace(identity=identity.alias, agent=args.agent, request_id=request_id,
+        project_preset_flow=True, customize=getattr(args, 'customize', False),
+        discovery_inventory_revision=getattr(args, 'discovery_inventory_revision', None),
         start_at_login=getattr(args, 'start_at_login', None),
-        candidate_ref=candidate_ref, project=str(args.project.resolve()) if args.project else None,
+        candidate_ref=candidate_ref, project=str((args.project or Path.cwd()).resolve()) if not saved or args.project else None,
         workspace_label=None, provider_home=getattr(args, 'provider_home', None),
         workspace_id=None, binding_id=None,
         operator_identity=getattr(args, 'operator_identity', None),
@@ -191,63 +203,39 @@ def _binding_alias(adapter_id: str) -> str:
 
 
 async def _choose_harness(args, output: Output):
-    """Discovery + selection; nothing is executed during discovery."""
-    inventory = await discover_inventory()
-    executable_choice = None
-    if args.harness:
-        adapter_id = args.harness
-        if not known_adapter(adapter_id):
-            raise ConnectorError("VALIDATION_ERROR", "connect",
-                                 f"unknown harness {adapter_id!r}")
-    elif args.non_interactive:
-        raise ConnectorError("AMBIGUOUS_BINDING", "connect",
-                             "harness choice required",
-                             action="Pass --harness explicitly in "
-                                    "non-interactive mode.")
-    else:
-        # CN1/A14+CN-01.04 (test_24): the selection value is the EXACT
-        # installation — the entry's executable/ref — never a bare
-        # adapter id that falls back to matches[0].
-        options = []
-        for entry in inventory:
-            name = {"codex_app_server": "Codex", "pi_rpc": "Pi",
-                    "claude_stream": "Claude Code"}.get(entry.adapter_id, entry.adapter_id)
-            options.append((entry.executable,
-                            f"{name} - {entry.executable}"
-                            f" [{entry.source}]"
-                            f"{f' v{entry.version}' if entry.version else ''}"))
-        if not options:
-            raise ConnectorError("BINARY_NOT_FOUND", "connect",
-                                 "no local harness installation found",
-                                 action="Install Codex/Pi/Claude or pass "
-                                        "--executable explicitly.")
-        adapter_id = None
-        executable_choice = select(
-            "Which local harness should this agent use?",
-            options, non_interactive=args.non_interactive)
-        for entry in inventory:
-            if entry.executable == executable_choice:
-                adapter_id = entry.adapter_id
-                break
-        if adapter_id is None:
-            raise ConnectorError("VALIDATION_ERROR", "connect",
-                                 "selected installation vanished from the "
-                                 "inventory")
-    executable_path = (args.executable if args.executable
-                       else executable_choice)
-    if executable_path is None:
-        raise ConnectorError("VALIDATION_ERROR", "connect",
-                             "no installation selected")
-    if adapter_id == "pi_rpc":
-        if not args.pi_node:
-            raise ConnectorError("VALIDATION_ERROR", "connect",
-                                 "Pi selection requires --pi-node "
-                                 "(trusted Node executable)")
-        candidate = pi_candidate(args.pi_node, executable_path)
-    else:
-        candidate = select_explicit(adapter_id, executable_path)
-    probed = await probe_version(candidate)
-    return adapter_id, probed, probed.version
+    """Recommend one exact host candidate; executable checks belong after review."""
+    from nexus_connector_core import calculate_inventory_revision
+    from nexus_connector_core.installation import effective_installation_ref
+    if args.harness and not known_adapter(args.harness):
+        raise ConnectorError('VALIDATION_ERROR', 'connect', f'unknown harness {args.harness!r}')
+    inventory = await configured_candidates(getattr(args, 'discovery_configuration', {}),
+        observations=getattr(args, 'installation_observations', ()))
+    candidates = [c for c in inventory if known_adapter(c.adapter_id)
+                  and (not args.harness or c.adapter_id == args.harness)]
+    if args.executable:
+        target = Path(args.executable).expanduser().resolve()
+        candidates = [c for c in candidates if Path(c.launch_script or c.executable).resolve() == target]
+    if args.pi_node:
+        node = Path(args.pi_node).expanduser().resolve()
+        candidates = [c for c in candidates if c.adapter_id == 'pi_rpc' and Path(c.executable).resolve() == node]
+    if not candidates:
+        raise ConnectorError('BINARY_NOT_FOUND', 'connect', 'No matching installation is available in this host inventory.',
+            action='Install a supported harness or review this executor discovery configuration. Explicit paths must select an inventoried installation.')
+    choices = {}
+    for candidate in candidates:
+        ref = effective_installation_ref(candidate)
+        # The Core resolves aliases/duplicate rows and rejects conflicting refs.
+        choices[(candidate.adapter_id, ref)] = resolve_selection(candidates, candidate.adapter_id, ref)
+    options = [(key, f'{display_name(c.adapter_id)} — {c.executable}'
+                + (f' + {c.launch_script}' if c.launch_script else '') + f' [{c.source}]')
+               for key, c in choices.items()]
+    selected = options[0][0] if len(options) == 1 else select(
+        'Which local harness should this project use?', options, non_interactive=args.non_interactive)
+    if selected not in choices:
+        raise ConnectorError('VALIDATION_ERROR', 'connect', 'Select an installation from this host inventory.')
+    candidate = choices[selected]
+    args.discovery_inventory_revision = calculate_inventory_revision(inventory)
+    return candidate.adapter_id, candidate, candidate.version
 
 
 def _remember_server(store: StateStore, base_url: str, server_id: str) -> None:
