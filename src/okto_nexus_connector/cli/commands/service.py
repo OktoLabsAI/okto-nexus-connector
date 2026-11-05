@@ -6,6 +6,8 @@ from pathlib import Path
 
 from ...errors import ConnectorError
 from ...platform import service_install
+from ...service_upgrade import UpgradeError
+from ...service_environment import EnvironmentInspectionError
 from ..output import Output
 from ..prompts import confirm
 
@@ -13,7 +15,10 @@ from ..prompts import confirm
 async def run_service(args, output: Output, root: Path):
     try:
         return await _run_service(args, output, root)
-    except (OSError, ValueError) as error:
+    except (UpgradeError, EnvironmentInspectionError) as error:
+        raise ConnectorError(error.code, 'service_upgrade', 'The selected upgrade requires review.',
+            possible_effect=args.subcommand == 'upgrade-apply', action=error.action) from error
+    except (OSError, ValueError, KeyError, TypeError) as error:
         raise ConnectorError('SERVICE_OPERATION_UNCONFIRMED', 'service',
             'The selected native operation or retained receipt was not confirmed.',
             possible_effect=args.subcommand != 'status' and not getattr(args, 'dry_run', False),
@@ -22,6 +27,17 @@ async def run_service(args, output: Output, root: Path):
 
 async def _run_service(args, output: Output, root: Path):
     sub = args.subcommand
+    if sub in {'upgrade-plan', 'upgrade-apply'}:
+        from ...platform.service_upgrade import for_instance
+        from ...platform.service_context import read_document
+        upgrade = for_instance(root)
+        if sub == 'upgrade-plan':
+            document = upgrade.plan(args.python)
+            if args.output:
+                from ...service_upgrade import save_plan
+                save_plan(args.output, document)
+            return document
+        return upgrade.apply(read_document(args.plan_file), args.expected_revision)
     if sub == "install":
         if not args.dry_run and not args.non_interactive:
             plan = service_install.plan(root)

@@ -133,3 +133,59 @@ Repeating the same expected revision confirms a recorded recovery without a
 second write. After a persistence response is lost, status remains authoritative;
 repeat that same revision instead of deleting receipts. Recovery requires no
 provider credentials and does not rewrite the saved execution context.
+
+## Reviewed environment upgrades
+
+`upgrade-plan` reads the selected installed Python and Core payloads and emits a
+complete plan with a SHA-256 `plan_revision`. It does not drain, migrate, start or
+change the service. `--output` creates a new UTF-8 file and refuses to overwrite
+an existing file. The source context must already exist. Editable checkouts and
+unordered/prerelease versions are not eligible targets in this protocol.
+
+```powershell
+okto-nexus-connector --state-dir C:\absolute\connector-state service upgrade-plan --python C:\target\Scripts\python.exe --output C:\review\connector-upgrade.json --json
+okto-nexus-connector --state-dir C:\absolute\connector-state daemon stop --json
+okto-nexus-connector --state-dir C:\absolute\connector-state service upgrade-apply --plan-file C:\review\connector-upgrade.json --expected-revision REVIEWED_REVISION --json
+okto-nexus-connector --state-dir C:\absolute\connector-state daemon start --json
+```
+
+Review the source and target executable/prefix, package/Core versions, preserved
+configuration and native task references in the plan before applying it. Keep
+the source environment available through canonical stop. If CLI and daemon
+versions differ, use the source version's CLI to drain the reviewed generation.
+A previous stopped run needs a matching retained run marker and DRAINED report.
+For a legacy source without that marker, prepare the plan while it is running,
+then drain it. Unknown ownership, an unresolved launch, a newer run or uncertain
+shutdown prevents application.
+
+Application holds the instance launch and lifetime exclusions. It records the
+pending plan in the context before effects, then replaces only the owned task's
+execution action when installed. Trigger, principal, enablement and other task
+policies remain unchanged. An externally edited task is not adopted. A task must
+be inactive; no forced native stop is used. Old queued launch tokens are fenced.
+The native UPDATE operation suppresses registration triggers and retains the
+principal ACL. The registration description remains historical; the confirmed
+receipt records the new action revision and complete native export.
+
+If interrupted, keep the plan, old environment and retained service documents.
+Repeat `upgrade-apply` with the same file/revision. Status reports
+`SERVICE_UPGRADE_PENDING`; starts, foreground bootstrap and other service
+mutations refuse to cross that fence. A lost native response is accepted only
+when the observed definition exactly matches the retained action change.
+An unrelated edit or missing receipt requires review and is preserved. If the
+candidate changed after review, restore that exact installed environment before
+resuming; the operation does not silently switch to a different candidate.
+
+The completed `service-upgrade.json` keeps source/target references and reports
+`migration_state: not_run_by_upgrade`. Applying never starts work or migrates
+storage. Explicit target start runs the existing canonical initialization and
+reconciliation. Package/interpreter fingerprints are checked again before
+bootstrap to detect an environment changed in place. Binary downgrade is refused;
+retaining the old environment is not proof that rollback is safe after migrations.
+
+Qualification: detached replacement is exercised with installed wheels in two
+disposable Windows environments. Native update response-loss/recovery tests use
+injected Task Scheduler effects; actual native task update, logout/reboot,
+productive workloads, mixed historical release migration and POSIX campaigns
+remain separately unqualified. An old independently invoked foreground binary
+that predates these guards cannot be made cooperative by a new CLI.

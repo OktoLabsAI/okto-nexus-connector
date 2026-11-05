@@ -64,16 +64,18 @@ def execution_context(root: Path, *, env=None) -> dict:
         'environment_prefix': str(Path(sys.prefix).absolute()), 'environment': environment}
 
 
-def validate_context(root: Path, value: dict) -> dict:
+def validate_context(root: Path, value: dict, *, require_paths=True) -> dict:
     root = root.resolve()
-    if (value.get('revision') != 1 or value.get('component') != 'connector'
+    if value.get('upgrade_pending'):
+        raise ValueError('SERVICE_UPGRADE_PENDING: resume the retained upgrade plan')
+    if (value.get('revision') not in {1, 2} or value.get('component') != 'connector'
             or value.get('instance_id') != service_instance_id(root)
             or value.get('root') != str(root) or value.get('cwd') != str(root)):
         raise ValueError('The launch context does not match this Connector instance')
     for key in ('executable', 'environment_prefix', 'cwd'):
         if not isinstance(value.get(key), str) or not Path(value[key]).is_absolute():
             raise ValueError('Lifecycle paths must be absolute')
-    if not Path(value['executable']).is_file():
+    if require_paths and not Path(value['executable']).is_file():
         raise ValueError('The recorded Python environment is unavailable')
     env = value.get('environment')
     if (not isinstance(env, dict) or not all(type(k) is str and type(v) is str for k, v in env.items())

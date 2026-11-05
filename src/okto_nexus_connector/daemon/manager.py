@@ -44,6 +44,7 @@ class DaemonStatus:
     user_service: dict | None = None
     next_action: str | None = None
     launch_recovery: dict | None = None
+    upgrade: dict | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -70,6 +71,7 @@ class DaemonStatus:
             "user_service": self.user_service,
             "next_action": self.next_action,
             "launch_recovery": self.launch_recovery,
+            "upgrade": self.upgrade,
         }
 
 
@@ -205,7 +207,26 @@ async def run_foreground(root: Path, *, acquired_lock=None, supervisor='foregrou
     elif not owner.held or owner.run_dir != root / 'run':
         raise ValueError('The supplied owner does not match the configured instance')
     guard = None
+    app = None
+    run_marker = None
+    exit_code = None
     try:
+        import secrets
+        from ..platform.service_context import CONTEXT, read_document, write_document
+        from ..service_environment import verify_context
+        try:
+            recorded = read_document(root / CONTEXT)
+        except FileNotFoundError:
+            recorded = {}
+        try:
+            verify_context(recorded)
+        except (OSError, ValueError) as error:
+            code = 'SERVICE_UPGRADE_PENDING' if recorded.get('upgrade_pending') else 'SERVICE_ENVIRONMENT_CHANGED'
+            raise ConnectorError(code, 'run', 'The recorded service environment is unavailable.',
+                action='Resume the retained upgrade or restore the reviewed installed environment.') from error
+        run_marker = {'revision': 1, 'instance_id': service_instance_id(root),
+            'generation': secrets.token_hex(16), 'state': 'starting'}
+        write_document(root / 'service-run.json', run_marker)
         from .logging_setup import configure_logging
         configure_logging(root)
         from .app import DaemonApp
@@ -230,8 +251,23 @@ async def run_foreground(root: Path, *, acquired_lock=None, supervisor='foregrou
             app.request_stop()
 
         guard = asyncio.create_task(_guard())
-        return await app.run_forever()
+        exit_code = await app.run_forever()
+        return exit_code
     finally:
+        if run_marker is not None:
+            try:
+                generation = getattr(app, 'service_generation', None)
+                try:
+                    report = read_document(root / 'run' / 'shutdown.json')
+                except FileNotFoundError:
+                    report = {}
+                drained = (exit_code == 0 and bool(generation) and report.get('generation') == generation
+                    and report.get('state') == 'DRAINED')
+                write_document(root / 'service-run.json', {**run_marker,
+                    'generation': generation or run_marker['generation'],
+                    'state': 'drained' if drained else 'unconfirmed'})
+            except (OSError, ValueError):
+                pass  # the retained starting marker prevents claiming a drain
         if guard is not None:
             guard.cancel()
             try:

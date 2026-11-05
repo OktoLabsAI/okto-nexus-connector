@@ -17,6 +17,14 @@ from ..platform.user_service import SUPERVISOR, UserService
 
 def observe(root, current, *, launch_owned=False):
     try:
+        try:
+            context = read_document(root / CONTEXT)
+        except FileNotFoundError:
+            context = {}
+        if context.get('upgrade_pending'):
+            return replace(current, state='unknown', reason='SERVICE_UPGRADE_PENDING',
+                upgrade={'plan_revision': context['upgrade_pending'], 'state': 'pending'},
+                next_action='Resume upgrade-apply with the retained plan before starting this instance.')
         if (root / INSTALLATION).exists():
             service = UserService(root)
             receipt, task = service.observe()
@@ -75,6 +83,12 @@ def recover_start(root: Path, *, expected_revision: str):
         return refused('NO_PENDING_LAUNCH', 'No retained detached launch exists for this instance.')
     try:
         with launch_exclusion(root), ExitStack() as owners:
+            try:
+                context = read_document(root / CONTEXT)
+            except FileNotFoundError:
+                context = {}
+            if context.get('upgrade_pending'):
+                return refused('SERVICE_UPGRADE_PENDING', 'Resume the retained upgrade before launch recovery.')
             if (root / INSTALLATION).exists():
                 return refused('RECOVERY_REQUIRES_DETACHED', 'Use the selected user-service lifecycle; its task was not changed.')
             if current.state != 'stopped':

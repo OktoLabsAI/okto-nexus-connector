@@ -299,6 +299,12 @@ def build_parser() -> argparse.ArgumentParser:
     service_sub.add_parser("status")
     service_sub.add_parser('enable', help='enable the selected user task without starting it')
     service_sub.add_parser('disable', help='disable future task starts; use daemon stop to drain active work')
+    upgrade_plan = service_sub.add_parser('upgrade-plan', help='review an installed environment replacement without starting it')
+    upgrade_plan.add_argument('--python', required=True)
+    upgrade_plan.add_argument('--output', type=Path, help='save the plan as a new UTF-8 JSON file')
+    upgrade_apply = service_sub.add_parser('upgrade-apply', help='apply a reviewed environment replacement after canonical drain')
+    upgrade_apply.add_argument('--plan-file', type=Path, required=True)
+    upgrade_apply.add_argument('--expected-revision', required=True)
 
     sub.add_parser('reconnect', help='gracefully restart the daemon to reconnect all configured connections')
     status = sub.add_parser('status', help='show live server and agent connection health')

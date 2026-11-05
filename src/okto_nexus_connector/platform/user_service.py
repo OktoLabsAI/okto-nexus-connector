@@ -67,6 +67,7 @@ class UserService:
                 'A legacy global Connector task exists. Review its state directory and migrate it explicitly before selecting another supervisor. It was not modified.')
 
     def observe(self, *, check_context=True):
+        self._upgrade_fence()
         self._platform()
         receipt = self.receipt()
         task = self.tasks.read(self.name)
@@ -93,6 +94,7 @@ class UserService:
             raise conflict('SERVICE_CONTEXT_CHANGED', 'Restore the recorded context or uninstall before selecting a different environment.')
 
     def set_enabled(self, enabled):
+        self._upgrade_fence()
         if type(enabled) is not bool:
             raise ValueError('Enablement must be boolean')
         self._platform()
@@ -143,6 +145,7 @@ class UserService:
             '--state-dir', str(self.root), '--supervised', '--token', token), str(self.root))
 
     def prepare(self):
+        self._upgrade_fence()
         self._platform()
         context = validate_context(self.root, saved_context(self.root))
         receipt, task = self.receipt(), self.tasks.read(self.name)
@@ -223,6 +226,7 @@ class UserService:
                 'logon_session': control.get('logon_session') or windows_logon_session()})
 
     def uninstall(self):
+        self._upgrade_fence()
         self._platform()
         receipt, task = self.receipt(), self.tasks.read(self.name)
         if receipt is None:
@@ -242,3 +246,12 @@ class UserService:
                 raise conflict('UNINSTALL_UNCONFIRMED', 'Repeat uninstall to observe this same removal.')
         (self.root / INSTALLATION).unlink()
         (self.root / CONTROL).unlink(missing_ok=True)
+
+    def _upgrade_fence(self):
+        try:
+            context = read_document(self.root / CONTEXT)
+        except FileNotFoundError:
+            return
+        if context.get('upgrade_pending'):
+            raise conflict('SERVICE_UPGRADE_PENDING',
+                'Resume upgrade-apply with the retained plan and revision before another lifecycle mutation.')

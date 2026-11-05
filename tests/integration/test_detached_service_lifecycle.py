@@ -58,6 +58,9 @@ def test_concurrent_cli_start_reuse_restart_and_drain_keep_one_owner(tmp_path):
         assert shutdown['shutdown_outcome'] == 'drained'
         receipt = json.loads((root / 'run' / 'shutdown.json').read_text(encoding='utf-8'))
         assert receipt['generation'] == restarted['generation']
+        run_marker = json.loads((root / 'service-run.json').read_text(encoding='utf-8'))
+        assert run_marker['state'] == 'drained' and run_marker['generation'] == restarted['generation']
+        assert run_marker['instance_id'] == restarted['instance_id']
         stopped = True
         assert invoke('status')['state'] == 'stopped'
         assert (root / 'state.json').exists()
