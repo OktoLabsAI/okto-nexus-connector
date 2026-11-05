@@ -7,8 +7,11 @@ from okto_nexus_connector.errors import ConnectorError
 from okto_nexus_connector.services.binding_onboarding import BindingOnboarding
 from okto_nexus_connector.storage.state_store import state_from_json
 from okto_nexus_connector.transport.https_client import R4BindingProposal, R4BindingView
-from tests.unit.test_executor_onboarding import onboarding
-from tests.unit.test_executor_registration import registration
+from tests.unit import test_executor_onboarding as onboarding_fixtures
+from tests.unit import test_executor_registration as registration_fixtures
+
+onboarding = onboarding_fixtures.onboarding
+registration = registration_fixtures.registration
 
 
 async def test_background_replays_exact_intent_after_lost_apply_ack(binding):
@@ -103,6 +106,28 @@ async def test_prepare_and_apply_lost_responses_keep_intents_and_one_binding(bin
     assert "synthetic-canonical-key" not in store.path.read_text()
 
 
+async def test_preset_survives_lost_prepare_and_cannot_change_on_resume(binding):
+    from okto_nexus_connector.storage.state_store import StateStore, state_to_json
+    service, peer, store, prepare, _ = binding
+    origin = {'id': 'project-generalist', 'revision': 1}
+    prepare['project_preset'] = origin
+    peer.lose_prepare = True
+    with pytest.raises(ConnectorError):
+        await service.prepare(**prepare)
+    reopened = StateStore(store.path)
+    resumed = BindingOnboarding(reopened, service.vault, http_factory=service.http_factory)
+    assert reopened.load().binding_intents[0].project_preset == origin
+    await resumed.prepare(**prepare)
+    assert peer.prepares[0] == peer.prepares[1]
+    with pytest.raises(ConnectorError) as changed:
+        await resumed.prepare(**(prepare | {'project_preset': None}))
+    assert changed.value.code == 'OPERATION_CONFLICT' and len(peer.prepares) == 2
+    old = state_to_json(reopened.load())
+    old['schema_version'] = 15
+    old['binding_intents'][0].pop('project_preset')
+    assert state_from_json(old).binding_intents[0].project_preset is None
+
+
 @pytest.mark.parametrize("change", ["alias", "realization"])
 async def test_prepare_intent_cannot_be_reused_with_different_content(binding, change):
     service, peer, store, prepare, _ = binding
@@ -173,7 +198,7 @@ async def test_proposal_mutation_is_not_application_authority(binding):
 
 def test_schema_nine_has_no_implicit_binding_intents():
     state = state_from_json({"schema_version": 9})
-    assert state.schema_version == 15 and not state.binding_intents and not state.execution_bindings
+    assert state.schema_version == 16 and not state.binding_intents and not state.execution_bindings
 
 
 async def test_local_acknowledgment_failure_keeps_one_recoverable_apply(binding, monkeypatch):
@@ -244,7 +269,6 @@ async def test_replacement_target_drift_refuses_network(binding):
     await service.prepare(**prepare)
     peer.approved = True
     await service.apply(**apply)
-    original_prepare = peer.prepare_r4_binding
     async def selected(key, **body):
         return service._proposal(store.load().binding_intents[0])
     peer.prepare_r4_binding = selected
@@ -269,7 +293,7 @@ async def test_schema_eleven_binding_history_migrates_without_replacement_author
         for field in ("replace_binding_id", "replacement_snapshot", "applied_binding"):
             record.pop(field)
     migrated = state_from_json(old)
-    assert migrated.schema_version == 15
+    assert migrated.schema_version == 16
     record = migrated.binding_intents[0]
     assert record.status == "APPLIED"
     assert record.replace_binding_id is record.replacement_snapshot is record.applied_binding is None

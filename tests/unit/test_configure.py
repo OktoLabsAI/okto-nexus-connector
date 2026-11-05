@@ -111,6 +111,7 @@ def local_wizard(tmp_path,monkeypatch):
             calls.append('prepare')
             assert k['connection_configuration']['version'] == 2
             assert 'provider_home' not in k['connection_configuration']
+            gate['prepare_request'] = k
             return {'proposal':{'required_approvals':['apr_test'],'approved_diff_hash':'hash'}}
         async def apply(self,**k):
             calls.append('apply')
@@ -147,6 +148,25 @@ async def test_local_wizard_resumes_approval_without_recreating_connection(local
     before=list(calls)
     assert await local.configure_local(args,output,root,store,identity,'http://127.0.0.1:8202',portable)==result
     assert calls==before
+
+
+@pytest.mark.parametrize('imported', [False, True])
+async def test_project_preset_is_reviewed_and_saved_only_for_default_wizard(local_wizard, imported):
+    args, output, root, store, identity, portable, calls, gate = local_wizard
+    if imported:
+        args.file = 'custom.json'
+        portable['session_policy'] = 'shared'
+    result = await local.configure_local(args, output, root, store, identity, 'http://127.0.0.1:8202', portable)
+    assert result['status'] == 'awaiting_operator_approval'
+    expected = None if imported else configure.PROJECT_PRESET
+    saved = store.load().preferences['configure.server.agent.wizard-test']
+    assert saved.get('project_preset') == gate['prepare_request'].get('project_preset') == expected
+    assert ('Server-wide human review' in output.stream.getvalue()) is (not imported)
+    assert gate['prepare_request']['connection_configuration']['session_policy'] == ('shared' if imported else 'per_sender')
+    assert 'project_preset' not in saved['configuration']
+    gate['approved'] = True
+    await local.configure_local(args, output, root, store, identity, 'http://127.0.0.1:8202', portable)
+    assert calls.count('prepare') == 1
 
 
 async def test_local_wizard_reuses_remote_workspace_with_independent_folder(local_wizard, monkeypatch):

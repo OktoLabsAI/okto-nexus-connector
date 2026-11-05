@@ -103,7 +103,7 @@ class BindingOnboarding:
                     proposal=asdict(self._proposal(record)) if record.proposal else None, binding=binding)
 
     async def prepare(self, *, identity_alias, realization_ref, alias, client_intent_id, replace_binding_id=None,
-                      connection_configuration=None):
+                      connection_configuration=None, project_preset=None):
         if not all(_id(v) for v in (identity_alias, realization_ref, alias, client_intent_id)):
             raise ConnectorError("VALIDATION_ERROR", "binding_onboarding", "Binding identity and intent fields are required.")
         if replace_binding_id is not None and not _id(replace_binding_id):
@@ -114,7 +114,9 @@ class BindingOnboarding:
                         r.client_intent_id == client_intent_id]
             if existing:
                 record = _one(existing, "The binding intent is ambiguous.")
-                if record.alias != alias or record.realization_ref != realization_ref or record.scope_digest != digest or record.replace_binding_id != replace_binding_id or record.connection_configuration != connection_configuration:
+                if (record.alias != alias or record.realization_ref != realization_ref or record.scope_digest != digest
+                        or record.replace_binding_id != replace_binding_id or record.connection_configuration != connection_configuration
+                        or record.project_preset != project_preset):
                     raise ConnectorError("OPERATION_CONFLICT", "binding_onboarding",
                                          "The binding client intent has different content.")
             else:
@@ -139,7 +141,7 @@ class BindingOnboarding:
                 state.binding_intents.append(BindingIntentRecord(local.server_id, local.executor_id, local.agent_id,
                     identity_alias, client_intent_id, alias, realization_ref, digest,
                     replace_binding_id=replace_binding_id, replacement_snapshot=asdict(replacement) if replacement else None,
-                    connection_configuration=connection_configuration))
+                    connection_configuration=connection_configuration, project_preset=project_preset))
         state = await asyncio.to_thread(self.store.update, stage)
         record = self._record(state, identity_alias, client_intent_id)
         if record.proposal is not None:
@@ -158,7 +160,8 @@ class BindingOnboarding:
                 inventory_revision=local.inventory_revision, realization_ref=local.realization_ref,
                 workspace_id=local.canonical_workspace_id, alias=alias, agent_id_hint=identity.agent_id,
                 **({"replace_binding_id": replace_binding_id} if replace_binding_id else {}),
-                **({"connection_configuration": record.connection_configuration} if record.connection_configuration is not None else {}))
+                **({"connection_configuration": record.connection_configuration} if record.connection_configuration is not None else {}),
+                **({"project_preset": record.project_preset} if record.project_preset is not None else {}))
         def commit(state):
             current = self._record(state, identity_alias, client_intent_id)
             _, _, local, _ = self._current(state, current)

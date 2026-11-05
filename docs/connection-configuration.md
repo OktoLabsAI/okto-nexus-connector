@@ -30,6 +30,22 @@ okto-nexus-connector configure --identity assistant --file connection.json
 
 Cancel before Finish to avoid submitting the binding. An identity explicitly imported earlier remains stored. Replacement preserves identity, harness and workspace; close active sessions first. The previous binding stays unchanged until replacement succeeds.
 
+New default Connector-hosted requests use the `project-generalist` preset, revision 1:
+sessions per sender, native questions/permissions, Nexus tool access set to ask,
+and a requested grant of 60 minutes/20 actions. Preferences remain editable in the
+review. The operator's proposal also states whether Finish will initialize
+Server-wide human review (`feature_hitl`), affecting native decisions and matching
+coordination approval rules. Each decision still requires its authorized recipient.
+An existing disabled policy is preserved and refuses this preset; it must be
+changed explicitly by the operator before a new review. Policy changes between
+review, approval and application require a new proposal.
+
+Preset origin and policy activation share the canonical Finish receipt with the
+configuration and grant. Repeating the same apply intent recovers the committed
+result and current policy without reapplying defaults or restoring revoked grants.
+Imported JSON and older saved requests retain their original choices and do not
+implicitly request this preset. Preset origin is separate from portable JSON.
+
 The workspace is the shared logical identity in Nexus; its folder belongs to this connection. For example, two harnesses can share one workspace while using `C:\Work\Project` and `/home/agent/project` on their respective computers. Selection does not copy files or reuse another host's path. The review screen shows the workspace name/ID and local folder separately.
 
 Listing existing workspaces requires `workspaces.list` permission (or operator access). When listing is unavailable, the wizard offers an explicit choice to enter a known workspace ID or create a new workspace. `--workspace-id ID` selects it directly. Connection approval is still required; selecting a workspace does not grant execution access. Resuming a saved request preserves its workspace selection.

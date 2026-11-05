@@ -109,12 +109,19 @@ async def configure_local(args,output,root,store,identity,server,portable):
                      ('Installation', selected), ('Nexus workspace', f"{label} ({args.workspace_id or 'new'})"),
                      ('Local folder', project), ('Login directory', home or 'Harness default')])
         output.line('An authenticated operator reviews this connection on their own Nexus terminal. Setup continues automatically after approval.')
+        project_preset = None
+        if not getattr(args, 'file', None):
+            from .configure import PROJECT_PRESET
+            project_preset = dict(PROJECT_PRESET)
+            output.line('Project preset: project-generalist revision 1. The operator also reviews native questions and permissions, including Server-wide human review if it has not been configured. Existing Server policy is preserved.')
         startup = configure_startup.choose(args, output, root, choice)
         if not choice('7. Finish local setup and submit this connection?',[(True,'Finish'),(False,'Cancel')],False):
             return {'saved':False,'canceled':True}
         saved=dict(configuration=configuration,candidate_ref=selected,inventory_revision=calculate_inventory_revision(candidates),
             stage='register',identity=args.identity,host_label=socket.gethostname(),workspace_id=args.workspace_id,
             replace_binding_id=args.binding_id,conflict_checked=True)
+        if project_preset is not None:
+            saved['project_preset'] = project_preset
         if startup:
             saved.update(login_start_plan=startup,
                 login_start_operation=dict(state='pending', plan_revision=startup['plan_revision']))
@@ -190,7 +197,8 @@ async def configure_local(args,output,root,store,identity,server,portable):
         requested['runtime_enabled'] = True
         proposal=await bindings.prepare(identity_alias=args.identity,realization_ref=saved['realization_ref'],
             alias=c['alias'],client_intent_id=args.request_id+'_prepare',replace_binding_id=saved['replace_binding_id'],
-            connection_configuration=requested)
+            connection_configuration=requested,
+            **({'project_preset': saved['project_preset']} if saved.get('project_preset') is not None else {}))
         checkpoint('apply',proposal=proposal['proposal'],single_approval=True)
     if saved['stage']=='apply':
         proposal=saved['proposal']

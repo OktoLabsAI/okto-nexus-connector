@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -222,6 +222,7 @@ class BindingIntentRecord:
     replace_binding_id: str | None = None
     replacement_snapshot: dict[str, Any] | None = None
     connection_configuration: dict[str, Any] | None = None
+    project_preset: dict[str, Any] | None = None
     applied_binding: dict[str, Any] | None = None
 
 
