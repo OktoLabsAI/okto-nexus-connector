@@ -1,4 +1,5 @@
 """Resolve previously reviewed project requests before credential entry or discovery."""
+from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 from urllib.parse import quote
@@ -6,6 +7,10 @@ from urllib.parse import quote
 from ...errors import ConnectorError
 from ...services.binding_onboarding import BindingOnboarding
 from ...services.executor_registration import _identity, _profile
+
+_BINDING_FIELDS = ('binding_id', 'server_id', 'executor_id', 'agent_id', 'endpoint_id', 'workspace_id',
+    'workspace_binding_id', 'adapter_id', 'candidate_ref', 'inventory_revision',
+    'realization_ref', 'realization_revision', 'binding_revision')
 
 
 def credential_supplied(args):
@@ -125,6 +130,8 @@ async def verify_binding(http, key, store, identity, saved):
             raise ConnectorError('BINDING_NOT_AUTHORIZED', 'connect', 'The completed request has no current canonical binding.')
         return None  # Pending requests continue through their original checkpoints.
     record = records[0]
+    remote_key = 'remote-setup.' + saved[3]['remote_setup']['setup_run_id'] if saved[3].get('remote_setup') else None
+    remote_before = deepcopy(state.preferences.get(remote_key)) if remote_key else None
     service = BindingOnboarding(store, None)
     context = service._context(state, identity.alias, record.realization_ref)
     local = context[2]
@@ -140,9 +147,6 @@ async def verify_binding(http, key, store, identity, saved):
     binding = bindings[0]
     current = await http._request('GET', '/v1/connections/bindings/' + quote(binding.binding_id, safe=''),
                                   key=key, require_revision=True)
-    fields = ('binding_id', 'server_id', 'executor_id', 'agent_id', 'endpoint_id', 'workspace_id',
-              'workspace_binding_id', 'adapter_id', 'candidate_ref', 'inventory_revision',
-              'realization_ref', 'realization_revision', 'binding_revision')
     if not isinstance(current, dict):
         raise ConnectorError('VERSION_INCOMPATIBLE', 'connect', 'The Server returned an invalid binding view.')
     if current.get('state') != 'APPROVED':
@@ -151,11 +155,73 @@ async def verify_binding(http, key, store, identity, saved):
     revisions = ('realization_revision', 'binding_revision', 'authorization_revision', 'configuration_revision')
     if any(type(current.get(name)) is not int or current[name] < 1 for name in revisions):
         raise ConnectorError('VERSION_INCOMPATIBLE', 'connect', 'The Server returned invalid binding revisions.')
-    if any(current.get(name) != getattr(binding, name) for name in fields):
+    if any(current.get(name) != getattr(binding, name) for name in _BINDING_FIELDS):
         raise ConnectorError('PROFILE_DRIFT', 'connect', 'The Server binding differs from the approved local mapping.')
     after = store.load()
     if (after.preferences.get(saved[0]) != saved[3] or
+            remote_key and (after.preferences.get(remote_key) != remote_before or
+                [r for r in after.binding_intents if r.identity_alias == identity.alias
+                 and r.client_intent_id == record.client_intent_id] != records) or
             service._context(after, identity.alias, record.realization_ref)[3] != context[3] or
             [b for b in after.execution_bindings if b.server_id == binding.server_id and b.binding_id == binding.binding_id] != [binding]):
         raise ConnectorError('STALE_GENERATION', 'connect', 'The saved connection changed while its authorization was checked.')
-    return {name: current[name] for name in (*fields, 'state', 'authorization_revision', 'configuration_revision')}
+    return {name: current[name] for name in (*_BINDING_FIELDS, 'state', 'authorization_revision', 'configuration_revision')}
+
+
+def completed_remote_reuse(args, store, identity, retained, current_binding, *, expected=None):
+    """Return a completed result only after authenticated exact binding reuse.
+
+    The first call follows /me and verify_binding. Recheck its ephemeral snapshot
+    after closing HTTP, before daemon effects; it never updates setup history.
+    """
+    if not retained or not retained[3].get('remote_setup') or retained[3]['stage'] != 'done':
+        return None
+    from ...services.remote_setup import normalize_origin, require_completed_configuration
+    saved = retained[3]
+    root_id = saved['remote_setup']['setup_run_id']
+    state = store.load()
+    records = [r for r in state.binding_intents if r.identity_alias == identity.alias
+        and r.client_intent_id == saved.get('child_requests', {}).get('prepare')]
+    bindings = [b for b in state.execution_bindings if current_binding and b.binding_id == current_binding['binding_id']
+        and b.server_id == identity.server_id and b.agent_id == identity.agent_id]
+    snapshot = dict(identity=identity_snapshot(state, identity), configuration=deepcopy(state.preferences.get(retained[0])),
+        root=deepcopy(state.preferences.get('remote-setup.' + root_id)), intents=deepcopy(records), bindings=deepcopy(bindings))
+    if (snapshot['identity'][0] != asdict(identity) or snapshot['configuration'] != saved
+            or expected is not None and any(snapshot[name] != expected[name] for name in snapshot)):
+        raise ConnectorError('STALE_GENERATION', 'connect', 'The completed setup changed during authenticated reuse.')
+    if len(records) != 1 or records[0].status != 'APPLIED' or len(bindings) != 1 or bindings[0].state != 'APPROVED':
+        raise ConnectorError('BINDING_NOT_AUTHORIZED', 'connect', 'The completed setup has no exact current approved binding.')
+    record = records[0]
+    root = require_completed_configuration(store, saved, identity)
+    if root != snapshot['root']:
+        raise ConnectorError('STALE_GENERATION', 'connect', 'The retained setup changed while its local facts were checked.')
+    if normalize_origin(args.server) != root['draft']['server_origin'] or normalize_origin(snapshot['identity'][1]['base_url']) != root['draft']['server_origin']:
+        raise ConnectorError('PROFILE_DRIFT', 'connect', 'The current Server origin differs from the completed bootstrap.')
+    service = BindingOnboarding(store, None)
+    context = service._context(state, identity.alias, record.realization_ref)
+    snapshot['context'] = context[3]
+    if expected is not None and snapshot['context'] != expected['context']:
+        raise ConnectorError('STALE_GENERATION', 'connect', 'The current host mapping changed during authenticated reuse.')
+    service._proposal(record)  # Verify retained proposal shape/digest without reapplying its old authority.
+    result = saved['result']
+    historical = record.applied_binding
+    if (not isinstance(historical, dict) or historical.get('state') != 'APPROVED'
+            or saved.get('binding') != historical or result.get('binding') != historical
+            or result.get('request_id') != root_id or result.get('connection_name') != record.alias
+            or result.get('runtime_started') is not False or saved.get('proposal') != record.proposal
+            or record.remote_setup != saved['remote_setup'] or record.apply_client_intent_id != saved['child_requests']['apply']
+            or (record.server_id, record.agent_id, record.executor_id, record.realization_ref, record.alias, record.binding_id) !=
+               (identity.server_id, identity.agent_id, saved.get('executor_id'), saved.get('realization_ref'),
+                saved['configuration']['alias'], historical.get('binding_id'))
+            or context[2].local_consent_id != root['draft']['local_consent']['local_consent_id']
+            or any(current_binding.get(name) != historical.get(name) for name in _BINDING_FIELDS)):
+        raise ConnectorError('PROFILE_DRIFT', 'connect', 'The completed result differs from its retained proposal or exact binding mapping.')
+    plan = saved.get('login_start_plan')
+    operation = saved.get('login_start_operation', {})
+    if (plan != root['local']['login_start_plan'] or plan and
+            (operation.get('state') != 'done' or operation.get('plan_revision') != plan.get('plan_revision'))):
+        raise ConnectorError('LOGIN_START_CHECKPOINT_INVALID', 'connect', 'Completed reuse cannot resume an unfinished startup operation.')
+    choice = getattr(args, 'start_at_login', None)
+    if choice is not None and choice != bool(plan):
+        raise ConnectorError('OPERATION_CONFLICT', 'connect', 'Resume the retained startup choice; use service controls for changes.')
+    return deepcopy(result), snapshot

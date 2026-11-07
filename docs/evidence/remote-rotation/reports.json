@@ -1,0 +1,161 @@
+{
+  "installed": {
+    "tests": 233,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "unique_identities": 233,
+    "public_sha256": "4e815df851bcbe88525fa7f15197baf73d9650bff7da634458450894177a8a2f",
+    "suites": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "233",
+        "time": "155.927",
+        "timestamp": "2026-11-07T04:44:09.934083-03:00",
+        "hostname": "Alienware_m15"
+      }
+    ]
+  },
+  "source": {
+    "source/connector/dx1819-connector-rotation-cas-final.xml": {
+      "tests": 4,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "unique_identities": 4,
+      "public_sha256": "c0e7ccb4fd2ca6032b33518d2c0dc3adf83b88a2ca4091811d6c2268cceb5e81",
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "4",
+          "time": "5.752",
+          "timestamp": "2026-11-07T04:40:29.328710-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ]
+    },
+    "source/connector/dx1819-connector-rotation-focused-initial.xml": {
+      "tests": 24,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "unique_identities": 24,
+      "public_sha256": "67d3ff82007f690eebc54c0863753846b7ff1664de69f5e7a53b16d5e1ca392e",
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "24",
+          "time": "20.697",
+          "timestamp": "2026-11-07T04:35:19.103991-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ]
+    },
+    "source/connector/dx1819-connector-rotation-initial.xml": {
+      "tests": 2,
+      "failures": 2,
+      "errors": 0,
+      "skips": 0,
+      "unique_identities": 2,
+      "public_sha256": "50cdc99134a47c7586429ce24553a5ad941d26773948db4369e16c6072566b68",
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "2",
+          "skipped": "0",
+          "tests": "2",
+          "time": "5.505",
+          "timestamp": "2026-11-07T04:32:05.724366-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ]
+    },
+    "source/connector/dx1819-connector-rotation-regression-final.xml": {
+      "tests": 233,
+      "failures": 1,
+      "errors": 0,
+      "skips": 0,
+      "unique_identities": 233,
+      "public_sha256": "d9e391f909d99fd972f1aac9240139d487302fd4735222c7209b8dcb40692e58",
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "1",
+          "skipped": "0",
+          "tests": "233",
+          "time": "126.392",
+          "timestamp": "2026-11-07T04:37:27.934299-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ]
+    }
+  },
+  "copied_from": {
+    "source/connector/dx1819-connector-rotation-cas-final.xml": {
+      "source": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx1819-connector-rotation-cas-final.xml",
+      "source_sha256": "c0e7ccb4fd2ca6032b33518d2c0dc3adf83b88a2ca4091811d6c2268cceb5e81",
+      "public_sha256": "c0e7ccb4fd2ca6032b33518d2c0dc3adf83b88a2ca4091811d6c2268cceb5e81",
+      "redactions": {}
+    },
+    "source/connector/dx1819-connector-rotation-focused-initial.xml": {
+      "source": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx1819-connector-rotation-focused-initial.xml",
+      "source_sha256": "67d3ff82007f690eebc54c0863753846b7ff1664de69f5e7a53b16d5e1ca392e",
+      "public_sha256": "67d3ff82007f690eebc54c0863753846b7ff1664de69f5e7a53b16d5e1ca392e",
+      "redactions": {}
+    },
+    "source/connector/dx1819-connector-rotation-initial.xml": {
+      "source": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx1819-connector-rotation-initial.xml",
+      "source_sha256": "50cdc99134a47c7586429ce24553a5ad941d26773948db4369e16c6072566b68",
+      "public_sha256": "50cdc99134a47c7586429ce24553a5ad941d26773948db4369e16c6072566b68",
+      "redactions": {}
+    },
+    "source/connector/dx1819-connector-rotation-regression-final.xml": {
+      "source": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx1819-connector-rotation-regression-final.xml",
+      "source_sha256": "d9e391f909d99fd972f1aac9240139d487302fd4735222c7209b8dcb40692e58",
+      "public_sha256": "d9e391f909d99fd972f1aac9240139d487302fd4735222c7209b8dcb40692e58",
+      "redactions": {}
+    },
+    "source/connector/qualification-nodes.json": {
+      "source": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx1819-connector-rotation-source-qu_ihg15\\qualification-nodes.json",
+      "source_sha256": "e148ce3b3eed5a8117397394eb7a8878572a57ec73c46b451b2cc7651d6f7872",
+      "public_sha256": "e148ce3b3eed5a8117397394eb7a8878572a57ec73c46b451b2cc7651d6f7872",
+      "redactions": {}
+    },
+    "source/connector/reports.json": {
+      "source": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx1819-connector-rotation-source-qu_ihg15\\reports.json",
+      "source_sha256": "95336a7c2362fc8f1e6882e0437588d8df19df74fa7ab113ea2403f39395e586",
+      "public_sha256": "95336a7c2362fc8f1e6882e0437588d8df19df74fa7ab113ea2403f39395e586",
+      "redactions": {}
+    },
+    "candidate-v1/connector/installed.xml": {
+      "source": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\remote-renewal-release-8hs8nezr\\candidate-v1\\tests-connector\\installed.xml",
+      "source_sha256": "4e815df851bcbe88525fa7f15197baf73d9650bff7da634458450894177a8a2f",
+      "public_sha256": "4e815df851bcbe88525fa7f15197baf73d9650bff7da634458450894177a8a2f",
+      "redactions": {}
+    },
+    "candidate-v1/connector/qualification.json": {
+      "source": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\remote-renewal-release-8hs8nezr\\candidate-v1\\tests-connector\\qualification.json",
+      "source_sha256": "dedb735131f24543e3846f070b3ec13252a1e249da0320fc84444fe72315ceaa",
+      "public_sha256": "dedb735131f24543e3846f070b3ec13252a1e249da0320fc84444fe72315ceaa",
+      "redactions": {}
+    },
+    "candidate-v1/connector/pytest.raw.log": {
+      "source": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\remote-renewal-release-8hs8nezr\\candidate-v1\\tests-connector\\pytest.raw.log",
+      "source_sha256": "7a551489c34038af127e6866f44a5e3f4d01b3adcaa71fcbdc2f2ec6a2514e5d",
+      "public_sha256": "7a551489c34038af127e6866f44a5e3f4d01b3adcaa71fcbdc2f2ec6a2514e5d",
+      "redactions": {}
+    }
+  },
+  "source_reports_overlap": true
+}

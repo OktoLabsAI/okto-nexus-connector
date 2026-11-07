@@ -117,6 +117,7 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
     before = connect_reuse.identity_snapshot(state, identity) if reuse else None
     key = await asyncio.to_thread(vault.resolve, identity.secret_handle) if reuse else _read_key(args, output)
     current_binding = None
+    completed_reuse = None
     async with NexusHTTPClient(args.server) as http:
         if reuse:
             me = await http.me(key)
@@ -136,6 +137,7 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
             if store.load().preferences.get(retained[0]) != retained[3]:
                 raise ConnectorError('STALE_GENERATION', 'connect', 'The saved request changed during authentication.')
             current_binding = await connect_reuse.verify_binding(http, key, store, identity, retained)
+            completed_reuse = connect_reuse.completed_remote_reuse(args, store, identity, retained, current_binding)
         output.line(f"identity ok: {identity.alias} -> {identity.agent_id}")
 
 
@@ -173,7 +175,11 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
         workspace_id=None, binding_id=None,
         operator_identity=getattr(args, 'operator_identity', None),
         operator_proof_ref=getattr(args, 'operator_proof_ref', None))
-    result = await configure_local(wizard, output, root, store, identity, args.server, portable)
+    if completed_reuse is not None:
+        result, _ = connect_reuse.completed_remote_reuse(args, store, identity, retained, current_binding,
+            expected=completed_reuse[1])
+    else:
+        result = await configure_local(wizard, output, root, store, identity, args.server, portable)
     if retained and result.get('saved'):
         from ...daemon import manager
         from . import configure_startup

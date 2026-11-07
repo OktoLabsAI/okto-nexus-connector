@@ -356,8 +356,32 @@ def require_configuration(store, saved, identity):
     if record['handoff'] is None:
         refuse('The configuration has no bootstrap handoff.', 'PROFILE_DRIFT')
     handoff = validate_handoff(record['handoff'], record)
+    verify_identity(identity, handoff['bootstrap'])
+    _require_configuration_scope(record, saved, handoff)
+
+
+def require_completed_configuration(store, saved, identity):
+    """Check retained host facts; the caller separately verifies current authority.
+
+    A historical bootstrap epoch is not a credential for completed reuse. This
+    helper cannot resume onboarding: pending stages retain require_configuration.
+    """
+    if saved.get('stage') != 'done' or not isinstance(saved.get('result'), dict) or saved['result'].get('saved') is not True:
+        refuse('The retained setup has no completed configuration result.', 'PROFILE_DRIFT')
+    record = load(store, saved['remote_setup']['setup_run_id'])
+    if record.get('handoff') is None:
+        refuse('The completed configuration has no bootstrap handoff.', 'PROFILE_DRIFT')
+    handoff = validate_handoff(record['handoff'], record)
     receipt = handoff['bootstrap']
-    verify_identity(identity, receipt)
+    if (identity.server_id, identity.agent_id) != (receipt['server_id'], receipt['agent_id']):
+        refuse('The current identity differs from the historical bootstrap namespace.', 'AGENT_ID_MISMATCH')
+    _require_configuration_scope(record, saved, handoff)
+    return record
+
+
+def _require_configuration_scope(record, saved, handoff):
+    receipt = handoff['bootstrap']
+    metadata = saved['remote_setup']
     if (metadata != dict(setup_run_id=receipt['setup_run_id'], review_revision=handoff['review_revision'])
             or record['child_requests'] != handoff['child_requests'] or saved['child_requests'] != handoff['child_requests']
             or saved['workspace_id'] != receipt['workspace_id']

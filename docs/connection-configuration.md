@@ -108,6 +108,14 @@ only the unapplied pending selection into history. If the original host files
 changed, the committed result is still reported, but restore or explicitly
 reconfigure the existing binding before attachment. A confirmed Finish cannot be
 revised through this draft command. Credential rotation remains explicit.
+After a completed setup, `identity replace-credential ALIAS` imports an already
+rotated canonical key through protected input. Ordinary `connect --identity ALIAS`
+from the same project then authenticates the current key and verifies the exact
+approved binding and local configuration. The retained bootstrap, child IDs and
+Finish receipt stay unchanged; no probe, binding application or grant renewal is
+performed. Any selected startup operation must already be complete. A pending
+setup or local review cannot use this completed-reuse path, and the original
+`--setup-receipt` remains anchored to its original credential revision.
 Changing the concrete startup task while keeping startup enabled uses the existing
 `service` controls. This draft command refuses that change before creating a
 pending review; omit startup flags to retain the original startup plan.
