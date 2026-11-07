@@ -1,0 +1,41 @@
+{
+  "files": {
+    "command.json": {
+      "bytes": 364,
+      "sha256": "fa7213881ce0dd8b963df5ff1c2ec13e8347b5576f72bbc8faa17c068d79fec3"
+    },
+    "input-hashes-after.json": {
+      "bytes": 239449,
+      "sha256": "e6225964740a168fa42b697805768a6474109ae2b5d99afb7cfbb50c0a33053a"
+    },
+    "input-hashes-before.json": {
+      "bytes": 239449,
+      "sha256": "e6225964740a168fa42b697805768a6474109ae2b5d99afb7cfbb50c0a33053a"
+    },
+    "milestone.md": {
+      "bytes": 765,
+      "sha256": "c2a2f823b0de792811d421781d5a194305eae0db9599f13da85398e60a02bb14"
+    },
+    "package-proof.json": {
+      "bytes": 1683,
+      "sha256": "0f37980271823372466322ecaa053bbef5a30bf3d94ba7cb7b4af5bee0848b14"
+    },
+    "qualification.json": {
+      "bytes": 786,
+      "sha256": "e5b7112c46a6720654457ff00be871a94ea13ab1472391be91b7aa66b18f8c86"
+    },
+    "results.xml": {
+      "bytes": 3834,
+      "sha256": "56baa518b5050e371d5329e411310b6afdc30b79375ef915da1b925af8fad2ea"
+    },
+    "status.json": {
+      "bytes": 103,
+      "sha256": "592b9aff4a8899d099f78ca99f7a820af7dc6feda5b3e2289fccde66a5ac6f4e"
+    },
+    "test-output.txt": {
+      "bytes": 101,
+      "sha256": "f3252c8af8d21868f7e7f0f06f8bac1b351147f35b24391ba7765bf1189192f3"
+    }
+  },
+  "scope": "Installed released-session drain regression and dependency; no live M1 acceptance"
+}
