@@ -5,3 +5,4 @@ docs/evidence/remote-bootstrap/** -text -whitespace
 docs/evidence/remote-rotation/** -text -whitespace
 docs/evidence/cooperative-drain/** -text -whitespace
 docs/evidence/released-session-drain/** -text -whitespace
+docs/evidence/codex-thread-configuration/** -text -whitespace

@@ -1,0 +1,40 @@
+{
+  "files": {
+    "command.json": {
+      "bytes": 376,
+      "sha256": "d6febc374be21dac91d3bb02d057486b7740807994cb44612bbff10bf58f7649"
+    },
+    "connector_installed_regression.py": {
+      "bytes": 2007,
+      "sha256": "17ffed1b66c9b23bedaf3c56e927c0c2282425d6f9b73385031e250fd3e6d5fd"
+    },
+    "input-hashes-after.json": {
+      "bytes": 246424,
+      "sha256": "19157ab15be576450cc9d2a0a37c8b05ba04917f982c08b59e7c3c79a7e00586"
+    },
+    "input-hashes-before.json": {
+      "bytes": 246424,
+      "sha256": "19157ab15be576450cc9d2a0a37c8b05ba04917f982c08b59e7c3c79a7e00586"
+    },
+    "milestone.md": {
+      "bytes": 613,
+      "sha256": "1c91d73f1a753a06f05c65ae96545361df8c4bc5a328546734959a009f6260cc"
+    },
+    "qualification.json": {
+      "bytes": 953,
+      "sha256": "85b98b161589461d2d3f0f966f902de09581ca0b57d89857e437f0d9b7a40498"
+    },
+    "results.xml": {
+      "bytes": 3897,
+      "sha256": "ff823bc5ae4003ebb32d316346a1aaf2f12af39fe07ecfeaaa859aac93ba8835"
+    },
+    "status.json": {
+      "bytes": 103,
+      "sha256": "e650ad588db284f4fb17a37c2ebcb0b35f9d0e918fa8a3a1b5b0b53e0ebaaecb"
+    },
+    "test-output.txt": {
+      "bytes": 102,
+      "sha256": "ba264e59b15a064f3f72bd518a3c8d67b8b686eb677e49f0539695516835a63e"
+    }
+  }
+}
