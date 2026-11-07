@@ -1,0 +1,1 @@
+{"okto_nexus_connector": 124, "nexus_connector_core": 166}

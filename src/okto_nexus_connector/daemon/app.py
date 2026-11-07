@@ -16,6 +16,7 @@ import asyncio
 import logging
 import time
 from collections import defaultdict
+from functools import wraps
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -39,6 +40,17 @@ from ..transport.wss_client import NXLTransport
 from .lock import InstanceLock, Readiness
 
 logger = logging.getLogger(__name__)
+
+
+def _retained_request(method):
+    @wraps(method)
+    async def invoke(self, *args, **kwargs):
+        self._active_requests = getattr(self, '_active_requests', 0) + 1
+        try:
+            return await method(self, *args, **kwargs)
+        finally:
+            self._active_requests -= 1
+    return invoke
 
 
 class EventBridge:
@@ -275,9 +287,17 @@ class EventBridge:
         self._wakeups.clear()
         self._retry_rounds.clear()
 
+    async def quiescent(self):
+        if self._pending_core_ack or self._retry_timers or any(not t.done() for t in self._tasks.values()):
+            return False
+        for key, after in tuple(self._acked_through.items()):
+            if await self._journal_page(*key, after, 1):
+                return False
+        return not self._pending_core_ack and not self._retry_timers
+
 
 class DaemonApp:
-    def __init__(self, root: Path, *, ipc_transport: str = 'auto', acquired_lock=None, supervisor='foreground'):
+    def __init__(self, root: Path, *, ipc_transport: str = 'auto', acquired_lock=None, supervisor='foreground', stop_latch=None):
         root = root.resolve()
         if acquired_lock is not None and (not acquired_lock.held or acquired_lock.run_dir != root / 'run'):
             raise ValueError('The supplied owner does not match this Connector state')
@@ -313,6 +333,15 @@ class DaemonApp:
         self._audit_stop = asyncio.Event()
         self._audit_task: asyncio.Task | None = None
         self._draining = False
+        self._drain_fence_failed = False
+        self._active_requests = 0
+        self._drain_wake = asyncio.Event()
+        self._drain_read_task = None
+        from .drain import OperatorDrain
+        self.operator_drain = OperatorDrain(persist=self._persist_drain, begin=self._begin_drain)
+        from functools import partial
+        from .lifecycle import persist_stop
+        self._stop_latch = stop_latch if stop_latch is not None else partial(persist_stop, self.root)
         self._stream_watchers: set[asyncio.Task] = set()
         # CN3/G02: approvals keyed by (server_id, request_id); CN4-01
         # keeps a bounded terminal history so repeats consult the same
@@ -360,8 +389,7 @@ class DaemonApp:
             self._audit_task = asyncio.create_task(
                 self._stage_audit_anchor(), name='connector-audit-anchor')
             logger.info("daemon ready (ipc=%s)", self.ipc.address)
-            await self._stopped.wait()
-            return await self._shutdown()
+            return await self._serve_until_drained()
         finally:
             self._audit_stop.set()
             if self._audit_task is not None:
@@ -390,12 +418,93 @@ class DaemonApp:
                 pass
 
     def request_stop(self) -> None:
+        """Safety shutdown (signal/failure), distinct from an operator drain."""
         self._stopped.set()
+        self._drain_wake.set()
+
+    def _persist_drain(self, value):
+        from ..platform.service_context import write_document
+        try:
+            write_document(self.root / 'run' / 'drain.json', dict(revision=1,
+                instance_id=self.service_identity, generation=self.service_generation, **value))
+            self._stop_latch(instance_id=self.service_identity, generation=self.service_generation)
+        except ConnectorError:
+            raise
+        except Exception as error:
+            raise ConnectorError('SHUTDOWN_UNCONFIRMED', 'shutdown',
+                'The stop intent could not be confirmed; observe the same generation before retrying.',
+                possible_effect=True) from error
+
+    def _begin_drain(self):
+        self._draining = True
+        for owner in (self.runtimes, self.host, *self.r4_controls.values(), *self.r4_executions.values()):
+            try:
+                owner.begin_drain()
+            except Exception:
+                self._drain_fence_failed = True
+        self._drain_wake.set()
+
+    async def _drain_status(self):
+        try:
+            if getattr(self, '_drain_fence_failed', False):
+                return 'UNKNOWN'
+            if self._active_requests:
+                return 'BUSY'
+            report = await self.host.drain_status()
+            if report.get('quiescent') is not True or report.get('state') != 'QUIESCENT':
+                return report.get('state') if report.get('state') in {'BUSY', 'UNKNOWN'} else 'UNKNOWN'
+            for control in tuple(self.r4_controls.values()):
+                state = await control.drain_status()
+                if state != 'QUIESCENT':
+                    return state
+            for owner in tuple(self.r4_executions.values()):
+                state = await owner.drain_status()
+                if state != 'QUIESCENT':
+                    return state
+            report = await self.host.drain_status()
+            if report.get('quiescent') is not True or report.get('state') != 'QUIESCENT':
+                return report.get('state') if report.get('state') in {'BUSY', 'UNKNOWN'} else 'UNKNOWN'
+            if not await self.bridge.quiescent() or self._active_requests:
+                return 'BUSY'
+            return 'QUIESCENT'
+        except Exception:
+            return 'UNKNOWN'
+
+    async def _serve_until_drained(self):
+        await self._drain_wake.wait()
+        closing = False
+        close_error_reported = False
+        while True:
+            if not closing:
+                closing = self._stopped.is_set() or self.operator_drain.force_requested
+                if not closing:
+                    if getattr(self, '_drain_read_task', None) is None:
+                        self._drain_read_task = asyncio.create_task(self._drain_status(), name='connector-drain-observation')
+                    done, _ = await asyncio.wait({self._drain_read_task}, timeout=.1)
+                    if done:
+                        self.operator_drain.observation = self._drain_read_task.result()
+                        self._drain_read_task = None
+                        closing = self.operator_drain.observation == 'QUIESCENT'
+                    closing = closing or self._stopped.is_set() or self.operator_drain.force_requested
+            if closing:
+                self.operator_drain.phase = 'closing'
+                try:
+                    if await self._shutdown() == 0:
+                        return 0
+                except Exception:
+                    # A failed observation/close cannot release process ownership.
+                    if not close_error_reported:
+                        logger.warning('Shutdown remains unconfirmed; the same owner is retained.')
+                        close_error_reported = True
+                # Unknown Core ownership retains this process, IPC and lock.
+                self.operator_drain.observation = 'UNKNOWN'
+            await asyncio.sleep(.1)
 
     async def _shutdown(self) -> int:
         # CN1/A08+CN-05.01: draining blocks NEW admissions at the edge
         # FIRST; queries and containment remain available.
         self._draining = True
+        self.host.defer_store_close()
         self._audit_stop.set()
         if self._audit_task is not None:
             await self._audit_task
@@ -403,12 +512,13 @@ class DaemonApp:
         reports: list[dict[str, object]] = []
         # Startup owns HTTP/state producers. Join them before closing the
         # shared stores; cancellation of an IPC waiter cannot abandon them.
-        for control in tuple(self.r4_controls.values()):
+        for server_id, control in tuple(self.r4_controls.items()):
             await control.stop()
             if control.status()['recovery_required'] or control.cleanup_pending:
                 reports.append({"outcome": "unknown", "source": "r4-startup",
                                 "error": "The R4 executor requires recovery or connection cleanup."})
-        self.r4_controls.clear()
+            elif self.r4_controls.get(server_id) is control:
+                del self.r4_controls[server_id]
         # R4 producers finish before the shared Core host/journal shuts down.
         # They must never be cancelled as if they were UI observers.
         for owner in self.r4_executions.values():
@@ -421,6 +531,22 @@ class DaemonApp:
             reports.extend(await self.runtimes.shutdown())
         except Exception as exc:  # honest reporting, never silent loss
             reports.append({"outcome": "unknown", "error": str(exc)})
+        pending = sum(report.get('outcome', 'unknown') not in ('graceful', 'already_closed', 'forced', 'resolved')
+                      for report in reports)
+        if pending:
+            from .lock import _atomic_write
+            _atomic_write(self.root / 'run' / 'shutdown.json', json.dumps({
+                'revision': 1, 'generation': self.service_generation,
+                'state': 'RECOVERY_REQUIRED', 'pending': pending}).encode('utf-8'))
+            return 1
+        observation = getattr(self, '_drain_read_task', None)
+        if observation is not None:
+            # Force may begin containment while a reader is blocked, but the
+            # same process retains that reader and its stores until it joins.
+            await asyncio.shield(observation)
+            self._drain_read_task = None
+        if self._active_requests:
+            return 1
         await self.bridge.drain()
         for transport in self.transports.values():
             await transport.stop()
@@ -432,7 +558,8 @@ class DaemonApp:
         if watchers:
             await asyncio.gather(*watchers, return_exceptions=True)
         self.transports.clear()
-        await self.ipc.stop()
+        if self._active_requests or not await self.host.finish_drain_observation():
+            return 1
         outcomes = defaultdict(int)
         pending = 0
         for report in reports:
@@ -447,6 +574,7 @@ class DaemonApp:
             'revision': 1, 'generation': self.service_generation,
             'state': 'DRAINED' if not pending else 'RECOVERY_REQUIRED',
             'outcomes': dict(outcomes), 'pending': pending}).encode('utf-8'))
+        await self.ipc.stop()
         # CN1/CN-05.04: a nonzero exit reports unresolved ownership —
         # the Core's guardian/containment retains the resources and the
         # next lifecycle call converges them; we never claim success.
@@ -687,6 +815,7 @@ class DaemonApp:
 
     # -- remote operations over WSS ------------------------------------------
 
+    @_retained_request
     async def _on_remote_operation(self, operation) -> dict | None:
         """CN2/N01: the receiver's ValidatedOperation DTO reaches the
         manager whole — namespace, grant reference and expected turn
@@ -721,6 +850,7 @@ class DaemonApp:
                                     "wiring and stays unavailable until "
                                     "the vertical integration gate.")
 
+    @_retained_request
     async def _on_remote_approval(self, frame: dict[str, object]
                                   ) -> dict[str, object] | None:
         """Surface a pending HITL request; the authority stays server-side.
@@ -768,6 +898,7 @@ class DaemonApp:
         self._approvals[key_tuple] = incoming
         return None
 
+    @_retained_request
     async def _on_reconcile(self, frame: dict[str, object]
                             ) -> dict[str, object] | None:
         """CN1/A09: the ORIGINATING namespace produces the report;
@@ -853,6 +984,22 @@ class DaemonApp:
     # -- IPC dispatch -----------------------------------------------------------
 
     async def dispatch(self, request) -> AsyncIterator[dict[str, object]]:
+        tracked = request.op in {'executor.realize', 'runtime.start', 'runtime.submit',
+            'runtime.interrupt', 'runtime.stop', 'approvals.decide', 'reconcile', 'state.reload'}
+        if tracked and self.operator_drain.phase == 'closing':
+            yield response_error(request.seq, ConnectorError('RUNTIME_DRAINING', 'shutdown',
+                'This generation is closing; observe status or the retained shutdown receipt.'))
+            return
+        if tracked:
+            self._active_requests += 1
+        try:
+            async for value in self._dispatch(request):
+                yield value
+        finally:
+            if tracked:
+                self._active_requests -= 1
+
+    async def _dispatch(self, request) -> AsyncIterator[dict[str, object]]:
         op = request.op
         params = request.params
         if op == "ping":
@@ -866,6 +1013,7 @@ class DaemonApp:
                 "remote_link": "not_checked",
                 "work_admission": "closed" if self._draining else "canonical_scope_checks_required",
                 "uptime_seconds": round(time.time() - self.started_at, 1),
+                "drain": self.operator_drain.status(),
                 "draining": self._draining})
         elif op == "status":
             state = self.store.load()
@@ -875,6 +1023,7 @@ class DaemonApp:
                     "pid": _current_identity().pid,
                     "started_at": self.started_at,
                     "draining": self._draining,
+                    "drain": self.operator_drain.status(),
                     "ipc_connections": self.ipc.active_connections,
                 },
                 "transports": {
@@ -967,13 +1116,22 @@ class DaemonApp:
         elif op == "shutdown":
             # Legacy empty requests remain supported on the authenticated local
             # IPC channel; lifecycle clients add a generation fence.
+            if (set(params) - {'instance_id', 'generation', 'force', 'timeout_seconds'}
+                    or type(params.get('force', False)) is not bool):
+                yield response_error(request.seq, ConnectorError('VALIDATION_ERROR', 'shutdown', 'Invalid drain request.'))
+                return
             if params and (params.get('instance_id') != getattr(self, 'service_identity', None)
                            or params.get('generation') != getattr(self, 'service_generation', None)):
                 yield response_error(request.seq, ConnectorError('CONFLICT', 'shutdown',
                     'The instance generation changed; inspect it before stopping.'))
                 return
-            self.request_stop()
-            yield response_ok(request.seq, {"stopping": True})
+            try:
+                result = self.operator_drain.request(force=params.get('force', False),
+                    timeout_seconds=params.get('timeout_seconds', 60))
+            except ConnectorError as error:
+                yield response_error(request.seq, error)
+                return
+            yield response_ok(request.seq, {"stopping": True, **result})
         else:
             yield response_error(request.seq, ConnectorError(
                 "CAPABILITY_UNSUPPORTED", "ipc",
@@ -1149,6 +1307,7 @@ class DaemonApp:
             configuration_revision=binding.configuration_revision,
             kind=pending.kind)
 
+    @_retained_request
     async def _run_decision(self, attempt, pending,
                             params: dict[str, object]
                             ) -> dict[str, object]:

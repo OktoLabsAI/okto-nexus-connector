@@ -1,0 +1,369 @@
+[
+  {
+    "cell": null,
+    "code": "E731",
+    "end_location": {
+      "column": 89,
+      "row": 79
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\daemon\\r4_control.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "def generic(failure):\r\n        return (not hasattr(failure, 'rcvd') and\r\n                                   getattr(failure, 'code', None) == 'CONTROL_DISCONNECTED')",
+          "end_location": {
+            "column": 89,
+            "row": 79
+          },
+          "location": {
+            "column": 5,
+            "row": 78
+          }
+        }
+      ],
+      "message": "Rewrite `generic` as a `def`"
+    },
+    "location": {
+      "column": 5,
+      "row": 78
+    },
+    "message": "Do not assign a `lambda` expression, use a `def`",
+    "noqa_row": 78,
+    "url": "https://docs.astral.sh/ruff/rules/lambda-assignment"
+  },
+  {
+    "cell": null,
+    "code": "F401",
+    "end_location": {
+      "column": 18,
+      "row": 31
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\services\\core_host.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "from nexus_connector_core.installation import (\r\n    REF_NOT_FOUND,\r\n)",
+          "end_location": {
+            "column": 2,
+            "row": 33
+          },
+          "location": {
+            "column": 1,
+            "row": 30
+          }
+        }
+      ],
+      "message": "Remove unused import"
+    },
+    "location": {
+      "column": 5,
+      "row": 31
+    },
+    "message": "`nexus_connector_core.installation.REF_AMBIGUOUS` imported but unused",
+    "noqa_row": 31,
+    "url": "https://docs.astral.sh/ruff/rules/unused-import"
+  },
+  {
+    "cell": null,
+    "code": "F401",
+    "end_location": {
+      "column": 61,
+      "row": 31
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\services\\core_host.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "from nexus_connector_core.installation import (\r\n    REF_NOT_FOUND,\r\n)",
+          "end_location": {
+            "column": 2,
+            "row": 33
+          },
+          "location": {
+            "column": 1,
+            "row": 30
+          }
+        }
+      ],
+      "message": "Remove unused import"
+    },
+    "location": {
+      "column": 35,
+      "row": 31
+    },
+    "message": "`nexus_connector_core.installation.effective_installation_ref` imported but unused",
+    "noqa_row": 31,
+    "url": "https://docs.astral.sh/ruff/rules/unused-import"
+  },
+  {
+    "cell": null,
+    "code": "F401",
+    "end_location": {
+      "column": 25,
+      "row": 32
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\services\\core_host.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "from nexus_connector_core.installation import (\r\n    REF_NOT_FOUND,\r\n)",
+          "end_location": {
+            "column": 2,
+            "row": 33
+          },
+          "location": {
+            "column": 1,
+            "row": 30
+          }
+        }
+      ],
+      "message": "Remove unused import"
+    },
+    "location": {
+      "column": 5,
+      "row": 32
+    },
+    "message": "`nexus_connector_core.installation.resolve_installation` imported but unused",
+    "noqa_row": 32,
+    "url": "https://docs.astral.sh/ruff/rules/unused-import"
+  },
+  {
+    "cell": null,
+    "code": "F401",
+    "end_location": {
+      "column": 54,
+      "row": 35
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\services\\core_host.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 1,
+            "row": 36
+          },
+          "location": {
+            "column": 1,
+            "row": 35
+          }
+        }
+      ],
+      "message": "Remove unused import: `nexus_connector_core.ports.SecretResolver`"
+    },
+    "location": {
+      "column": 40,
+      "row": 35
+    },
+    "message": "`nexus_connector_core.ports.SecretResolver` imported but unused",
+    "noqa_row": 35,
+    "url": "https://docs.astral.sh/ruff/rules/unused-import"
+  },
+  {
+    "cell": null,
+    "code": "F541",
+    "end_location": {
+      "column": 62,
+      "row": 82
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\services\\core_host.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "\"unknown secret reference kind\"",
+          "end_location": {
+            "column": 62,
+            "row": 82
+          },
+          "location": {
+            "column": 30,
+            "row": 82
+          }
+        }
+      ],
+      "message": "Remove extraneous `f` prefix"
+    },
+    "location": {
+      "column": 30,
+      "row": 82
+    },
+    "message": "f-string without any placeholders",
+    "noqa_row": 82,
+    "url": "https://docs.astral.sh/ruff/rules/f-string-missing-placeholders"
+  },
+  {
+    "cell": null,
+    "code": "F401",
+    "end_location": {
+      "column": 63,
+      "row": 366
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\services\\core_host.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 1,
+            "row": 367
+          },
+          "location": {
+            "column": 1,
+            "row": 366
+          }
+        }
+      ],
+      "message": "Remove unused import: `nexus_connector_core.discovery.fingerprint`"
+    },
+    "location": {
+      "column": 52,
+      "row": 366
+    },
+    "message": "`nexus_connector_core.discovery.fingerprint` imported but unused",
+    "noqa_row": 366,
+    "url": "https://docs.astral.sh/ruff/rules/unused-import"
+  },
+  {
+    "cell": null,
+    "code": "E701",
+    "end_location": {
+      "column": 46,
+      "row": 19
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\services\\r4_events.py",
+    "fix": null,
+    "location": {
+      "column": 45,
+      "row": 19
+    },
+    "message": "Multiple statements on one line (colon)",
+    "noqa_row": 19,
+    "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+  },
+  {
+    "cell": null,
+    "code": "E701",
+    "end_location": {
+      "column": 39,
+      "row": 31
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\services\\r4_events.py",
+    "fix": null,
+    "location": {
+      "column": 38,
+      "row": 31
+    },
+    "message": "Multiple statements on one line (colon)",
+    "noqa_row": 31,
+    "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+  },
+  {
+    "cell": null,
+    "code": "E701",
+    "end_location": {
+      "column": 33,
+      "row": 34
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\services\\r4_events.py",
+    "fix": null,
+    "location": {
+      "column": 32,
+      "row": 34
+    },
+    "message": "Multiple statements on one line (colon)",
+    "noqa_row": 34,
+    "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+  },
+  {
+    "cell": null,
+    "code": "E701",
+    "end_location": {
+      "column": 35,
+      "row": 55
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\services\\r4_events.py",
+    "fix": null,
+    "location": {
+      "column": 34,
+      "row": 55
+    },
+    "message": "Multiple statements on one line (colon)",
+    "noqa_row": 55,
+    "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+  },
+  {
+    "cell": null,
+    "code": "E701",
+    "end_location": {
+      "column": 35,
+      "row": 61
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\services\\r4_events.py",
+    "fix": null,
+    "location": {
+      "column": 34,
+      "row": 61
+    },
+    "message": "Multiple statements on one line (colon)",
+    "noqa_row": 61,
+    "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+  },
+  {
+    "cell": null,
+    "code": "E701",
+    "end_location": {
+      "column": 35,
+      "row": 109
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\services\\r4_events.py",
+    "fix": null,
+    "location": {
+      "column": 34,
+      "row": 109
+    },
+    "message": "Multiple statements on one line (colon)",
+    "noqa_row": 109,
+    "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+  },
+  {
+    "cell": null,
+    "code": "E701",
+    "end_location": {
+      "column": 49,
+      "row": 112
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\services\\r4_events.py",
+    "fix": null,
+    "location": {
+      "column": 48,
+      "row": 112
+    },
+    "message": "Multiple statements on one line (colon)",
+    "noqa_row": 112,
+    "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+  },
+  {
+    "cell": null,
+    "code": "E701",
+    "end_location": {
+      "column": 25,
+      "row": 132
+    },
+    "filename": "D:\\Projetos\\Techridy\\okto-nexus-connector\\src\\okto_nexus_connector\\services\\r4_events.py",
+    "fix": null,
+    "location": {
+      "column": 24,
+      "row": 132
+    },
+    "message": "Multiple statements on one line (colon)",
+    "noqa_row": 132,
+    "url": "https://docs.astral.sh/ruff/rules/multiple-statements-on-one-line-colon"
+  }
+]

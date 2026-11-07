@@ -1,0 +1,22 @@
+{
+  "command": [
+    "rtk",
+    "proxy",
+    "C:\\Users\\jpamb\\AppData\\Local\\Temp\\nexus-ci-connector-refresh-la1tb1l6\\venv\\Scripts\\python.exe",
+    "-m",
+    "pytest",
+    "-q",
+    "-o",
+    "cache_dir=C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-core-r4-cache",
+    "--basetemp=C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-core-r4-fixtures",
+    "--junitxml=C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-core-r4.xml",
+    "tests/unit/test_operator_drain.py",
+    "tests/unit/test_r4_operator_drain.py",
+    "tests/unit/test_r4_execution.py",
+    "tests/unit/test_r4_daemon_execution.py",
+    "tests/unit/test_r4_daemon_control.py"
+  ],
+  "exit_code": 0,
+  "core_source": true,
+  "scope": "Synthetic tests; no provider/personal service or vault"
+}

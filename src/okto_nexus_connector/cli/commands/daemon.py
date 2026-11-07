@@ -29,7 +29,8 @@ async def run_daemon(args, output: Output, root: Path):
         output.line('Pending launch fenced.' if result.get('recovered') else 'Launch recovery not confirmed; inspect the report.')
         return result
     if sub == "stop":
-        result = manager.stop(root, timeout=getattr(args, 'timeout', 60))
+        result = manager.stop(root, timeout=getattr(args, 'timeout', 60),
+            force=getattr(args, 'force', False), expected_generation=getattr(args, 'expected_generation', None))
         output.line("daemon stopped" if result.get("stopped") else
                     "daemon stop incomplete — see report")
         return result

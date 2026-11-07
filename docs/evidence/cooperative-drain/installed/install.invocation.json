@@ -1,0 +1,15 @@
+{
+  "command": [
+    "uv",
+    "--no-config",
+    "pip",
+    "install",
+    "--python",
+    "C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-installed-_r091tbk\\venv\\Scripts\\python.exe",
+    "--no-deps",
+    "C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-installed-_r091tbk\\wheels\\okto_nexus_connector-0.0.12-py3-none-any.whl"
+  ],
+  "cwd": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-installed-_r091tbk",
+  "exit_code": 0,
+  "environment": "Explicit OS-tool allowlist; all homes in this Temp; no inherited credential variables or PYTHONPATH"
+}

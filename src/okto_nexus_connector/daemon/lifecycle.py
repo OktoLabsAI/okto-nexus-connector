@@ -187,12 +187,34 @@ def _shutdown_receipt(root, generation):
     return receipt if receipt.get('generation') == generation else {}
 
 
-def stop(root: Path, *, timeout: float):
+def persist_stop(root: Path, *, instance_id, generation):
+    """Owner-side supervisor latch for every ingress, including direct IPC."""
     from . import manager
-    if not 0 < timeout <= 300:
+    with launch_exclusion(root):
+        current = manager._process_status(root, probe=False)
+        if current.instance_id != instance_id or current.generation != generation:
+            raise ConnectorError('CONFLICT', 'shutdown', 'The instance generation changed before the stop latch.')
+        if (root / INSTALLATION).exists():
+            UserService(root).begin_stop(generation)
+
+
+def stop(root: Path, *, timeout: float, force=False, expected_generation=None):
+    from . import manager
+    if type(timeout) not in (int, float) or not 0 < timeout <= 300:
         raise ConnectorError('VALIDATION_ERROR', 'stop', 'Timeout must be greater than zero and at most 300 seconds.')
+    if (type(force) is not bool or (force and (type(expected_generation) is not str or not expected_generation))
+            or (not force and expected_generation is not None)):
+        raise ConnectorError('VALIDATION_ERROR', 'stop', 'Use --force with --expected-generation from daemon status.')
     deadline = time.monotonic() + timeout
     before = manager.status(root)
+    if force and before.state == 'stopped':
+        report = _shutdown_receipt(root, expected_generation)
+        if report.get('state') == 'DRAINED':
+            return {'stopped': True, 'state': 'stopped', 'shutdown_outcome': 'drained', 'report': report}
+    if force and before.generation != expected_generation:
+        return {'stopped': False, **before.to_json(), 'reason': 'INSTANCE_CHANGED'}
+    if force and not before.draining:
+        return {'stopped': False, **before.to_json(), 'reason': 'DRAIN_NOT_EXPIRED'}
     if before.state == 'stopped':
         if (root / INSTALLATION).exists():
             service = UserService(root)
@@ -210,18 +232,31 @@ def stop(root: Path, *, timeout: float):
     try:
         with launch_exclusion(root):
             current = manager._process_status(root, timeout=min(1, timeout))
-            if current.generation != before.generation or (pending and current.state != 'stopped'):
+            if (current.generation != before.generation or current.instance_id != before.instance_id
+                    or (pending and current.state != 'stopped')):
                 return {'stopped': False, 'was_running': current.running, **current.to_json(), 'reason': 'INSTANCE_CHANGED'}
             if (root / INSTALLATION).exists():
                 UserService(root).begin_stop(before.generation or None)
-            if not pending:
-                lock = manager._lock(root)
-                try:
-                    with IPCClient(current.transport, current.address, lock.load_token(), connect_timeout=min(2, timeout)) as client:
-                        client.call('shutdown', {'instance_id': current.instance_id, 'generation': current.generation},
-                            timeout=min(5, max(.01, deadline - time.monotonic())))
-                except (ConnectorError, OSError):
-                    pass  # observe the same generation and its durable drain receipt
+        # The owner latches the same generation too. Never hold launch exclusion
+        # across IPC: its owner-side latch acquires that same exclusion.
+        if not pending:
+            lock = manager._lock(root)
+            try:
+                with IPCClient(current.transport, current.address, lock.load_token(), connect_timeout=min(2, timeout)) as client:
+                    reply = client.call('shutdown', {'instance_id': current.instance_id, 'generation': current.generation,
+                        'force': force, 'timeout_seconds': timeout},
+                        timeout=min(5, max(.01, deadline - time.monotonic())))
+                    if reply.get('ok') is not True:
+                        code = reply.get('error', {}).get('code')
+                        if code not in {'DRAIN_NOT_EXPIRED', 'CONFLICT', 'VALIDATION_ERROR',
+                                        'SHUTDOWN_UNCONFIRMED', 'LIFECYCLE_BUSY'}:
+                            code = 'SHUTDOWN_UNCONFIRMED'
+                        return {'stopped': False, **current.to_json(), 'reason': code}
+            except ConnectorError as error:
+                if error.code in {'DRAIN_NOT_EXPIRED', 'CONFLICT', 'VALIDATION_ERROR'}:
+                    return {'stopped': False, **current.to_json(), 'reason': error.code}
+            except OSError:
+                pass  # observe the same generation and its durable drain receipt
     except ConnectorError as error:
         if error.code != 'LIFECYCLE_BUSY':
             raise
@@ -238,5 +273,7 @@ def stop(root: Path, *, timeout: float):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return {'stopped': False, 'was_running': before.running, **current.to_json(), 'wait_timed_out': True,
-                'note': 'The same drain is pending or unconfirmed. No forced stop or restart was requested.'}
+                'note': ('The same generation still owns unresolved resources; explicit force was requested.' if force else
+                         'The same drain is pending or unconfirmed. No forced stop or restart was requested.'),
+                'next_action': f'daemon stop --force --expected-generation {before.generation}'}
         time.sleep(min(.1, remaining))

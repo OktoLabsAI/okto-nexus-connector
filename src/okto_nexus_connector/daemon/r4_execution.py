@@ -34,6 +34,7 @@ class R4DaemonExecution:
         self.recovered_lanes = dict(recovered_lanes or {})
         self.owner = None
         self.closing = False
+        self.draining = False
         self._close_task = None
         self.capacity_boot_id = 'capacity_' + secrets.token_hex(16)
         self.capacity_publisher = None
@@ -52,9 +53,23 @@ class R4DaemonExecution:
             raise ConnectorError('CONTROL_DISCONNECTED', 'capacity_publication', 'The owner changed.')
         # A fresh hint asks the Server to assess exact context. It never
         # advertises every affinity as idle just because the link is ready.
-        bindings = {key: 'STALE_OBSERVATION' for key, lane in self.lanes.items()
+        bindings = {key: 'RECOVERING' if self.draining else 'STALE_OBSERVATION' for key, lane in self.lanes.items()
             if records.get(key) == (lane.binding, lane.identity) and self.clock() < lane.deadline}
         return revision, bindings
+
+    def begin_drain(self):
+        self.draining = True
+        if self.owner is not None:
+            self.owner.begin_drain()
+        if self.capacity_publisher is not None:
+            self.capacity_publisher.tick()
+
+    async def drain_status(self):
+        if self.closing:
+            return 'UNKNOWN'
+        if self.capabilities.pending_count:
+            return 'BUSY'
+        return await self.owner.drain_status() if self.owner is not None else 'QUIESCENT'
 
     async def check_capacity_scope(self, request, *, action):
         """Core authority port backed by this authenticated execution owner.
@@ -70,6 +85,8 @@ class R4DaemonExecution:
             return 'RECOVERING'
         if action in ('get', 'release'):
             return 'AVAILABLE'
+        if self.draining:
+            return 'RECOVERING'
         if scope.connection_generation != self.connection.state.connection_generation:
             return 'STALE_OBSERVATION'
         if not self.ready:
@@ -84,6 +101,8 @@ class R4DaemonExecution:
             from ..services.execution_selection import validate_capacity_selection
             selected = await asyncio.to_thread(validate_capacity_selection, self.store, scope=scope.to_dict())
             current = await self._current(projected)
+            if self.draining:
+                return 'RECOVERING'
             if selected != current.binding or current != lane:
                 return 'STALE_OBSERVATION'
         except ConnectorError as error:
@@ -224,7 +243,7 @@ class R4DaemonExecution:
                 raise ConnectorError("RECONCILIATION_REQUIRED", "r4_lanes",
                                      "The execution lane requires authority reconciliation.")
         for binding_id, (binding, identity) in records.items():
-            if binding_id in self.lanes:
+            if binding_id in self.lanes or self.draining:
                 continue
             recovered = current_publication_authority(self.recovered_lanes, binding, identity, self.clock())
             self.recovered_lanes.pop(binding_id, None)
@@ -259,6 +278,8 @@ class R4DaemonExecution:
                 require_current=self._current, clock=self.clock,
                 capacity_provider=self.execution_capacity if self.host.capacity_enabled else None)
             self.owner.start()
+            if self.draining:
+                self.owner.begin_drain()
         if self.capacity_publisher is not None:
             self.capacity_publisher.tick()
 

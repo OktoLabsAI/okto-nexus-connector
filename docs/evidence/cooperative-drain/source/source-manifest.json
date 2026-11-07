@@ -1,0 +1,65 @@
+{
+  "base_head": "fb3fff473ff246adcffa9e91573ac85f7a394170",
+  "owned_files": {
+    "src/okto_nexus_connector/cli/commands/daemon.py": {
+      "sha256": "a6325a122c921b68801cdc1b30c2616b3695278eed796e7c8b28328747b62fde",
+      "bytes": 1907
+    },
+    "src/okto_nexus_connector/cli/main.py": {
+      "sha256": "0ab9fe7e9f6b6680699e127f32c0377a553459e0791a5276adf0d4a726b48c4b",
+      "bytes": 30534
+    },
+    "src/okto_nexus_connector/daemon/app.py": {
+      "sha256": "2b901aee2284606c3ad20caf670a848b950e8d44d2785fd0cf3daebfbf3d6db5",
+      "bytes": 79832
+    },
+    "src/okto_nexus_connector/daemon/drain.py": {
+      "sha256": "7588880d14c4e9e3d42160ea250a4bd4ee0409ff03e34e6af2c7e1ebe6e2c33b",
+      "bytes": 1884
+    },
+    "src/okto_nexus_connector/daemon/lifecycle.py": {
+      "sha256": "3b7541b832ed1ff7eaba213ddefbc841a56d869754a7eb863f3930ada420c4d8",
+      "bytes": 17738
+    },
+    "src/okto_nexus_connector/daemon/manager.py": {
+      "sha256": "65ee837a61af3bbb2c4a3e98f13e2d02cd691c0ca2bf41d4f0c555d6d9a47611",
+      "bytes": 12292
+    },
+    "src/okto_nexus_connector/daemon/r4_control.py": {
+      "sha256": "fc490e38a73d6cad94f7eb20a403300b9e1917204ea61a1bd6fae91e0b9ce75a",
+      "bytes": 39841
+    },
+    "src/okto_nexus_connector/daemon/r4_execution.py": {
+      "sha256": "3a9f62ce21f692e5caa473b7fe29e79b1563328d714aae2707dd9f69b55a1039",
+      "bytes": 18056
+    },
+    "src/okto_nexus_connector/services/core_host.py": {
+      "sha256": "ba1f0afc0c45c38d45d39cb557394b4a34726f47c1b569165afc84e054bf181e",
+      "bytes": 41699
+    },
+    "src/okto_nexus_connector/services/r4_events.py": {
+      "sha256": "a64a4862edf064240831cfc629de21c632e9248d2a3be3f4097b68aeefb1fcfd",
+      "bytes": 7155
+    },
+    "src/okto_nexus_connector/services/r4_execution.py": {
+      "sha256": "5549ff7265f67f7531efe3d0961eacfc8a7f339e0981e9dc6a22e83acd4bd4f6",
+      "bytes": 51274
+    },
+    "src/okto_nexus_connector/transport/r4_connection.py": {
+      "sha256": "9a05a58ebf724e0821d75e6c9a6ef89ba48b42229fa64ddb0feb9aa0fcb0d76c",
+      "bytes": 40553
+    },
+    "tests/unit/test_operator_drain.py": {
+      "sha256": "8d2837641551b4da79e72dd10655eaeb707702714b7655a61066d7d7db9c0dba",
+      "bytes": 15566
+    },
+    "tests/unit/test_r4_operator_drain.py": {
+      "sha256": "8ea41603e642135375a4d25c0b71fd162ec58072331435927bab56da966b7be1",
+      "bytes": 5870
+    }
+  },
+  "excluded_other_owner_files": [
+    "docs/service-lifecycle.md"
+  ],
+  "core_dependency": "Current source API: begin_drain, drain_status, drain_revision, combine_drain_status, SQLiteJournal.drain_snapshot; no new Core wheel installed by this agent."
+}

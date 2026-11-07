@@ -30,6 +30,30 @@ existing state, vault, execution records, remote registrations and native
 reconciliation remain authoritative. Transport shutdown joins attachment cleanup
 without issuing a second cancellation during HTTP connection closure.
 
+## Drain and an explicit force decision
+
+`daemon stop` fences new productive work and capacity reservations while keeping
+authorized decisions, lease reconciliation, results and acknowledgements alive.
+The first request fixes the deadline. Timeout reports pending work or unknown
+ownership; it never authorizes automatic force or a replacement process.
+
+After that deadline, inspect the same instance and explicitly select its current
+generation if containment is required:
+
+```powershell
+okto-nexus-connector --state-dir C:\absolute\connector-state daemon stop --timeout 30 --json
+okto-nexus-connector --state-dir C:\absolute\connector-state daemon status --json
+okto-nexus-connector --state-dir C:\absolute\connector-state daemon stop --force --expected-generation REVIEWED_GENERATION --timeout 30 --json
+```
+
+The owner rechecks generation and persists the supervisor stop intent even for
+a direct authenticated IPC request. A premature force or stale generation is
+refused. Force enters the existing containment contract for owned resources;
+uncertain ownership remains pending with the process, IPC and lock retained.
+Only confirmed release permits a drained result or restart. Signals and external
+termination use a separate safety-containment path. No option kills an arbitrary
+PID or infers work completion from elapsed time.
+
 ## Detached start and foreground ownership
 
 `daemon start --timeout 45`, `daemon stop --timeout 60` and

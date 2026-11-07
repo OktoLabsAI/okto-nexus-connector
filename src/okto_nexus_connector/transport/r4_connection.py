@@ -698,6 +698,11 @@ class R4Connection:
             self._wake[control].clear()
             await self._wake[control].wait()
 
+    @property
+    def pending_operations(self):
+        """Reserved frames, including queued and consumer-owned operations."""
+        return len(self._reservations)
+
     def require_current(self, item: ReceivedOperation):
         self._require_online()
         if self._reservations.get(item.token) is not item:

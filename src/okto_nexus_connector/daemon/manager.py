@@ -45,6 +45,7 @@ class DaemonStatus:
     next_action: str | None = None
     launch_recovery: dict | None = None
     upgrade: dict | None = None
+    drain: dict | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -72,6 +73,7 @@ class DaemonStatus:
             "next_action": self.next_action,
             "launch_recovery": self.launch_recovery,
             "upgrade": self.upgrade,
+            "drain": self.drain,
         }
 
 
@@ -128,7 +130,8 @@ def _process_status(root: Path, *, probe: bool = True, timeout: float = 2.0) -> 
         draining=draining,
         state='stopping' if draining else 'ready' if ipc_ok else 'degraded',
         reason=reason,
-        instance_id=instance_id, generation=readiness.generation, supervisor=supervisor)
+        instance_id=instance_id, generation=readiness.generation, supervisor=supervisor,
+        drain=result.get('drain') if probe and ipc_ok and isinstance(result.get('drain'), dict) else None)
 
 
 def status(root: Path, *, probe: bool = True, timeout: float = 2.0, _launch_owned=False) -> DaemonStatus:
@@ -164,10 +167,10 @@ def start(root: Path, *, timeout: float = START_TIMEOUT) -> dict[str, object]:
             possible_effect=True, action='Inspect the retained launch and logs. No force or repeated launch was requested.') from error
 
 
-def stop(root: Path, *, timeout: float = 60.0) -> dict[str, object]:
+def stop(root: Path, *, timeout: float = 60.0, force=False, expected_generation=None) -> dict[str, object]:
     from .lifecycle import stop as drain
     try:
-        return drain(root.resolve(), timeout=timeout)
+        return drain(root.resolve(), timeout=timeout, force=force, expected_generation=expected_generation)
     except (OSError, ValueError) as error:
         raise ConnectorError('DAEMON_UNAVAILABLE', 'stop', 'The shutdown request or observation was not confirmed.',
             possible_effect=True, action='Observe the same generation and retained shutdown receipt; no force was requested.') from error

@@ -1,0 +1,227 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="5" skipped="0" tests="12" time="2.584" timestamp="2026-11-07T07:09:45.835312-03:00" hostname="Alienware_m15"><testcase classname="tests.unit.test_operator_drain" name="test_first_deadline_and_force_are_retained_and_persist_before_effects" time="0.004" /><testcase classname="tests.unit.test_operator_drain" name="test_force_is_strict_boolean_without_side_effects[1]" time="0.001" /><testcase classname="tests.unit.test_operator_drain" name="test_force_is_strict_boolean_without_side_effects[true]" time="0.002" /><testcase classname="tests.unit.test_operator_drain" name="test_force_is_strict_boolean_without_side_effects[None]" time="0.001" /><testcase classname="tests.unit.test_operator_drain" name="test_force_is_strict_boolean_without_side_effects[value3]" time="0.001" /><testcase classname="tests.unit.test_operator_drain" name="test_force_is_strict_boolean_without_side_effects[value4]" time="0.001" /><testcase classname="tests.unit.test_operator_drain" name="test_ipc_fences_instance_generation_types_and_early_force" time="0.014"><failure message="FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_ipc_fences_instance_gener0\\run\\.tmp-5vyg2twi'">app = &lt;okto_nexus_connector.daemon.app.DaemonApp object at 0x0000018F4C142660&gt;
+
+    async def test_ipc_fences_instance_generation_types_and_early_force(app):
+        for params in ({'force': True}, {'instance_id': 'foreign', 'generation': 'generation'},
+                       {'instance_id': 'instance', 'generation': 'old'},
+                       {'instance_id': 'instance', 'generation': 'generation', 'force': 1}):
+            assert not (await reply(app, **params))['ok']
+        assert not app._draining and not app._stopped.is_set()
+        assert not (app.root / 'run' / 'drain.json').exists()
+&gt;       result = await reply(app, instance_id='instance', generation='generation', timeout_seconds=1)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests\unit\test_operator_drain.py:76: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests\unit\test_operator_drain.py:66: in reply
+    return [item async for item in app.dispatch(SimpleNamespace(op='shutdown', params=params, seq=1))][0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src\okto_nexus_connector\daemon\app.py:937: in dispatch
+    async for value in self._dispatch(request):
+src\okto_nexus_connector\daemon\app.py:1070: in _dispatch
+    result = self.operator_drain.request(force=params.get('force', False),
+src\okto_nexus_connector\daemon\drain.py:27: in request
+    self.persist({'desired': 'draining', 'force_requested': False})
+src\okto_nexus_connector\daemon\app.py:410: in _persist_drain
+    write_document(self.root / 'run' / 'drain.json', dict(revision=1,
+src\okto_nexus_connector\platform\service_context.py:39: in write_document
+    _atomic_write(path, data)
+src\okto_nexus_connector\daemon\lock.py:219: in _atomic_write
+    fd, temp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Python313\Lib\tempfile.py:357: in mkstemp
+    return _mkstemp_inner(dir, prefix, suffix, flags, output_type)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+dir = 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_ipc_fences_instance_gener0\\run'
+pre = '.tmp-', suf = '', flags = 34050, output_type = &lt;class 'str'&gt;
+
+    def _mkstemp_inner(dir, pre, suf, flags, output_type):
+        """Code common to mkstemp, TemporaryFile, and NamedTemporaryFile."""
+    
+        dir = _os.path.abspath(dir)
+        names = _get_candidate_names()
+        if output_type is bytes:
+            names = map(_os.fsencode, names)
+    
+        for seq in range(TMP_MAX):
+            name = next(names)
+            file = _os.path.join(dir, pre + name + suf)
+            _sys.audit("tempfile.mkstemp", file)
+            try:
+&gt;               fd = _os.open(file, flags, 0o600)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_ipc_fences_instance_gener0\\run\\.tmp-5vyg2twi'
+
+C:\Python313\Lib\tempfile.py:256: FileNotFoundError</failure></testcase><testcase classname="tests.unit.test_operator_drain" name="test_timeout_keeps_control_until_explicit_force_or_quiescence[BUSY]" time="0.010"><failure message="FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_timeout_keeps_control_unt0\\run\\.tmp-70g5vydd'">app = &lt;okto_nexus_connector.daemon.app.DaemonApp object at 0x0000018F4C0F7890&gt;
+observation = 'BUSY'
+
+    @pytest.mark.parametrize('observation', ['BUSY', 'UNKNOWN'])
+    async def test_timeout_keeps_control_until_explicit_force_or_quiescence(app, observation):
+        now = [0]
+        app.operator_drain.clock = lambda: now[0]
+        app.host.drain_status.return_value = {'state': observation, 'quiescent': False}
+&gt;       app.operator_drain.request(timeout_seconds=1)
+
+tests\unit\test_operator_drain.py:87: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\okto_nexus_connector\daemon\drain.py:27: in request
+    self.persist({'desired': 'draining', 'force_requested': False})
+src\okto_nexus_connector\daemon\app.py:410: in _persist_drain
+    write_document(self.root / 'run' / 'drain.json', dict(revision=1,
+src\okto_nexus_connector\platform\service_context.py:39: in write_document
+    _atomic_write(path, data)
+src\okto_nexus_connector\daemon\lock.py:219: in _atomic_write
+    fd, temp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Python313\Lib\tempfile.py:357: in mkstemp
+    return _mkstemp_inner(dir, prefix, suffix, flags, output_type)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+dir = 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_timeout_keeps_control_unt0\\run'
+pre = '.tmp-', suf = '', flags = 34050, output_type = &lt;class 'str'&gt;
+
+    def _mkstemp_inner(dir, pre, suf, flags, output_type):
+        """Code common to mkstemp, TemporaryFile, and NamedTemporaryFile."""
+    
+        dir = _os.path.abspath(dir)
+        names = _get_candidate_names()
+        if output_type is bytes:
+            names = map(_os.fsencode, names)
+    
+        for seq in range(TMP_MAX):
+            name = next(names)
+            file = _os.path.join(dir, pre + name + suf)
+            _sys.audit("tempfile.mkstemp", file)
+            try:
+&gt;               fd = _os.open(file, flags, 0o600)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_timeout_keeps_control_unt0\\run\\.tmp-70g5vydd'
+
+C:\Python313\Lib\tempfile.py:256: FileNotFoundError</failure></testcase><testcase classname="tests.unit.test_operator_drain" name="test_timeout_keeps_control_until_explicit_force_or_quiescence[UNKNOWN]" time="0.011"><failure message="FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_timeout_keeps_control_unt1\\run\\.tmp-2u5c32x0'">app = &lt;okto_nexus_connector.daemon.app.DaemonApp object at 0x0000018F4C0F7D90&gt;
+observation = 'UNKNOWN'
+
+    @pytest.mark.parametrize('observation', ['BUSY', 'UNKNOWN'])
+    async def test_timeout_keeps_control_until_explicit_force_or_quiescence(app, observation):
+        now = [0]
+        app.operator_drain.clock = lambda: now[0]
+        app.host.drain_status.return_value = {'state': observation, 'quiescent': False}
+&gt;       app.operator_drain.request(timeout_seconds=1)
+
+tests\unit\test_operator_drain.py:87: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\okto_nexus_connector\daemon\drain.py:27: in request
+    self.persist({'desired': 'draining', 'force_requested': False})
+src\okto_nexus_connector\daemon\app.py:410: in _persist_drain
+    write_document(self.root / 'run' / 'drain.json', dict(revision=1,
+src\okto_nexus_connector\platform\service_context.py:39: in write_document
+    _atomic_write(path, data)
+src\okto_nexus_connector\daemon\lock.py:219: in _atomic_write
+    fd, temp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Python313\Lib\tempfile.py:357: in mkstemp
+    return _mkstemp_inner(dir, prefix, suffix, flags, output_type)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+dir = 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_timeout_keeps_control_unt1\\run'
+pre = '.tmp-', suf = '', flags = 34050, output_type = &lt;class 'str'&gt;
+
+    def _mkstemp_inner(dir, pre, suf, flags, output_type):
+        """Code common to mkstemp, TemporaryFile, and NamedTemporaryFile."""
+    
+        dir = _os.path.abspath(dir)
+        names = _get_candidate_names()
+        if output_type is bytes:
+            names = map(_os.fsencode, names)
+    
+        for seq in range(TMP_MAX):
+            name = next(names)
+            file = _os.path.join(dir, pre + name + suf)
+            _sys.audit("tempfile.mkstemp", file)
+            try:
+&gt;               fd = _os.open(file, flags, 0o600)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_timeout_keeps_control_unt1\\run\\.tmp-2u5c32x0'
+
+C:\Python313\Lib\tempfile.py:256: FileNotFoundError</failure></testcase><testcase classname="tests.unit.test_operator_drain" name="test_unknown_shutdown_does_not_dispose_ipc_publication_or_owner" time="0.009"><failure message="FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_unknown_shutdown_does_not0\\run\\.tmp-iwlokpxq'">app = &lt;okto_nexus_connector.daemon.app.DaemonApp object at 0x0000018F4C232780&gt;
+
+    async def test_unknown_shutdown_does_not_dispose_ipc_publication_or_owner(app):
+        app.runtimes.shutdown.return_value = [{'outcome': 'unknown'}]
+&gt;       assert await app._shutdown() == 1
+               ^^^^^^^^^^^^^^^^^^^^^
+
+tests\unit\test_operator_drain.py:115: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\okto_nexus_connector\daemon\app.py:496: in _shutdown
+    _atomic_write(self.root / 'run' / 'shutdown.json', json.dumps({
+src\okto_nexus_connector\daemon\lock.py:219: in _atomic_write
+    fd, temp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Python313\Lib\tempfile.py:357: in mkstemp
+    return _mkstemp_inner(dir, prefix, suffix, flags, output_type)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+dir = 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_unknown_shutdown_does_not0\\run'
+pre = '.tmp-', suf = '', flags = 34050, output_type = &lt;class 'str'&gt;
+
+    def _mkstemp_inner(dir, pre, suf, flags, output_type):
+        """Code common to mkstemp, TemporaryFile, and NamedTemporaryFile."""
+    
+        dir = _os.path.abspath(dir)
+        names = _get_candidate_names()
+        if output_type is bytes:
+            names = map(_os.fsencode, names)
+    
+        for seq in range(TMP_MAX):
+            name = next(names)
+            file = _os.path.join(dir, pre + name + suf)
+            _sys.audit("tempfile.mkstemp", file)
+            try:
+&gt;               fd = _os.open(file, flags, 0o600)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_unknown_shutdown_does_not0\\run\\.tmp-iwlokpxq'
+
+C:\Python313\Lib\tempfile.py:256: FileNotFoundError</failure></testcase><testcase classname="tests.unit.test_operator_drain" name="test_cli_force_requires_generation_before_status_or_ipc" time="0.005" /><testcase classname="tests.unit.test_operator_drain" name="test_repeated_force_uses_same_completed_generation" time="0.005"><failure message="FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_repeated_force_uses_same_0\\run\\.tmp-2hpxb2ca'">tmp_path = WindowsPath('C:/Users/jpamb/AppData/Local/Temp/connector-svc07-zfwdu6r_/initial-policy-fixtures/test_repeated_force_uses_same_0')
+monkeypatch = &lt;_pytest.monkeypatch.MonkeyPatch object at 0x0000018F4C261A50&gt;
+
+    def test_repeated_force_uses_same_completed_generation(tmp_path, monkeypatch):
+        current = manager.DaemonStatus(False, None, '', '', '', '', None, False, state='stopped')
+        monkeypatch.setattr(manager, 'status', lambda *_a, **_k: current)
+&gt;       write_document(tmp_path / 'run' / 'shutdown.json', {'generation': 'old', 'state': 'DRAINED'})
+
+tests\unit\test_operator_drain.py:136: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+src\okto_nexus_connector\platform\service_context.py:39: in write_document
+    _atomic_write(path, data)
+src\okto_nexus_connector\daemon\lock.py:219: in _atomic_write
+    fd, temp = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+C:\Python313\Lib\tempfile.py:357: in mkstemp
+    return _mkstemp_inner(dir, prefix, suffix, flags, output_type)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+dir = 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_repeated_force_uses_same_0\\run'
+pre = '.tmp-', suf = '', flags = 34050, output_type = &lt;class 'str'&gt;
+
+    def _mkstemp_inner(dir, pre, suf, flags, output_type):
+        """Code common to mkstemp, TemporaryFile, and NamedTemporaryFile."""
+    
+        dir = _os.path.abspath(dir)
+        names = _get_candidate_names()
+        if output_type is bytes:
+            names = map(_os.fsencode, names)
+    
+        for seq in range(TMP_MAX):
+            name = next(names)
+            file = _os.path.join(dir, pre + name + suf)
+            _sys.audit("tempfile.mkstemp", file)
+            try:
+&gt;               fd = _os.open(file, flags, 0o600)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E               FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures\\test_repeated_force_uses_same_0\\run\\.tmp-2hpxb2ca'
+
+C:\Python313\Lib\tempfile.py:256: FileNotFoundError</failure></testcase></testsuite></testsuites>
