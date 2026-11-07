@@ -13,6 +13,14 @@ okto-nexus-connector doctor --probe
 
 `status` queries current server and daemon facts. `daemon status` only describes the local process/IPC. `reach` checks the public server endpoint, not credentials or a harness. `doctor` checks individual environment layers; a mostly green report does not prove an approved, connected R4 binding. Its legacy binding count can be zero while an R4 setup is pending; use `status` for connection progress.
 
+Use `doctor --diagnostic-format v1 --json` for the versioned common proof report.
+It preserves unknown evidence and separates Server reachability, saved Server
+identity and participant authentication. Legacy binding counts do not become an
+R4 connection approval, and passive candidate validation does not become provider
+authentication or a native execution test. The default format and process exit
+codes are unchanged. Both formats reject an explicit probe response from a
+different Server installation without changing the saved profile.
+
 ## Interpret progress
 
 | Status | Meaning | Next action |

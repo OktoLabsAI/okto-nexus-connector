@@ -15,7 +15,7 @@ async def test_probe_uses_selected_state_directory(tmp_path, monkeypatch):
     monkeypatch.setattr(doctor, 'open_vault', vault)
     http = AsyncMock()
     http.__aenter__.return_value = http
-    http.me.return_value = SimpleNamespace(agent_id='agent')
+    http.me.return_value = SimpleNamespace(agent_id='agent', server_id='server')
     monkeypatch.setattr(doctor, 'NexusHTTPClient', lambda url: http)
     state = SimpleNamespace(preferences={}, identities=[SimpleNamespace(
         server_id='server', agent_id='agent', secret_handle='test-handle')])

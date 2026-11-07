@@ -1019,11 +1019,15 @@ options:
 ## okto-nexus-connector doctor
 
 ```text
-usage: okto-nexus-connector doctor [-h] [--probe] [--json] [--verbose]
+usage: okto-nexus-connector doctor [-h] [--probe]
+                                   [--diagnostic-format {legacy,v1}]
+                                   [--json] [--verbose]
 
 options:
   -h, --help  show this help message and exit
   --probe     attempt live network probes
+  --diagnostic-format {legacy,v1}
+              diagnostic report contract; legacy preserves existing JSON and exit codes
   --json      machine-readable JSON output
   --verbose   include technical details
 ```

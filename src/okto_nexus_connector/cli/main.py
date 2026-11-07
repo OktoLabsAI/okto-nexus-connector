@@ -325,6 +325,8 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="layered diagnostics")
     doctor.add_argument("--probe", action="store_true",
                         help="attempt live network probes")
+    doctor.add_argument('--diagnostic-format', choices=('legacy', 'v1'), default='legacy',
+                        help='diagnostic report contract; legacy preserves existing JSON and exit codes')
 
     approvals = sub.add_parser("approvals",
                                help="pending HITL requests (decision "
@@ -430,14 +432,22 @@ def main(argv: list[str] | None = None) -> int:
         render_summary(result, output, harness=args.harness)
     elif args.command == 'doctor' and not args.json and not args.verbose:
         output.heading('Diagnostic checks')
-        output.table(['Layer', 'Check', 'Status', 'Detail'],
-                     [[c['layer'], c['name'], c['status'], c['detail']] for c in result['checks']])
-        actions = [c for c in result['checks'] if c.get('action')]
+        common = result.get('schema') == 'okto.diagnostics'
+        if common:
+            output.line('Report: ' + result['state'] + ' (independent proofs, not a readiness guarantee)')
+            output.table(['Check', 'Subject', 'Status', 'Code', 'Reason'],
+                         [[c['id'], c['subject']['id'], c['status'], c['code'], c['reason']] for c in result['checks']])
+        else:
+            output.table(['Layer', 'Check', 'Status', 'Detail'],
+                         [[c['layer'], c['name'], c['status'], c['detail']] for c in result['checks']])
+        action_key = 'next_action' if common else 'action'
+        actions = [c for c in result['checks'] if c.get(action_key)]
         if actions:
             output.heading('Next steps')
             for check in actions:
-                output.line(f"  {check['name']}: {check['action']}")
-        output.line('\nDetails: doctor --verbose | JSON: doctor --json')
+                output.line(f"  {check['id'] if common else check['name']}: {check[action_key]}")
+        selector = ' --diagnostic-format v1' if common else ''
+        output.line(f'\nDetails: doctor{selector} --verbose | JSON: doctor{selector} --json')
     else:
         output.result(result)
     if args.command == 'daemon' and args.subcommand == 'status':

@@ -1,0 +1,7 @@
+{
+  "status": "PASS",
+  "qualification": "Pure report/schema conformance only; no runtime/provider/client acceptance",
+  "connector_findings_validated": 67,
+  "shared_synthetic_reports_validated": 7,
+  "contract_aggregate_sha256": "06dbbea77eb0870058bc2fe4c9afc81023ea99f857612984321d1f8e6d20c422"
+}

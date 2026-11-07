@@ -53,6 +53,35 @@ JSON status contains `connections` and is useful for automation. Exit code 0 ind
 
 `status`, `logs` and default `doctor` observe the selected instance without creating its state directory, lock, vault or daemon. `status` may read existing credentials to query the configured Server; it honors recorded vault consent. `doctor --probe` explicitly enables Server and selected-binary checks, and also honors that consent. An unknown/starting/degraded daemon stays distinct from a confirmed stopped daemon; unavailable IPC or logs do not prove absence of work.
 
+`doctor --diagnostic-format v1 --json` opts into the common `okto.diagnostics`
+report (`format_version: 1`). The default `--diagnostic-format legacy` preserves
+the existing JSON fields, lowercase statuses, summary and exit conventions.
+The selector changes presentation only: `--probe` remains the explicit choice
+for existing Server/credential and selected-candidate checks. A returned Server
+identity must match the saved profile in both formats, even when its agent ID
+matches.
+
+The v1 report gives each scoped check a `PASS`, `FAIL`, `UNKNOWN` or
+`NOT_APPLICABLE`, a bounded code, reason and next action. Its counts include all
+four states. `failed_checks`, `incomplete` and `checks_passed` summarize those
+proofs; they are not a universal readiness or completed-work guarantee. A stopped
+instance fails the readiness predicate, an unconfirmed instance stays unknown,
+and a large journal can be a successful size observation with warning severity.
+An unsupported required executor capability is a failure, not an inapplicable
+check. `severity` is independent of proof status.
+
+The Connector still returns exit 0 when it produces a report, including reports
+with failed or unknown checks. Automation using v1 should inspect `counts.FAIL`
+and the check relevant to its intended action. Nexus retains its own exit-code
+convention. Unknown observations never initiate repairs, credential replacement,
+provider login or productive work. Raw exception messages are excluded from v1.
+The returned state-schema check concerns the snapshot's schema compatibility;
+the snapshot may be an in-memory default when no state file exists.
+
+The shared schema, catalog and hand-authored synthetic vectors live under
+`tests/fixtures/diagnostics_v1`; they are contract fixtures, not runtime or
+provider qualification. Their digest is pinned by the pure diagnostic adapter.
+
 `logs` reads at most the newest 256 KiB per poll and emits only complete records up to 16 KiB. The JSON Lines stream includes `daemon_log_status` records for availability, rotation and truncation, alongside `daemon_log` records. Missing logs are a successful observation; inaccessible logs return 3 without `--follow`. A follower reports the access failure and continues observing. Byte limits, oversized records or slow readers can omit records; rotation backups remain available for separate inspection. Ctrl+C ends observation without stopping the daemon.
 
 ## Import and maintain identity
