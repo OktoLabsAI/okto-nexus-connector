@@ -1,3 +1,4 @@
 # Qualification and shared-contract manifests describe exact original bytes.
 docs/evidence/diagnostics-v1/** -text -whitespace
 tests/fixtures/diagnostics_v1/** -text -whitespace
+docs/evidence/remote-bootstrap/** -text -whitespace

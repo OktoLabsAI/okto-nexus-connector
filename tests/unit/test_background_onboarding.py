@@ -12,7 +12,7 @@ def pending(monkeypatch):
         status='APPLY_PENDING', connection_configuration={'version': 2},
         client_intent_id='configure_test_prepare', apply_client_intent_id='configure_test_apply',
         identity_alias='agent', alias='claude', approved_diff_hash='hash', operator_proof_ref='apr_test',
-        proposal={'proposal_id': 'proposal'})
+        proposal={'proposal_id': 'proposal'}, remote_setup=None)
     state = NS(binding_intents=[record], preferences={})
     store = NS(load=lambda: state, update=lambda change: change(state))
     calls = []

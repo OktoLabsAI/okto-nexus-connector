@@ -40,6 +40,7 @@ class MeInfo:
     authorization_revision: int
     configuration_revision: int
     credential_epoch: int
+    remote_setup_supported: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -469,7 +470,31 @@ class NexusHTTPClient:
             authorization_revision=revisions["authorization"],
             configuration_revision=revisions["configuration"],
             credential_epoch=revisions["credential_epoch"],
+            remote_setup_supported=(
+                isinstance(payload.get('capabilities'), dict)
+                and isinstance(payload['capabilities'].get('remote_setup'), dict)
+                and set(payload['capabilities']['remote_setup']) == {'revision', 'draft_version', 'handoff_version'}
+                and all(type(value) is int and value == 1 for value in payload['capabilities']['remote_setup'].values())),
         )
+
+    async def recover_remote_setup(self, key: str, *, setup_run_id: str) -> dict:
+        payload = await self._request('POST', '/v1/connections/remote-setup:recover',
+            key=key, json_body={'setup_run_id': setup_run_id}, require_revision=True)
+        if (not isinstance(payload, dict) or not isinstance(payload.get('handoff'), dict)
+                or payload.get('material') is not None):
+            raise ConnectorError('VERSION_INCOMPATIBLE', 'remote_setup',
+                'The Server did not return a non-secret current setup handoff.')
+        return payload['handoff']
+
+    async def recover_remote_setup_progress(self, key: str, *, setup_run_id: str) -> dict:
+        payload = await self._request('POST', '/v1/connections/remote-setup:recover',
+            key=key, json_body={'setup_run_id': setup_run_id}, require_revision=True)
+        if (not isinstance(payload, dict) or payload.get('material') is not None
+                or not isinstance(payload.get('handoff'), dict)
+                or payload.get('state') not in ('reviewed', 'awaiting_host', 'committed')
+                or payload.get('final_binding') is not None and not isinstance(payload['final_binding'], dict)):
+            raise ConnectorError('VERSION_INCOMPATIBLE', 'remote_setup', 'The Server returned invalid public setup progress.')
+        return {name: payload.get(name) for name in ('state', 'handoff', 'final_binding')}
 
     async def register_executor(self, key: str, *, client_intent_id: str,
                                 connector_id: str, label: str,
@@ -610,7 +635,8 @@ class NexusHTTPClient:
             inventory_revision: str, realization_ref: str,
             workspace_id: str, alias: str,
             agent_id_hint: str | None = None, replace_binding_id: str | None = None,
-            connection_configuration: dict | None = None, project_preset: dict | None = None) -> R4BindingProposal:
+            connection_configuration: dict | None = None, project_preset: dict | None = None,
+            remote_setup: dict | None = None) -> R4BindingProposal:
         """Request a reviewable Server proposal without starting a runtime."""
         body = {
             "client_intent_id": client_intent_id,
@@ -628,6 +654,8 @@ class NexusHTTPClient:
             body["connection_configuration"] = connection_configuration
         if project_preset is not None:
             body["project_preset"] = project_preset
+        if remote_setup is not None:
+            body["remote_setup"] = remote_setup
         payload = await self._request(
             "POST", "/v1/connections/bindings:prepare", key=key,
             json_body=body, require_revision=True,

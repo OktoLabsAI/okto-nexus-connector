@@ -1,0 +1,92 @@
+{
+  "format": 1,
+  "file_count": 21,
+  "aggregate_sha256": "98ddd8c845ef8ec3845ce949c56c5a7d103a73191d0b3a33137a676e17633df0",
+  "algorithm": "sha256 of canonical JSON files map (sort_keys,compact separators)",
+  "files": {
+    "candidate-v1/connector/installed.xml": {
+      "size": 38643,
+      "sha256": "ccc84e8181f20de83e36d871803a8acf3d1511b84734d9f632567ca586649adf"
+    },
+    "candidate-v1/connector/qualification.json": {
+      "size": 51796,
+      "sha256": "0415792ce376f81b4db58067e1f7827f11446b20f7b043773ae6be5d61f91003"
+    },
+    "package-proof.json": {
+      "size": 13503,
+      "sha256": "b6f6c30c2aa433e50256e914ef02195421b57124169c4b8e084032db91ba4542"
+    },
+    "README.md": {
+      "size": 2099,
+      "sha256": "3e0ea148e39bedc721a213080d42b8adba57a7e942b35730f2e5848265fe51ce"
+    },
+    "reports.json": {
+      "size": 6477,
+      "sha256": "8218a4566c91fd59e535de1dc2ed57e3c066ddb761e589213618587b1791a114"
+    },
+    "source/connector/dx1819-connector-guided-final.xml": {
+      "size": 22480,
+      "sha256": "0a68b4714c460d0151161acb557c67e1599e519f1be60177bebdbb3361e2bba6"
+    },
+    "source/connector/dx1819-connector-guided-retest.xml": {
+      "size": 966,
+      "sha256": "f3e812c49bc30b73a82695099da1e3b4a1f4a521d11d1046a706d38ff8c6b797"
+    },
+    "source/connector/dx1819-connector-import-schema-final.xml": {
+      "size": 14617,
+      "sha256": "7a5a35cd6aeeb2cd8f5714c9f8429b3e8ee98576959cc64ec4d7ca0985f9644f"
+    },
+    "source/connector/dx1819-connector-initial.xml": {
+      "size": 123020,
+      "sha256": "dae16056eb0ca08ee4db2fca74579706f21dbb9ae70de6fe51eec0c43dcf063f"
+    },
+    "source/connector/dx1819-connector-local-review-focused-final.xml": {
+      "size": 8294,
+      "sha256": "0e326fdd87c2b1fa386a4d3caee41b4aaf612c402d1d8f8ef5027252989e44e8"
+    },
+    "source/connector/dx1819-connector-local-review-initial.xml": {
+      "size": 11035,
+      "sha256": "dc56e4a0893bb996d98667515989cd655903cec3fe76642fed48fd76802f6195"
+    },
+    "source/connector/dx1819-connector-local-review-race-final.xml": {
+      "size": 2835,
+      "sha256": "b576b6a0f6462f206b4996d152ab42f6fa812bce934bd4049f2c98bea45f1854"
+    },
+    "source/connector/dx1819-connector-local-review-regression-final.xml": {
+      "size": 41691,
+      "sha256": "3e0d879f3124876c5ebaafbe2065adef3b8472d71d277781a8d246494867bc04"
+    },
+    "source/connector/dx1819-connector-retest.xml": {
+      "size": 4965,
+      "sha256": "d149b7ff934cb1bada275e14d4c032b2949493a202d61c7a7ef0cbdff439d71d"
+    },
+    "source/connector/dx1819-connector-review-map-initial.xml": {
+      "size": 23851,
+      "sha256": "da1c3fd7217a70b185841958c6d06dfefe0d2224aa10620ab4ad36396ce27931"
+    },
+    "source/connector/qualification-nodes.json": {
+      "size": 1535,
+      "sha256": "5aca10326acedf4889d3ed2780d716db8e4b02f6d41d4dfe2c188081fdcc8bb7"
+    },
+    "source/connector/reports.json": {
+      "size": 4864,
+      "sha256": "9c4d1eebb1650d25c38c63c57070baab116d9f09769b570e09fe58f3ae22b40a"
+    },
+    "static/connector-ruff-baseline-comparison.json": {
+      "size": 261,
+      "sha256": "b18043ca5e0f06805fae0edf395ef7c93ae35f0cf5808c99e7ae4d3e09253e5a"
+    },
+    "static/connector-ruff-initial.json": {
+      "size": 44358,
+      "sha256": "d883f4d567c0b5868b376d7a076ed9db64b2fa2627d3e62bc1139eaf0765c02b"
+    },
+    "static/static-checks.json": {
+      "size": 47720,
+      "sha256": "6ad5983d0d868b366a34c21e96c209914b55dd378a3ba9ec64cdcbba73a3f8e8"
+    },
+    "static/test-format-equivalence.json": {
+      "size": 389,
+      "sha256": "a8e2c950cccd4cfb8e04eab7e69e4b883bd7a111d2e0966d7dd64ab42fb32195"
+    }
+  }
+}

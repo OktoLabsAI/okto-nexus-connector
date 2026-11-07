@@ -43,6 +43,83 @@ host registration, probes and daemon startup untouched; an identity explicitly
 imported beforehand remains stored. Reconnect retains the original choices and
 does not accept `--customize` as an implicit edit of an already reviewed request.
 
+## Remote bootstrap without an agent key
+
+On the Connector host, prepare a reviewed draft with passive installation selection:
+
+```sh
+okto-nexus-connector connect --server https://nexus.example --setup-draft host-draft.json --request-id remote-project --project C:\Work\Project
+```
+
+The private checkpoint retains the exact local folders, installation evidence,
+configuration and optional startup choice. The public draft contains portable
+preferences and labels, never local paths or a key. Its canonical proof and
+inventory digests remain pending until the existing host pipeline produces them.
+Preparing a draft does not probe an executable, start a daemon or submit work.
+Without a saved identity, interactive `connect --server ...` also offers this flow.
+
+On the operator's client, use `okto-nexus connect --remote-draft host-draft.json
+--operator-profile OP --profile CONNECT_PROFILE --plan`, review the actual agent,
+workspace and effects, then continue that same profile. Transfer the non-secret
+handoff file separately from the one-time canonical agent key. Never transfer an
+operator credential to the Connector.
+
+```sh
+okto-nexus-connector connect --setup-receipt handoff.json
+```
+
+Enter the canonical agent key through the existing protected input when needed.
+Before storing it, the Connector checks the expected Server, agent and credential
+epoch with `/me`. It also authenticates the current handoff with the Server;
+the file alone grants no authority. Registration, installation checks, realization
+and binding preparation use the persisted child request IDs. To finish the
+operator side, resume **the same** `okto-nexus connect --profile CONNECT_PROFILE`.
+The host prints the setup root for correlation; it does not know that profile's
+local name. This bootstrap path uses the original profile review for the same
+effects rather than requiring an independent approval review.
+
+### Review changed host choices in the same root
+
+Before Finish commits, explicitly review changes to the folder, provider login
+directory, installation, preferences or startup choice:
+
+```sh
+okto-nexus-connector connect --setup-draft revised-draft.json --request-id remote-project --review-current --project C:\Work\OtherProject
+```
+
+Use `--customize` for portable preferences. Confirm the displayed local changes.
+The Server origin, Connector, canonical agent and canonical workspace remain
+attached to the original bootstrap. A different folder label does not select a
+different workspace. Existing setup and apply receipts remain retained while the
+new choices wait in a private pending review. Native configuration changes get
+a new durable local consent ID; unchanged realization content keeps its ID.
+
+On the operator client, resume the same profile with
+`okto-nexus connect --profile CONNECT_PROFILE --remote-draft revised-draft.json
+--review-current`, confirm the affected review, and export its current handoff.
+Resume the Connector with that handoff. Only the authenticated current Server
+child map can replace affected request IDs; retries never generate their own IDs
+or reuse an old intent with a new body. Reexport a pending draft with the same
+root and `--review-current`, omitting new installation/customization flags.
+
+If the old apply committed while local revision was being prepared, resume with
+the original handoff. Authenticated recovery preserves that Finish and discards
+only the unapplied pending selection into history. If the original host files
+changed, the committed result is still reported, but restore or explicitly
+reconfigure the existing binding before attachment. A confirmed Finish cannot be
+revised through this draft command. Credential rotation remains explicit.
+Changing the concrete startup task while keeping startup enabled uses the existing
+`service` controls. This draft command refuses that change before creating a
+pending review; omit startup flags to retain the original startup plan.
+
+The host retains up to 32 setup roots, one pending local review per root and 16
+review-history entries. Public documents and each complete private checkpoint
+are bounded to 64 KiB; the whole local state is bounded to 4 MiB by this flow.
+Capacity exhaustion refuses the change and preserves recovery records. An
+uncommitted local revision reserves additional room for a racing Finish receipt.
+An uncertain installation probe is recovered from its durable observation or left
+unconfirmed; it is not automatically repeated. This flow does not run a model turn.
+
 ## Full wizard sequence with configure
 
 1. Select/import an identity, then select a harness.

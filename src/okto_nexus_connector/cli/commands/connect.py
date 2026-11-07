@@ -60,6 +60,9 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
             'connect is an interactive R4 connection wizard.',
             action='Use connection-config apply with explicit parameters for automation.')
     store = StateStore(paths.state_file(root))
+    if getattr(args, 'setup_draft', None) or getattr(args, 'setup_receipt', None) or getattr(args, 'review_current', False):
+        from .connect_setup import run_setup
+        return await run_setup(args, output, root, store)
     state = store.load()
     retained = connect_reuse.saved_request(args, state, select)
     identity = connect_reuse.selected_identity(args, state, retained)
@@ -69,6 +72,17 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
                 'This request already has reviewed settings. Resume it unchanged; use configure for an explicit configuration change.')
         args.request_id = retained[1]
         connect_reuse.validate_choices(args, retained[3], state)
+    if args.server and identity is None and retained is None and not connect_reuse.credential_supplied(args) and not args.agent:
+        mode = select('How should this host obtain its canonical identity?', [
+            ('draft', 'Prepare a host draft for operator identity/workspace review'),
+            ('key', 'Import an existing canonical agent key')], non_interactive=False)
+        if mode == 'draft':
+            import uuid
+            from .connect_setup import run_setup
+            args.request_id = args.request_id or 'remote_' + uuid.uuid4().hex
+            args.setup_draft = root / 'setup-drafts' / (args.request_id + '.json')
+            args.setup_auto_export = True
+            return await run_setup(args, output, root, store)
     if not args.server:
         raise ConnectorError('SERVER_REQUIRED', 'connect',
             'Select --server for a new connection, or --identity for an imported identity.')

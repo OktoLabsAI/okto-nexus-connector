@@ -20,7 +20,7 @@ from typing import Any, Iterator
 
 from ..errors import ConnectorError
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 _LOCK_POLL_SECONDS = 0.05
 
 
@@ -224,6 +224,7 @@ class BindingIntentRecord:
     connection_configuration: dict[str, Any] | None = None
     project_preset: dict[str, Any] | None = None
     applied_binding: dict[str, Any] | None = None
+    remote_setup: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)

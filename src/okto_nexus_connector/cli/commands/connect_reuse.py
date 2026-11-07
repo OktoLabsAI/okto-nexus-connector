@@ -48,7 +48,7 @@ def saved_request(args, state, choose):
         if args.binding_alias and args.binding_alias != configuration.get('alias') and not args.request_id:
             continue
         records = [r for r in state.binding_intents if r.identity_alias == identity.alias
-                   and r.client_intent_id == request_id + '_prepare']
+                   and r.client_intent_id == saved.get('child_requests', {}).get('prepare', request_id + '_prepare')]
         if any(r.status == 'SUPERSEDED' for r in records):
             if args.request_id:
                 raise ConnectorError('OPERATION_CONFLICT', 'connect', 'This setup was superseded. Select the current connection.')
@@ -117,7 +117,7 @@ async def verify_binding(http, key, store, identity, saved):
     """Inspect current consent without replaying Finish or adopting changed mappings."""
     state = store.load()
     records = [r for r in state.binding_intents if r.identity_alias == identity.alias
-        and r.client_intent_id == saved[1] + '_prepare']
+        and r.client_intent_id == saved[3].get('child_requests', {}).get('prepare', saved[1] + '_prepare')]
     if len(records) > 1:
         raise ConnectorError('PROFILE_DRIFT', 'connect', 'The saved binding intent is ambiguous.')
     if not records or records[0].status != 'APPLIED':

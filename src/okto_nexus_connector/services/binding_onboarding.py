@@ -65,6 +65,9 @@ class BindingOnboarding:
                      r.client_intent_id == intent_id), "The binding intent is missing or ambiguous.")
 
     def _current(self, state, record):
+        if record.status == 'REVIEW_SUSPENDED':
+            raise ConnectorError('REMOTE_SETUP_REVIEW_REQUIRED', 'binding_onboarding',
+                'This local review is suspended pending authenticated setup recovery.')
         context = self._context(state, record.identity_alias, record.realization_ref)
         if context[3] != record.scope_digest:
             raise ConnectorError("STALE_GENERATION", "binding_onboarding",
@@ -103,11 +106,20 @@ class BindingOnboarding:
                     proposal=asdict(self._proposal(record)) if record.proposal else None, binding=binding)
 
     async def prepare(self, *, identity_alias, realization_ref, alias, client_intent_id, replace_binding_id=None,
-                      connection_configuration=None, project_preset=None):
+                      connection_configuration=None, project_preset=None, remote_setup=None):
         if not all(_id(v) for v in (identity_alias, realization_ref, alias, client_intent_id)):
             raise ConnectorError("VALIDATION_ERROR", "binding_onboarding", "Binding identity and intent fields are required.")
         if replace_binding_id is not None and not _id(replace_binding_id):
             raise ConnectorError("VALIDATION_ERROR", "binding_onboarding", "Invalid replacement binding ID.")
+        if remote_setup is not None:
+            from .remote_setup import identifier, revision, refuse, validate_child_requests, child_requests
+            if type(remote_setup) is not dict or set(remote_setup) != {'setup_run_id', 'review_revision'}:
+                refuse('Invalid remote setup reference.')
+            identifier(remote_setup['setup_run_id'], 100)
+            revision(remote_setup['review_revision'])
+            validate_child_requests(remote_setup['setup_run_id'], child_requests(remote_setup['setup_run_id']) | {'prepare': client_intent_id})
+            if replace_binding_id is not None:
+                refuse('The binding intent differs from the remote setup root.', 'OPERATION_CONFLICT')
         def stage(state):
             identity, profile, local, digest = self._context(state, identity_alias, realization_ref)
             existing = [r for r in state.binding_intents if r.identity_alias == identity_alias and
@@ -116,11 +128,11 @@ class BindingOnboarding:
                 record = _one(existing, "The binding intent is ambiguous.")
                 if (record.alias != alias or record.realization_ref != realization_ref or record.scope_digest != digest
                         or record.replace_binding_id != replace_binding_id or record.connection_configuration != connection_configuration
-                        or record.project_preset != project_preset):
+                        or record.project_preset != project_preset or record.remote_setup != remote_setup):
                     raise ConnectorError("OPERATION_CONFLICT", "binding_onboarding",
                                          "The binding client intent has different content.")
             else:
-                conflicts = [r for r in state.binding_intents if r.alias == alias and r.status != "SUPERSEDED"]
+                conflicts = [r for r in state.binding_intents if r.alias == alias and r.status not in ("SUPERSEDED", "REVIEW_REPLACED")]
                 replacement = None
                 if replace_binding_id is not None:
                     previous = _one(conflicts, "Select the current local alias to replace.")
@@ -141,7 +153,7 @@ class BindingOnboarding:
                 state.binding_intents.append(BindingIntentRecord(local.server_id, local.executor_id, local.agent_id,
                     identity_alias, client_intent_id, alias, realization_ref, digest,
                     replace_binding_id=replace_binding_id, replacement_snapshot=asdict(replacement) if replacement else None,
-                    connection_configuration=connection_configuration, project_preset=project_preset))
+                    connection_configuration=connection_configuration, project_preset=project_preset, remote_setup=remote_setup))
         state = await asyncio.to_thread(self.store.update, stage)
         record = self._record(state, identity_alias, client_intent_id)
         if record.proposal is not None:
@@ -161,6 +173,7 @@ class BindingOnboarding:
                 workspace_id=local.canonical_workspace_id, alias=alias, agent_id_hint=identity.agent_id,
                 **({"replace_binding_id": replace_binding_id} if replace_binding_id else {}),
                 **({"connection_configuration": record.connection_configuration} if record.connection_configuration is not None else {}),
+                **({"remote_setup": record.remote_setup} if record.remote_setup is not None else {}),
                 **({"project_preset": record.project_preset} if record.project_preset is not None else {}))
         def commit(state):
             current = self._record(state, identity_alias, client_intent_id)
@@ -184,6 +197,9 @@ class BindingOnboarding:
             raise ConnectorError("VALIDATION_ERROR", "binding_onboarding", "Invalid binding application fields.")
         saved_state = await asyncio.to_thread(self.store.load)
         saved = self._record(saved_state, identity_alias, prepare_intent_id)
+        if saved.status in ('REVIEW_REPLACED', 'REVIEW_SUSPENDED'):
+            raise ConnectorError('OPERATION_CONFLICT', 'binding_onboarding',
+                'This intent belongs to a retired review. Its history is preserved; use the current handoff.')
         if saved.status == "SUPERSEDED":
             if (saved.apply_client_intent_id != client_intent_id or saved.approved_diff_hash != approved_diff_hash
                     or saved.operator_proof_ref != operator_proof_ref):

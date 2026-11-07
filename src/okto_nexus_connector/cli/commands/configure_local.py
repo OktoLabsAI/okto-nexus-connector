@@ -4,6 +4,7 @@ Machine choices remain local. Each acknowledged stage is durable; resuming never
 re-imports keys or silently creates another binding after an uncertain response.
 """
 import asyncio
+from copy import deepcopy
 from pathlib import Path
 import socket
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ from ...services.installation_observation import observe_installation
 from ...services.executor_registration import ExecutorRegistrationService
 from ...services.executor_onboarding import ExecutorOnboarding
 from ...services.binding_onboarding import BindingOnboarding
+from ...services.remote_setup import require_configuration
 from ...transport.https_client import NexusHTTPClient
 from ...daemon import manager
 from ..wizard_prompts import text,choice,preferences
@@ -158,38 +160,68 @@ async def configure_local(args,output,root,store,identity,server,portable):
         raise ConnectorError('OPERATION_CONFLICT','configure','Resume with the original identity.')
     else:
         check_saved_choices(args, saved)
+    require_configuration(store, saved, identity)
+    child_ids = saved.get('child_requests') or {
+        phase: args.request_id + '_' + phase for phase in ('register', 'realize', 'prepare', 'apply')}
+    committed_saved = deepcopy(saved)
+    remote_key = 'remote-setup.' + saved['remote_setup']['setup_run_id'] if saved.get('remote_setup') else None
+    remote_guard = deepcopy(store.load().preferences[remote_key]) if remote_key else None
+    def persist_saved():
+        nonlocal committed_saved
+        def commit(state):
+            if remote_key and (state.preferences.get(storage_key) != committed_saved
+                    or state.preferences.get(remote_key) != remote_guard):
+                raise ConnectorError('STALE_GENERATION', 'configure',
+                    'The reviewed setup changed during this host step. Resume its current handoff.')
+            state.preferences[storage_key] = deepcopy(saved)
+        store.update(commit)
+        committed_saved = deepcopy(saved)
     output.line('Request ID: '+args.request_id)
-    await configure_startup.resume(args, root, saved,
-        lambda: store.update(lambda s: s.preferences.update({storage_key: saved})))
+    await configure_startup.resume(args, root, saved, persist_saved)
     if saved['stage']=='done':return await configure_startup.result(root, saved, saved['result'])
     c=saved['configuration']
     vault=_vault(root,store)
     def checkpoint(stage,**values):
         saved.update(stage=stage,**values)
-        store.update(lambda s:s.preferences.update({storage_key:saved}))
+        persist_saved()
     if saved['stage']=='register':
+        require_configuration(store, saved, identity)
         output.line('Registering this execution host…')
         records=[r for r in store.load().execution_executors if r.server_id==identity.server_id]
         existing=records[0] if len(records)==1 else None
+        if saved.get('remote_setup') and existing and existing.client_intent_id != child_ids['register']:
+            raise ConnectorError('OPERATION_CONFLICT', 'configure',
+                'This Server already has another host registration. Review the existing connection before creating a new setup.')
         registered=await ExecutorRegistrationService(store,vault).register(identity_alias=args.identity,
             label=existing.label if existing else saved['host_label'],
-            client_intent_id=existing.client_intent_id if existing else args.request_id+'_register',
+            client_intent_id=existing.client_intent_id if existing else child_ids['register'],
             control_capabilities=existing.control_capabilities if existing else ())
         checkpoint('probe',executor_id=registered.executor_id)
     if saved['stage']=='probe':
+        require_configuration(store, saved, identity)
         output.line('Checking the selected installation version and protocol…')
-        await observe_installation(store,server_id=identity.server_id,adapter_id=c['adapter_id'],
-            candidate_ref=saved['candidate_ref'],inventory_revision=saved['inventory_revision'])
+        if saved.get('remote_setup') and saved.get('probe_operation') == 'pending':
+            from ...services.remote_setup import recover_probe
+            recover_probe(store, saved, identity.server_id)
+        else:
+            if saved.get('remote_setup'):
+                checkpoint('probe', probe_operation='pending')
+            await observe_installation(store,server_id=identity.server_id,adapter_id=c['adapter_id'],
+                candidate_ref=saved['candidate_ref'],inventory_revision=saved['inventory_revision'])
         record=next(r for r in store.load().execution_executors if r.server_id==identity.server_id)
         candidates=await configured_candidates(record.discovery_configuration,observations=record.installation_observations)
-        checkpoint('launch',inventory_revision=calculate_inventory_revision(candidates))
+        require_configuration(store, saved, identity)
+        checkpoint('launch',inventory_revision=calculate_inventory_revision(candidates),
+            **({'probe_operation': 'confirmed'} if saved.get('remote_setup') else {}))
     if saved['stage']=='launch':
+        require_configuration(store, saved, identity)
         launch=await ExecutorOnboarding(store).configure_launch(identity_alias=args.identity,adapter_id=c['adapter_id'],
-            local_consent_id=args.request_id+'_consent',profile_revision=1,provider_home=c['provider_home'])
+            local_consent_id=saved.get('local_consent_id', args.request_id+'_consent'),profile_revision=1,provider_home=c['provider_home'])
         checkpoint('realize',configuration_digest=launch.configuration_digest)
     await asyncio.to_thread(manager.start,root)
     await ipc(root,'state.reload')
     if saved['stage']=='realize':
+        require_configuration(store, saved, identity)
         output.line('Waiting for the daemon to publish this installation…')
         key=vault.resolve(identity.secret_handle)
         async with NexusHTTPClient(server) as http:
@@ -205,13 +237,15 @@ async def configure_local(args,output,root,store,identity,server,portable):
             if not ready:
                 return dict(saved=False,status='awaiting_inventory',request_id=args.request_id,
                     message='Resume this request once the daemon has connected to Nexus.')
-        publication=await ipc(root,'executor.realize',dict(identity_alias=args.identity,client_intent_id=args.request_id+'_realize',
+        require_configuration(store, saved, identity)
+        publication=await ipc(root,'executor.realize',dict(identity_alias=args.identity,client_intent_id=child_ids['realize'],
             adapter_id=c['adapter_id'],candidate_ref=saved['candidate_ref'],inventory_revision=saved['inventory_revision'],
             configuration_digest=saved['configuration_digest'],workspace_root=c['workspace_root'],
             workspace_id=saved['workspace_id'],workspace_label=c['workspace_label']))
         checkpoint('prepare',realization_ref=publication['realization_ref'])
     bindings=BindingOnboarding(store,vault)
     if saved['stage']=='prepare':
+        require_configuration(store, saved, identity)
         # Recover requests saved by older clients that discovered the alias
         # conflict only after the user completed the wizard.
         if not saved.get('conflict_checked'):
@@ -224,30 +258,42 @@ async def configure_local(args,output,root,store,identity,server,portable):
             raise ConnectorError('VALIDATION_ERROR', 'configure', 'Enable runtime access to connect this harness.')
         requested['runtime_enabled'] = True
         proposal=await bindings.prepare(identity_alias=args.identity,realization_ref=saved['realization_ref'],
-            alias=c['alias'],client_intent_id=args.request_id+'_prepare',replace_binding_id=saved['replace_binding_id'],
+            alias=c['alias'],client_intent_id=child_ids['prepare'],replace_binding_id=saved['replace_binding_id'],
             connection_configuration=requested,
+            **({'remote_setup': saved['remote_setup']} if saved.get('remote_setup') is not None else {}),
             **({'project_preset': saved['project_preset']} if saved.get('project_preset') is not None else {}))
         checkpoint('apply',proposal=proposal['proposal'],single_approval=True)
     if saved['stage']=='apply':
+        require_configuration(store, saved, identity)
         proposal=saved['proposal']
         proofs=[ref for ref in proposal['required_approvals'] if ref.startswith('apr_')]
         proof=args.operator_proof_ref or (proofs[0] if len(proofs)==1 else None)
         try:
-            applied=await bindings.apply(identity_alias=args.identity,prepare_intent_id=args.request_id+'_prepare',
-                client_intent_id=args.request_id+'_apply',approved_diff_hash=proposal['approved_diff_hash'],operator_proof_ref=proof)
+            applied=await bindings.apply(identity_alias=args.identity,prepare_intent_id=child_ids['prepare'],
+                client_intent_id=child_ids['apply'],approved_diff_hash=proposal['approved_diff_hash'],operator_proof_ref=proof)
         except ConnectorError as exc:
             if exc.code != 'APPROVAL_REQUIRED':
                 raise
             output.line('Request submitted. The daemon will complete the connection after the operator decides. You can close this terminal.')
             for approval_id in proofs:
                 output.line('Operator approval ID: ' + approval_id)
-                output.line('On the operator client: okto-nexus operator approval ' + approval_id + ' --profile OPERATOR_PROFILE')
+            if saved.get('remote_setup'):
+                operator_command = 'okto-nexus connect --profile CONNECT_PROFILE'
+                output.line('Setup root: ' + saved['remote_setup']['setup_run_id'])
+                output.line('On the operator client, resume the same connect profile used for this root: ' + operator_command)
+                review_message = 'Resume the same operator connect profile. It verifies this materialization against the retained review and decides through the canonical approval service.'
+            else:
+                operator_command = 'okto-nexus operator approval APPROVAL_ID --profile OPERATOR_PROFILE'
+                for approval_id in proofs:
+                    output.line('On the operator client: okto-nexus operator approval ' + approval_id + ' --profile OPERATOR_PROFILE')
+                review_message = 'The operator can review and decide this request from their authenticated Nexus terminal. Keep operator credentials on that client.'
             return await configure_startup.result(root, saved, dict(saved=False,status='awaiting_operator_approval',request_id=args.request_id,
                 required_approvals=proposal['required_approvals'],background=True,
                 operator_review=dict(server_id=identity.server_id, approval_ids=proofs,
-                    command='okto-nexus operator approval APPROVAL_ID --profile OPERATOR_PROFILE',
+                    command=operator_command,
+                    **({'setup_run_id': saved['remote_setup']['setup_run_id']} if saved.get('remote_setup') else {}),
                     credential_location='operator_client'),
-                message='The operator can review and decide this request from their authenticated Nexus terminal. Keep operator credentials on that client.'))
+                message=review_message))
         checkpoint('policies',binding=applied['binding'])
     if saved.get('single_approval'):
         checkpoint('done', result=dict(saved=True, request_id=args.request_id,

@@ -125,6 +125,13 @@ def build_parser() -> argparse.ArgumentParser:
                          help="approve using the provider's own home dir")
     connect.add_argument('--provider-home', help='provider login directory on this computer')
     connect.add_argument('--request-id', help='resume the same R4 onboarding request')
+    remote_setup = connect.add_mutually_exclusive_group()
+    remote_setup.add_argument('--setup-draft', type=Path,
+        help='save a non-secret host draft for operator identity/workspace review; no key required')
+    remote_setup.add_argument('--setup-receipt', type=Path,
+        help='resume the retained host draft with the operator bootstrap handoff and a protected canonical key')
+    connect.add_argument('--review-current', action='store_true',
+        help='explicitly review changed local choices for --setup-draft and the same --request-id')
     connect.add_argument('--customize', action='store_true', help='edit advanced preferences before reviewing a new project connection')
     connect.add_argument('--operator-identity', help='imported operator identity for Nexus configuration')
     connect.add_argument('--operator-proof-ref', help='operator approval reference from Nexus')
