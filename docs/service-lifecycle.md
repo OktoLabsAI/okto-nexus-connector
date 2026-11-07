@@ -114,8 +114,9 @@ credential qualification.
 
 Linux systemd/macOS launchd installers remain legacy global templates. They have
 not received the R3 instance ownership/reconciliation contract and are not
-qualified by these Windows results. General definition reconciliation, upgrades and
-real remote/provider/login/logout campaigns remain in progress. Exact evidence
+qualified by these Windows results. Reviewed environment upgrades and owned-task
+enablement are described below; unrelated external definition edits remain refused.
+Real remote/provider/login/logout campaigns remain separately pending. Exact evidence
 and remaining scope are in `plans/agent_ops/user-service.md` and the Nexus R3 ledger.
 
 `service enable --json` and `service disable --json` change only the selected

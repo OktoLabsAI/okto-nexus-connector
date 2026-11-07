@@ -183,6 +183,13 @@ The interactive default is No. See [cleanup scope and recovery cautions](runbook
 
 ## Reconnect all connections
 
-Run okto-nexus-connector reconnect to gracefully stop and restart the daemon for the selected state directory. Configurations and credentials are preserved. Active harness executions may be interrupted during shutdown. The command returns when the daemon is ready; server connections complete asynchronously. Check okto-nexus-connector status and okto-nexus-connector logs --errors for progress. If shutdown cannot finish within 30 seconds, no second daemon is started.
+Run `okto-nexus-connector reconnect` to drain and restart the daemon for the selected
+state directory. Configurations and credentials are preserved. It waits for admitted
+work and does not request force or interrupt active work when the wait expires.
+If drain remains pending after 30 seconds, no second daemon is started. Inspect
+`daemon status` and use the [explicit force decision](service-lifecycle.md#drain-and-an-explicit-force-decision)
+only when intended. The command returns when the daemon is ready; Server connections
+complete asynchronously. Check `okto-nexus-connector status` and
+`okto-nexus-connector logs --errors` for progress.
 
 Automatic connection retries use delays of 2, 4, 8, 16 and 30 seconds, then continue every 30 seconds until the daemon is stopped, including reconciliation failures. Pending socket cleanup is retried before opening another connection. Retrying does not replay submitted work or bypass Nexus authorization.
