@@ -102,6 +102,14 @@ login is a separate trigger. Neither logout survival nor availability before
 login is promised. Bounded automatic crash recovery follows the shared Core
 definition; qualification of actual crash/login behavior is still pending.
 
+If a launch remains pending without a daemon owner and the idle task's last
+result is an entrypoint failure (1, 2 or 3), `daemon status` reports
+`SUPERVISOR_LAST_ATTEMPT_FAILED` with state `unknown`. The result is historical;
+the current launch and remaining retries are unconfirmed. `daemon start` still
+waits within its observation timeout without submitting another launch. Inspect
+the selected task and startup diagnostics, then use `daemon stop` before an
+explicit retry. Stop keeps its ownership checks and queued-start suppression.
+
 ## Qualification boundaries
 
 Windows disposable-process tests cover concurrent start, launcher exit, reuse,

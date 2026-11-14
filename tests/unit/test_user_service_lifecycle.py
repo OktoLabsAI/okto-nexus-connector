@@ -76,6 +76,82 @@ def installed(selected):
     return root, tasks, service, service.receipt()
 
 
+def test_failed_preownership_supervised_attempt_is_actionable_without_relaunch(selected, monkeypatch):
+    root, tasks, service, receipt = installed(selected)
+    service.start()
+    monkeypatch.setattr('okto_nexus_connector.daemon.service_process.validate_context',
+        Mock(side_effect=OSError('private startup detail')))
+    monkeypatch.setattr(manager, 'run_foreground',
+        Mock(side_effect=AssertionError('no runtime may bootstrap')))
+    for _ in range(4):
+        assert asyncio.run(run(root, receipt['token'], supervised=True, service=service)) == 2
+    tasks.tasks[receipt['name']] = replace(tasks.tasks[receipt['name']], state=3, last_result=2)
+    from okto_nexus_connector.platform.service_context import CONTROL
+    before = (root / CONTROL).read_bytes()
+    result = manager.status(root).to_json()
+    assert result['reason'] == 'SUPERVISOR_LAST_ATTEMPT_FAILED', result
+    assert result['state'] == 'unknown'
+    assert result['user_service']['last_result'] == 2
+    assert 'current launch and retry outcome are unconfirmed' in result['next_action']
+    assert 'private startup detail' not in json.dumps(result)
+    assert service.start() is True
+    assert [call[0] for call in tasks.calls].count('start') == 1
+    assert (root / CONTROL).read_bytes() == before
+    stopped = manager.stop(root, timeout=1)
+    assert stopped['stopped'] and stopped['shutdown_outcome'] == 'drained'
+    assert service.control(receipt)['desired'] == 'draining'
+    assert asyncio.run(run(root, receipt['token'], supervised=True, service=service)) == 0
+    assert [call[0] for call in tasks.calls].count('start') == 1
+
+
+@pytest.mark.parametrize('state,last_result', [(2, 2), (4, 2), (0, 2), (3, 0), (3, 0x41303)])
+def test_pending_supervisor_does_not_misattribute_stale_failure_or_status_code(selected, state, last_result):
+    root, tasks, service, receipt = installed(selected)
+    service.start()
+    tasks.tasks[receipt['name']] = replace(tasks.tasks[receipt['name']], state=state, last_result=last_result)
+    from okto_nexus_connector.platform.service_context import CONTROL
+    before = (root / CONTROL).read_bytes()
+    result = manager.status(root)
+    assert result.reason == 'SUPERVISOR_PENDING'
+    assert result.state == 'starting'
+    assert (root / CONTROL).read_bytes() == before
+    assert [call[0] for call in tasks.calls].count('start') == 1
+
+
+def test_stale_supervisor_failure_waits_for_same_launch_to_become_ready(selected, monkeypatch):
+    root, tasks, service, receipt = installed(selected)
+    initial = manager._process_status(root)
+    statuses = Mock(side_effect=[initial,
+        replace(initial, state='unknown', reason='SUPERVISOR_LAST_ATTEMPT_FAILED'),
+        replace(initial, state='starting', reason='SUPERVISOR_PENDING'),
+        replace(initial, state='ready', reason=None, generation='same-launch', running=True, ipc_ok=True),
+    ])
+    monkeypatch.setattr(manager, 'status', statuses)
+    monkeypatch.setattr('okto_nexus_connector.daemon.lifecycle.time.monotonic', lambda: 0)
+    monkeypatch.setattr('okto_nexus_connector.daemon.lifecycle.time.sleep', Mock())
+    result = manager.start(root, timeout=1)
+    assert result['generation'] == 'same-launch' and result['started']
+    assert statuses.call_count == 4
+    assert [call[0] for call in tasks.calls].count('start') == 1
+
+
+def test_failed_supervisor_observation_timeout_preserves_pending_effect(selected, monkeypatch):
+    root, tasks, service, receipt = installed(selected)
+    service.start()
+    tasks.tasks[receipt['name']] = replace(tasks.tasks[receipt['name']], state=3, last_result=2)
+    observed = manager.status(root)
+    assert observed.reason == 'SUPERVISOR_LAST_ATTEMPT_FAILED'
+    monkeypatch.setattr(manager, 'status', Mock(return_value=observed))
+    ticks = iter([0, 0, 2, 2])
+    monkeypatch.setattr('okto_nexus_connector.daemon.lifecycle.time.monotonic', lambda: next(ticks))
+    monkeypatch.setattr('okto_nexus_connector.daemon.lifecycle.time.sleep', Mock())
+    with pytest.raises(ConnectorError, match='SUPERVISOR_LAST_ATTEMPT_FAILED') as caught:
+        manager.start(root, timeout=1)
+    assert caught.value.possible_effect
+    assert [call[0] for call in tasks.calls].count('start') == 1
+    assert service.control(receipt)['launch_requested'] is True
+
+
 def test_enable_disable_preserve_context_control_and_do_not_launch(selected):
     root, tasks, service, receipt = installed(selected)
     control = (root / 'service-control.json').read_bytes()

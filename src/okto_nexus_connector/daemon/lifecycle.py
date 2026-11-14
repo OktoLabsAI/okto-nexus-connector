@@ -38,6 +38,14 @@ def observe(root, current, *, launch_owned=False):
             if current.state == 'ready' and control['desired'] == 'draining':
                 return replace(current, state='stopping', draining=True, reason='RUNTIME_DRAINING')
             if current.state == 'stopped' and (task.active or task.state == 0 or control.get('launch_requested')):
+                # A last exit code is historical: it cannot prove that the
+                # current selection failed or that Scheduler retries exhausted.
+                # Never reinterpret queued/running/unknown task state as failure.
+                if (control['desired'] == 'running' and control.get('launch_requested')
+                        and task.state == 3 and task.last_result in {1, 2, 3}):
+                    return replace(current, state='unknown', reason='SUPERVISOR_LAST_ATTEMPT_FAILED',
+                        next_action='The last observed scheduled attempt failed; the current launch and retry outcome are unconfirmed. '
+                            'Inspect the selected task and startup diagnostics. Use daemon stop before an explicit retry; no launch was repeated.')
                 return replace(current, state='stopping' if control['desired'] == 'draining' else 'starting',
                     reason='SUPERVISOR_PENDING')
             return current
@@ -165,7 +173,7 @@ def start(root: Path, *, timeout: float):
             raise
     current = manager.status(root, timeout=min(2, timeout))
     while current.state in {'starting', 'degraded', 'unknown'} and current.reason in {
-            'CONCURRENT_START', 'STARTUP_PENDING', 'SUPERVISOR_PENDING',
+            'CONCURRENT_START', 'STARTUP_PENDING', 'SUPERVISOR_PENDING', 'SUPERVISOR_LAST_ATTEMPT_FAILED',
             'INSTANCE_OWNERSHIP_UNCONFIRMED', 'IPC_UNREACHABLE'}:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -174,7 +182,7 @@ def start(root: Path, *, timeout: float):
         current = manager.status(root, timeout=min(2, max(.01, deadline - time.monotonic())))
     if current.state != 'ready':
         raise ConnectorError('DAEMON_UNAVAILABLE', 'start', f'The selected instance is {current.state}: {current.reason}.',
-            possible_effect=selected or current.state == 'starting', retry_safe=True,
+            possible_effect=selected or current.state == 'starting' or current.reason == 'SUPERVISOR_LAST_ATTEMPT_FAILED', retry_safe=True,
             action='Inspect daemon status/logs. The existing launch was not stopped or repeated.')
     return {'started': selected, 'already_running': not selected, 'spawned_pid': spawned_pid, **current.to_json()}
 
@@ -226,7 +234,7 @@ def stop(root: Path, *, timeout: float, force=False, expected_generation=None):
                 return {'stopped': drained, 'was_running': True, 'state': 'stopped',
                     'shutdown_outcome': 'drained' if drained else 'unconfirmed', 'report': report}
         return {'stopped': False, 'was_running': False, **before.to_json()}
-    pending = before.reason == 'SUPERVISOR_PENDING' and not before.generation
+    pending = before.reason in {'SUPERVISOR_PENDING', 'SUPERVISOR_LAST_ATTEMPT_FAILED'} and not before.generation
     if before.state not in {'ready', 'stopping'} and not pending:
         return {'stopped': False, 'was_running': before.running, **before.to_json()}
     try:
