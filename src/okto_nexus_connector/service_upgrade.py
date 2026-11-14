@@ -212,6 +212,9 @@ class UpgradeHost:
         return self.installation.definition(context, token)
 
     def validate_native(self, xml):
+        from types import SimpleNamespace
+        from .platform.service_supervision import require_no_native_retry
+        require_no_native_retry(SimpleNamespace(xml=xml))
         self.installation.tasks.validate(self.installation.name, xml)
 
     def native_read(self):

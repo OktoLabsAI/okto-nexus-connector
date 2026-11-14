@@ -35,6 +35,29 @@ def observe(root, current, *, launch_owned=False):
             if current.running and current.ipc_ok and current.supervisor != SUPERVISOR:
                 return replace(current, state='failed', reason='SUPERVISOR_MISMATCH', user_service=native)
             current = replace(current, supervisor=SUPERVISOR, user_service=native)
+            from ..platform.service_supervision import MODE, observation, guard as supervisor_guard
+            if receipt.get('supervision_mode') == MODE:
+                supervision = observation(root, receipt, task, control)
+                if supervision is None and (current.running or control.get('supervisor_claimed')):
+                    return replace(current, state='unknown', reason='SUPERVISOR_OUTCOME_UNCONFIRMED',
+                        next_action='The selected supervisor receipt is missing. Preserve the current owner and reconcile the retained launch before starting again.')
+                if supervision is None and supervisor_guard(root).locked() is not False:
+                    return replace(current, state='stopping' if control['desired'] == 'draining' else 'starting',
+                        reason='SUPERVISOR_PENDING')
+                if supervision is not None:
+                    native['supervision'] = supervision
+                    state = supervision['state']
+                    if state == 'unknown':
+                        return replace(current, state='unknown', reason='SUPERVISOR_OUTCOME_UNCONFIRMED',
+                            next_action='Inspect the retained supervisor cycle and child identity. No new retry or ownership release is authorized by an unknown outcome.')
+                    if state == 'exhausted':
+                        return replace(current, state='failed', reason='SUPERVISOR_RESTART_EXHAUSTED',
+                            next_action='The initial launch and three bounded restarts exited. Use daemon stop to confirm the closed cycle before an explicit new start.')
+                    if state in {'initial', 'handshaking', 'backoff', 'exiting'} or state == 'running' and current.state == 'stopped':
+                        return replace(current, state='stopping' if control['desired'] == 'draining' else 'starting',
+                            reason='SUPERVISOR_BACKOFF' if state == 'backoff' else 'SUPERVISOR_PENDING')
+                    if state == 'stopped' and current.state == 'stopped':
+                        return current
             if current.state == 'ready' and control['desired'] == 'draining':
                 return replace(current, state='stopping', draining=True, reason='RUNTIME_DRAINING')
             if (current.state == 'stopped' and control['desired'] == 'running'
@@ -173,7 +196,8 @@ def start(root: Path, *, timeout: float):
             raise
     current = manager.status(root, timeout=min(2, timeout))
     while current.state in {'starting', 'degraded', 'unknown'} and current.reason in {
-            'CONCURRENT_START', 'STARTUP_PENDING', 'SUPERVISOR_PENDING', 'SUPERVISOR_LAST_ATTEMPT_FAILED',
+            'CONCURRENT_START', 'STARTUP_PENDING', 'SUPERVISOR_PENDING', 'SUPERVISOR_BACKOFF', 'SUPERVISOR_LAST_ATTEMPT_FAILED',
+            'SUPERVISOR_OUTCOME_UNCONFIRMED',
             'INSTANCE_OWNERSHIP_UNCONFIRMED', 'IPC_UNREACHABLE'}:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -234,8 +258,10 @@ def stop(root: Path, *, timeout: float, force=False, expected_generation=None):
                 return {'stopped': drained, 'was_running': True, 'state': 'stopped',
                     'shutdown_outcome': 'drained' if drained else 'unconfirmed', 'report': report}
         return {'stopped': False, 'was_running': False, **before.to_json()}
-    pending = before.reason in {'SUPERVISOR_PENDING', 'SUPERVISOR_LAST_ATTEMPT_FAILED'} and not before.generation
-    if before.state not in {'ready', 'stopping'} and not pending:
+    pending = before.reason in {'SUPERVISOR_PENDING', 'SUPERVISOR_BACKOFF', 'SUPERVISOR_RESTART_EXHAUSTED',
+        'SUPERVISOR_OUTCOME_UNCONFIRMED', 'SUPERVISOR_LAST_ATTEMPT_FAILED'} and not before.generation
+    uncertain_parent_with_runtime = before.reason == 'SUPERVISOR_OUTCOME_UNCONFIRMED' and before.running and before.ipc_ok
+    if before.state not in {'ready', 'stopping'} and not pending and not uncertain_parent_with_runtime:
         return {'stopped': False, 'was_running': before.running, **before.to_json()}
     try:
         with launch_exclusion(root):
@@ -275,7 +301,8 @@ def stop(root: Path, *, timeout: float, force=False, expected_generation=None):
             report = _shutdown_receipt(root, before.generation)
             drained = pending or report.get('state') == 'DRAINED'
             return {'stopped': drained, 'was_running': before.running, **current.to_json(),
-                'shutdown_outcome': 'drained' if drained else 'unconfirmed', 'report': report}
+                'shutdown_outcome': 'drained' if drained else 'unconfirmed', 'report': report,
+                **({'supervision_scope': 'supervisor_only', 'runtime_work_settlement': 'not_asserted'} if pending else {})}
         if current.generation and current.generation != before.generation:
             return {'stopped': False, **current.to_json(), 'reason': 'INSTANCE_CHANGED'}
         remaining = deadline - time.monotonic()
@@ -283,5 +310,6 @@ def stop(root: Path, *, timeout: float, force=False, expected_generation=None):
             return {'stopped': False, 'was_running': before.running, **current.to_json(), 'wait_timed_out': True,
                 'note': ('The same generation still owns unresolved resources; explicit force was requested.' if force else
                          'The same drain is pending or unconfirmed. No forced stop or restart was requested.'),
-                'next_action': f'daemon stop --force --expected-generation {before.generation}'}
+                'next_action': (f'daemon stop --force --expected-generation {before.generation}' if before.generation else
+                    'Inspect the retained supervisor cycle and physical process identities; no runtime generation is available for forced cleanup.')}
         time.sleep(min(.1, remaining))

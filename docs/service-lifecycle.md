@@ -99,10 +99,42 @@ editors.
 Stop records suppression of same-login recovery before authenticated IPC drain.
 The installed worker exits without reopening admission after that stop; a new
 login is a separate trigger. Neither logout survival nor availability before
-login is promised. Bounded automatic crash recovery follows the shared Core
-definition; qualification of actual crash/login behavior is still pending.
+login is promised. The task starts one foreground parent; it does not delegate
+retries to Task Scheduler's `RestartOnFailure`, which did not restart the tested
+native task failures. The parent starts the existing foreground runtime entry,
+reserving each attempt durably before creating the process. The shared Core
+policy permits the initial attempt plus three restarts, separated by 60 seconds
+on the live parent's monotonic clock. An unexpected exit code 0 also consumes
+the bounded policy. Reaching READY or reconnecting does not reset that budget.
 
-If a launch remains pending without a daemon owner and the idle task's last
+The separate `run/service-supervisor.json` receipt binds installation token,
+instance, cycle, parent, Python launcher and runtime child PID/birth identities
+and the attempt count. Windows virtual-environment launchers can be separate
+processes. The child publishes a nonce-bound handshake in its own file and waits
+up to 60 seconds for acknowledgement. The parent independently checks OS
+ancestry, retains the actual runtime handle and writes the acknowledgement;
+the child then rechecks the cycle and stop latch before runtime bootstrap.
+Neither the child's declaration alone nor launcher exit is runtime exit proof.
+The parent holds its own guard, while the child keeps the existing daemon lock
+and runtime recovery. `SUPERVISOR_BACKOFF` means the same live parent is waiting;
+`SUPERVISOR_RESTART_EXHAUSTED` reports four observed exited attempts. Stop during
+backoff suppresses the next launch. Normal stop is complete only after parent
+and child exit and native task inactivity. A new cycle needs an explicit start
+after confirmed stop, or a separately observed later logon with the prior
+processes confirmed exited. A missing/unknown child or lost unfinished parent
+is `SUPERVISOR_OUTCOME_UNCONFIRMED`, never permission to reset or remove claims.
+When stop closes backoff without a live runtime, its result explicitly reports
+`supervision_scope=supervisor_only` and `runtime_work_settlement=not_asserted`.
+Parent/launcher/runtime exit does not settle model work, leases or descendants
+left by a crash; the existing canonical runtime recovery retains that authority.
+
+Previously installed definitions with the native retry policy are preserved.
+New start/action-only upgrade refuses `SERVICE_SUPERVISION_POLICY_CHANGED`;
+use normal stop, uninstall, then install explicitly to select the new parent.
+Application data remains preserved. Source tests use injected task/process
+effects; native qualification of this new parent is tracked separately.
+
+For a retained legacy task, if a launch remains pending without a daemon owner and the idle task's last
 result is an entrypoint failure (1, 2 or 3), `daemon status` reports
 `SUPERVISOR_LAST_ATTEMPT_FAILED` with state `unknown`. The result is historical;
 the current launch and remaining retries are unconfirmed. `daemon start` still
@@ -115,7 +147,11 @@ explicit retry. Stop keeps its ownership checks and queued-start suppression.
 Windows disposable-process tests cover concurrent start, launcher exit, reuse,
 restart, generation-correlated drain and the wheel installed outside the checkout.
 Fake-native tests cover ownership conflicts, changed definitions, lost responses,
-stop suppression and data preservation. Native Task Scheduler checks use only
+stop suppression and data preservation. Benign Python subprocess tests exercise
+the real Windows venv redirector handshake, identity acknowledgement before a
+fixture bootstrap marker, stop during handshake and both physical exits. They
+do not start a Connector service or prove native task crash recovery. Repository
+unit checks of Task Scheduler use only
 `TASK_VALIDATE_ONLY`, including calls from worker threads; they do not install a
 task. These are distinct from actual terminal closure, login/logout or service
 credential qualification.

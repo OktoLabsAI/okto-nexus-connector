@@ -18,12 +18,12 @@ from ..platform.user_service import SUPERVISOR, UserService, windows_logon_sessi
 from .lock import InstanceLock
 
 
-async def run(root, token, *, supervised=False, service=None):
+async def run(root, token, *, supervised=False, service=None, supervisor_cycle=None, supervisor_nonce=None):
     root = Path(root).resolve()
     owner = InstanceLock(root / 'run')
     receipt_path = root / (INSTALLATION if supervised else 'run/' + LAUNCH)
     service = service or (UserService(root) if supervised else None)
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + (60 if supervisor_cycle else 30)
     while True:
         try:
             with launch_exclusion(root):
@@ -34,6 +34,13 @@ async def run(root, token, *, supervised=False, service=None):
                 if supervised:
                     control = service.control(receipt)
                     logon = windows_logon_session()
+                    from ..platform.service_supervision import MODE, validate_child
+                    if receipt.get('supervision_mode') == MODE:
+                        # Identity must be acknowledged even when stop races
+                        # startup; the parent still needs physical child proof.
+                        validate_child(root, receipt, control, supervisor_cycle, supervisor_nonce)
+                        if control['desired'] != 'running':
+                            return 0
                     if control['desired'] == 'draining' and control.get('logon_session') == logon:
                         return 0
                     _, task = service.observe(check_context=False)
@@ -48,7 +55,7 @@ async def run(root, token, *, supervised=False, service=None):
                 if not owner.acquire():
                     return 2
                 if supervised:
-                    write_document(root / CONTROL, {'revision': 1, 'token': token,
+                    write_document(root / CONTROL, {**control, 'revision': 1, 'token': token,
                         'desired': 'running', 'launch_requested': False, 'logon_session': logon})
                 else:
                     identity = current_process_identity()
@@ -110,8 +117,11 @@ def main(argv=None):
     parser.add_argument('--state-dir', required=True)
     parser.add_argument('--token', required=True)
     parser.add_argument('--supervised', action='store_true')
+    parser.add_argument('--supervisor-cycle')
+    parser.add_argument('--supervisor-nonce')
     args = parser.parse_args(argv)
-    return asyncio.run(run(Path(args.state_dir), args.token, supervised=args.supervised))
+    return asyncio.run(run(Path(args.state_dir), args.token, supervised=args.supervised,
+                          supervisor_cycle=args.supervisor_cycle, supervisor_nonce=args.supervisor_nonce))
 
 
 if __name__ == '__main__':

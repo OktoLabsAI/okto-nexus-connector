@@ -76,9 +76,28 @@ def installed(selected):
     return root, tasks, service, service.receipt()
 
 
-def test_failed_preownership_supervised_attempt_is_actionable_without_relaunch(selected, monkeypatch):
+def legacy_installed(selected, *, launched=False):
+    """Retained pre-parent installation; reads/stop work, new start requires migration."""
     root, tasks, service, receipt = installed(selected)
-    service.start()
+    if launched:
+        service.start()
+    task = tasks.tasks[service.name]
+    xml = task.xml.replace('daemon.service_supervisor', 'daemon.service_process').replace('--token', '--supervised --token')
+    xml = xml.replace('</Settings>', '<RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings>')
+    task = replace(task, xml=xml)
+    tasks.tasks[service.name] = task
+    receipt = {**receipt, 'native_xml': xml, 'native_digest': task.digest}
+    receipt.pop('supervision_mode')
+    write_document(root / INSTALLATION, receipt)
+    from okto_nexus_connector.platform.service_context import CONTROL
+    control = service.control(receipt)
+    control.pop('cycle_id', None)
+    write_document(root / CONTROL, control)
+    return root, tasks, service, receipt
+
+
+def test_failed_preownership_supervised_attempt_is_actionable_without_relaunch(selected, monkeypatch):
+    root, tasks, service, receipt = legacy_installed(selected, launched=True)
     monkeypatch.setattr('okto_nexus_connector.daemon.service_process.validate_context',
         Mock(side_effect=OSError('private startup detail')))
     monkeypatch.setattr(manager, 'run_foreground',
@@ -94,7 +113,8 @@ def test_failed_preownership_supervised_attempt_is_actionable_without_relaunch(s
     assert result['user_service']['last_result'] == 2
     assert 'current launch and retry outcome are unconfirmed' in result['next_action']
     assert 'private startup detail' not in json.dumps(result)
-    assert service.start() is True
+    with pytest.raises(ConnectorError, match='SERVICE_SUPERVISION_POLICY_CHANGED'):
+        service.start()
     assert [call[0] for call in tasks.calls].count('start') == 1
     assert (root / CONTROL).read_bytes() == before
     stopped = manager.stop(root, timeout=1)
@@ -106,8 +126,7 @@ def test_failed_preownership_supervised_attempt_is_actionable_without_relaunch(s
 
 @pytest.mark.parametrize('last_result', [1, 2, 3])
 def test_failed_attempt_after_runtime_entry_remains_actionable_without_relaunch(selected, monkeypatch, last_result):
-    root, tasks, service, receipt = installed(selected)
-    service.start()
+    root, tasks, service, receipt = legacy_installed(selected, launched=True)
     from okto_nexus_connector.platform.service_context import CONTROL
     write_document(root / CONTROL, {**service.control(receipt), 'launch_requested': False})
     tasks.tasks[receipt['name']] = replace(tasks.tasks[receipt['name']], state=3, last_result=last_result)
@@ -265,7 +284,7 @@ def test_external_enablement_edit_without_our_intent_is_not_adopted(selected):
 
 
 def test_disabled_queued_entry_does_not_bootstrap(selected, monkeypatch):
-    root, tasks, service, receipt = installed(selected)
+    root, tasks, service, receipt = legacy_installed(selected)
     assert service_install.set_enabled(root, False)['enablement_confirmed']
     foreground = Mock(side_effect=AssertionError('Disabled entry started'))
     monkeypatch.setattr(manager, 'run_foreground', foreground)
@@ -457,7 +476,7 @@ def test_lost_delete_response_recovers_positive_absence(selected):
 
 
 def test_supervised_stop_latch_suppresses_same_login_and_allows_later_login(selected, monkeypatch):
-    root, tasks, service, receipt = installed(selected)
+    root, tasks, service, receipt = legacy_installed(selected)
     (root / 'run').mkdir(exist_ok=True)
     service.begin_stop('generation')
     foreground = Mock(side_effect=AssertionError('suppressed retry admitted work'))

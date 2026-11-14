@@ -13,6 +13,7 @@ from .service_context import (CONTEXT, CONTROL, INSTALLATION, digest, read_docum
                               saved_context, validate_context, write_document)
 from .service_identity import effective_principal, service_instance_id
 from .windows_tasks import WindowsTasks
+from .service_supervision import MODE, observation, require_no_native_retry, guard as supervisor_guard
 
 SUPERVISOR = 'windows-task-scheduler'
 LEGACY_TASK_NAME = 'okto-nexus-connector'
@@ -141,8 +142,8 @@ class UserService:
         if executable.name.lower() == 'python.exe':
             executable = executable.with_name('pythonw.exe')
         return UserServiceDefinition('connector', self.instance_id, self.principal.removeprefix('sid:'),
-            str(executable), ('-I', '-m', 'okto_nexus_connector.daemon.service_process',
-            '--state-dir', str(self.root), '--supervised', '--token', token), str(self.root))
+            str(executable), ('-I', '-m', 'okto_nexus_connector.daemon.service_supervisor',
+            '--state-dir', str(self.root), '--token', token), str(self.root))
 
     def prepare(self):
         self._upgrade_fence()
@@ -180,7 +181,8 @@ class UserService:
         definition = self.definition(context, token)
         receipt = {'revision': 1, 'instance_id': self.instance_id, 'principal': self.principal,
             'name': self.name, 'supervisor': SUPERVISOR, 'token': token, 'state': 'installing',
-            'context_digest': digest(context), 'definition_digest': definition.revision_digest}
+            'context_digest': digest(context), 'definition_digest': definition.revision_digest,
+            'supervision_mode': MODE}
         write_document(self.root / CONTEXT, context)
         write_document(self.root / INSTALLATION, receipt)
         write_document(self.root / CONTROL, {'revision': 1, 'token': token, 'desired': 'running'})
@@ -205,6 +207,10 @@ class UserService:
         receipt, task = self.observe()
         if receipt is None:
             return False
+        require_no_native_retry(task)
+        if receipt.get('supervision_mode') != MODE:
+            raise conflict('SERVICE_SUPERVISION_POLICY_CHANGED',
+                'Stop, uninstall and install this user service explicitly to select bounded foreground supervision. Retained data is preserved.')
         control = self.control(receipt)
         if task.active or control.get('launch_requested'):
             return True
@@ -212,8 +218,12 @@ class UserService:
             raise conflict('SERVICE_DISABLED', 'Use service enable for this instance before starting it.')
         if task.state == 0:
             raise conflict('SUPERVISOR_UNCONFIRMED', 'Inspect the selected task state; it was not re-enabled or replaced.')
+        supervision = observation(self.root, receipt, task, control)
+        if supervision and (supervision['state'] != 'stopped' or control['desired'] != 'draining'):
+            raise conflict('SUPERVISOR_OUTCOME_UNCONFIRMED',
+                'Use daemon stop and confirm the prior supervisor and child exited before an explicit new retry cycle.')
         write_document(self.root / CONTROL, {'revision': 1, 'token': receipt['token'],
-            'desired': 'running', 'launch_requested': True})
+            'desired': 'running', 'launch_requested': True, 'cycle_id': secrets.token_hex(16)})
         self.tasks.start(self.name, receipt['native_digest'])
         return True
 
@@ -221,8 +231,8 @@ class UserService:
         receipt, _ = self.observe()
         if receipt:
             control = self.control(receipt)
-            write_document(self.root / CONTROL, {'revision': 1, 'token': receipt['token'],
-                'desired': 'draining', 'generation': generation,
+            write_document(self.root / CONTROL, {**control, 'revision': 1, 'token': receipt['token'],
+                'desired': 'draining', 'generation': generation, 'launch_requested': False,
                 'logon_session': control.get('logon_session') or windows_logon_session()})
 
     def uninstall(self):
@@ -235,6 +245,22 @@ class UserService:
             return
         if receipt.get('enablement') is not None:
             raise conflict('SERVICE_ENABLEMENT_PENDING', 'Complete the retained enable/disable operation before removing the integration.')
+        if receipt.get('supervision_mode') == MODE:
+            control = self.control(receipt)
+            # Missing task cannot hide a lost parent/child launch reservation.
+            if task is None:
+                from types import SimpleNamespace
+                observed_task = SimpleNamespace(active=False, state=3)
+            else:
+                observed_task = task
+            supervision = observation(self.root, receipt, observed_task, control)
+            from ..daemon.lock import InstanceLock
+            if (supervision and supervision['state'] not in {'stopped', 'exhausted'}
+                    or supervision is None and (control.get('launch_requested') or control.get('supervisor_claimed'))
+                    or supervisor_guard(self.root).locked() is not False
+                    or InstanceLock(self.root / 'run').locked() is not False):
+                raise conflict('SUPERVISOR_OUTCOME_UNCONFIRMED',
+                    'Confirm normal shutdown and physical parent/child exit before removing this integration.')
         if task:
             if task.digest != receipt.get('native_digest'):
                 raise conflict('SERVICE_DEFINITION_CHANGED', 'Reconcile the selected task before removing it; the retained native_xml is available for comparison.')
