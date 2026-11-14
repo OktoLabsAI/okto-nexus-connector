@@ -104,6 +104,29 @@ def test_failed_preownership_supervised_attempt_is_actionable_without_relaunch(s
     assert [call[0] for call in tasks.calls].count('start') == 1
 
 
+@pytest.mark.parametrize('last_result', [1, 2, 3])
+def test_failed_attempt_after_runtime_entry_remains_actionable_without_relaunch(selected, monkeypatch, last_result):
+    root, tasks, service, receipt = installed(selected)
+    service.start()
+    from okto_nexus_connector.platform.service_context import CONTROL
+    write_document(root / CONTROL, {**service.control(receipt), 'launch_requested': False})
+    tasks.tasks[receipt['name']] = replace(tasks.tasks[receipt['name']], state=3, last_result=last_result)
+    before = (root / CONTROL).read_bytes()
+    result = manager.status(root)
+    assert result.state == 'unknown' and result.reason == 'SUPERVISOR_LAST_ATTEMPT_FAILED'
+    assert 'retry outcome are unconfirmed' in result.next_action
+    ticks = iter([0, 0, 2, 2])
+    with monkeypatch.context() as clock:
+        clock.setattr('okto_nexus_connector.daemon.lifecycle.time.monotonic', lambda: next(ticks))
+        clock.setattr('okto_nexus_connector.daemon.lifecycle.time.sleep', Mock())
+        with pytest.raises(ConnectorError, match='SUPERVISOR_LAST_ATTEMPT_FAILED'):
+            manager.start(root, timeout=1)
+    assert (root / CONTROL).read_bytes() == before
+    assert [call[0] for call in tasks.calls].count('start') == 1
+    service.begin_stop(None)
+    assert manager.status(root).state == 'stopped'
+
+
 @pytest.mark.parametrize('state,last_result', [(2, 2), (4, 2), (0, 2), (3, 0), (3, 0x41303)])
 def test_pending_supervisor_does_not_misattribute_stale_failure_or_status_code(selected, state, last_result):
     root, tasks, service, receipt = installed(selected)

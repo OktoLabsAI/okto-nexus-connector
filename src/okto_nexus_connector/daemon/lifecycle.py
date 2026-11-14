@@ -37,15 +37,15 @@ def observe(root, current, *, launch_owned=False):
             current = replace(current, supervisor=SUPERVISOR, user_service=native)
             if current.state == 'ready' and control['desired'] == 'draining':
                 return replace(current, state='stopping', draining=True, reason='RUNTIME_DRAINING')
+            if (current.state == 'stopped' and control['desired'] == 'running'
+                    and task.state == 3 and task.last_result in {1, 2, 3}):
+                # Runtime entry clears launch_requested; a later failure is
+                # still actionable. LastTaskResult is historical and cannot
+                # establish the current selection or exhausted retry budget.
+                return replace(current, state='unknown', reason='SUPERVISOR_LAST_ATTEMPT_FAILED',
+                    next_action='The last observed scheduled attempt failed; the current launch and retry outcome are unconfirmed. '
+                        'Inspect the selected task and startup diagnostics. Use daemon stop before an explicit retry; no launch was repeated.')
             if current.state == 'stopped' and (task.active or task.state == 0 or control.get('launch_requested')):
-                # A last exit code is historical: it cannot prove that the
-                # current selection failed or that Scheduler retries exhausted.
-                # Never reinterpret queued/running/unknown task state as failure.
-                if (control['desired'] == 'running' and control.get('launch_requested')
-                        and task.state == 3 and task.last_result in {1, 2, 3}):
-                    return replace(current, state='unknown', reason='SUPERVISOR_LAST_ATTEMPT_FAILED',
-                        next_action='The last observed scheduled attempt failed; the current launch and retry outcome are unconfirmed. '
-                            'Inspect the selected task and startup diagnostics. Use daemon stop before an explicit retry; no launch was repeated.')
                 return replace(current, state='stopping' if control['desired'] == 'draining' else 'starting',
                     reason='SUPERVISOR_PENDING')
             return current
