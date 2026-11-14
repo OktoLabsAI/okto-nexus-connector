@@ -196,8 +196,27 @@ def test_stop_backoff_scope_does_not_settle_crashed_runtime_claims(selected, mon
     before = shutdown.read_bytes()
     stopped = manager.stop(root, timeout=1)
     assert stopped['stopped'] and stopped['supervision_scope'] == 'supervisor_only'
+    assert stopped['shutdown_outcome'] == 'unconfirmed'
     assert stopped['runtime_work_settlement'] == 'not_asserted'
     assert shutdown.read_bytes() == before
+
+
+def test_restart_after_supervisor_only_stop_is_blocked_but_inactive_integration_can_be_removed(selected, monkeypatch):
+    root, tasks, service = selected
+    assert invoke(selected, lambda *a, **k: child(201, 3)) == 2
+    monkeypatch.setattr(service_supervision, 'process_state', lambda _: 'exited')
+    start = Mock(side_effect=AssertionError('unconfirmed runtime drain must not restart'))
+    monkeypatch.setattr(manager, 'start', start)
+    result = manager.restart(root, timeout=1)
+    assert result['state'] == 'stopped' and result['stopped']
+    assert result['shutdown_outcome'] == 'unconfirmed'
+    assert result['runtime_work_settlement'] == 'not_asserted'
+    start.assert_not_called()
+    retained = root / 'retained-data.txt'
+    retained.write_text('retained fixture data')
+    service.uninstall()
+    assert tasks.read(service.name) is None
+    assert retained.read_text() == 'retained fixture data'
 
 
 def test_terminal_receipt_does_not_report_stopped_while_parent_alive_or_task_active(selected, monkeypatch):

@@ -125,6 +125,8 @@ processes confirmed exited. A missing/unknown child or lost unfinished parent
 is `SUPERVISOR_OUTCOME_UNCONFIRMED`, never permission to reset or remove claims.
 When stop closes backoff without a live runtime, its result explicitly reports
 `supervision_scope=supervisor_only` and `runtime_work_settlement=not_asserted`.
+Its `shutdown_outcome` remains `unconfirmed`, so automatic restart stays blocked;
+the positively inactive integration may still be uninstalled with data retained.
 Parent/launcher/runtime exit does not settle model work, leases or descendants
 left by a crash; the existing canonical runtime recovery retains that authority.
 

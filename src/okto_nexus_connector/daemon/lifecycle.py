@@ -299,8 +299,8 @@ def stop(root: Path, *, timeout: float, force=False, expected_generation=None):
         current = manager.status(root, timeout=min(1, max(.01, deadline - time.monotonic())))
         if current.state == 'stopped':
             report = _shutdown_receipt(root, before.generation)
-            drained = pending or report.get('state') == 'DRAINED'
-            return {'stopped': drained, 'was_running': before.running, **current.to_json(),
+            drained = not pending and report.get('state') == 'DRAINED'
+            return {'stopped': pending or drained, 'was_running': before.running, **current.to_json(),
                 'shutdown_outcome': 'drained' if drained else 'unconfirmed', 'report': report,
                 **({'supervision_scope': 'supervisor_only', 'runtime_work_settlement': 'not_asserted'} if pending else {})}
         if current.generation and current.generation != before.generation:
