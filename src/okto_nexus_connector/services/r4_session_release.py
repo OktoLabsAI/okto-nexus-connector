@@ -40,6 +40,50 @@ async def retire_accepted_event(store, request, journal):
         digest=sha256(encode_session_release(request)).hexdigest())
 
 
+async def retire_reconciliation_checkpoint(store, proof, digest, journal):
+    """Retire a recorded accepted recovery, never inventing a direct release."""
+    opening = proof['observation']['opening']
+    watermark = proof['observation']['watermark']
+    key = SessionKey(opening['server_id'],opening['executor_id'],opening['session_id'])
+    claim = await journal.get_session_claim(key)
+    launch = await journal.get_process_launch(key)
+    # Core admission never replaces a claimed session/opening generation, and
+    # process-launch transitions cannot undo a fence/stop proof or replace its
+    # identity. These facts therefore survive the awaits below; retirement also
+    # CAS-checks the original opening operation. Mutable event progress is
+    # checked separately, including by the event store's atomic retirement.
+    if (claim is None or claim.opening_operation_id != opening['operation_id']
+            or claim.opening_connection_generation != opening['connection_generation']
+            or claim.opening_owner_generation != opening['session_owner_generation']
+            or launch is None or launch.identity.key != key
+            or launch.identity.opening_operation_id != opening['operation_id']
+            or launch.identity.connection_generation != opening['connection_generation']
+            or launch.identity.owner_generation != opening['session_owner_generation']
+            or launch.producer_fenced is not True or launch.stop_proof != 'CONTAINER_STOPPED'):
+        raise CoreError('RECONCILIATION_REQUIRED','reconciliation_checkpoint_owner')
+    facts = await journal.drain_snapshot()
+    def same(row):
+        return (row['server_id'],row['executor_id'],row['session_id']) == (
+            key.server_id,key.executor_id,key.session_id)
+    if (facts['truncated'] or any(same(row) for row in facts['operations'])
+            or any(same(row) for row in facts['streams'])
+            or any(same(row) and row.get('stream_epoch') != opening['stream_epoch']
+                   for name in ('claims','watermarks') for row in facts[name])
+            or await journal.contiguous_watermark(EventCursor(
+                key.server_id,key.executor_id,key.session_id,opening['stream_epoch'])) != watermark['sequence']):
+        raise CoreError('RECONCILIATION_REQUIRED','reconciliation_checkpoint_stream')
+    # Existing stores independently CAS the exact stream and immutable opening.
+    # A crash between them retries the same proof ID/digest, not a new receipt.
+    proof_id = 'reconcile_' + digest
+    events = R4EventStore.for_state(store)
+    await asyncio.to_thread(events.retire,opening,sequence=watermark['sequence'],
+                            release_id=proof_id,release_digest=digest)
+    await journal.retire_reconciliation_claim(key,operation_id=opening['operation_id'],
+        release_id=proof_id,release_digest=digest)
+    await asyncio.to_thread(R4SessionReleaseStore.for_state(store).mark_reconciliation_checkpoint_retired,
+                            proof,digest)
+
+
 class R4SessionReleaseReporter:
     def __init__(self, store, host):
         self.publications = R4PublicationStore.for_state(store)
@@ -136,6 +180,8 @@ class SessionReleaseOutbox(Protocol):
 class SessionReleaseRecoveryOutbox(Protocol):
     def reconcile_page(self, ack, observations, *, after=0, limit=128): ...
     def resolved_checkpoint_page(self, server_id, executor_id, *, after=0, limit=128): ...
+    def record_reconciliation_checkpoints(self, ack, observations): ...
+    def reconciliation_checkpoint_page(self, server_id, executor_id, *, after=0, limit=128): ...
 
 
 class R4SessionReleasePublisher:

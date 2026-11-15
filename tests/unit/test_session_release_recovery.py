@@ -164,7 +164,7 @@ def test_prior_schema_upgrades_without_replacing_pending_request(tmp_path):
         conn.execute('PRAGMA user_version=1')
     assert R4SessionReleaseStore(path).pending(**identity(original)) == original
     with sqlite3.connect(path) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 5
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 6
         assert conn.execute('SELECT request,recovery,event_retired,claim_retired FROM releases').fetchone() == (raw, None, 0, 0)
 
 
@@ -183,7 +183,7 @@ def test_accepted_event_checkpoint_from_schema_three_still_retires_core_claim(tm
     store=R4SessionReleaseStore(path)
     assert [item[1] for item in store.accepted_event_page(original['server_id'],original['executor_id'])] == [original]
     with sqlite3.connect(path) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 5
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == 6
         assert conn.execute('SELECT event_retired,claim_retired FROM releases').fetchone() == (1,0)
 
 
@@ -202,7 +202,7 @@ def test_schema_four_rebuilds_pending_index_for_reconciliation_proofs(tmp_path):
         original['server_id'],original['executor_id'])
     assert len(page)==1 and page[0][1:3]==(original,original['sequence']+1)
     with sqlite3.connect(store.path) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0]==5
+        assert conn.execute('PRAGMA user_version').fetchone()[0]==6
         definition=conn.execute("SELECT sql FROM sqlite_master WHERE name='release_event_retirement'").fetchone()[0]
         assert 'recovery IS NOT NULL' in definition
 
