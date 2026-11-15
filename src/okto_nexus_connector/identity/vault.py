@@ -76,7 +76,15 @@ class RestrictedFileVault:
     def __init__(self, directory: Path, *, approved: bool):
         self.directory = directory
         self.path = directory / "secrets.json"
-        self._approved = approved
+        self._approved = approved is True
+
+    def refresh_approval(self, *, approved: bool) -> None:
+        """Refresh recorded consent without reading secrets or changing backend.
+
+        Existing daemon clients share this vault instance. Updating its gate
+        affects their next access; it does not revoke material already issued.
+        """
+        self._approved = approved is True
 
     @staticmethod
     def approval_key() -> str:

@@ -26,7 +26,7 @@ from nexus_connector_core.models import RuntimeEvent
 
 from .. import __version__
 from ..errors import ConnectorError
-from ..identity.vault import open_vault
+from ..identity.vault import RestrictedFileVault, open_vault
 from ..ipc.protocol import response_error, response_ok, response_stream
 from ..ipc.server import IPCServer
 from ..platform import paths
@@ -309,8 +309,8 @@ class DaemonApp:
         state = self.store.load()
         self.vault = open_vault(
             paths.vault_dir(root),
-            approved_fallback=bool(state.preferences.get(
-                "vault.fallback_file.approved", False)))
+            approved_fallback=state.preferences.get(
+                RestrictedFileVault.approval_key()) is True)
         # Technical capacity participates in the same Core ledger as ordinary
         # operations. The Server still negotiates support and authorizes work.
         from ..storage.ledger_binding import StateStoreLedgerBinding
@@ -700,6 +700,12 @@ class DaemonApp:
         ACN4-31) and other servers' lanes stay stable.
         """
         state = self.store.load()
+        if isinstance(self.vault, RestrictedFileVault):
+            # CLI consent may arrive after daemon startup. Keep the same
+            # backend shared by existing clients; never reselect a keyring or
+            # read credentials while refreshing this local access gate.
+            self.vault.refresh_approval(approved=state.preferences.get(
+                RestrictedFileVault.approval_key()) is True)
         registered = {record.server_id for record in state.execution_executors}
         for server_id, control in tuple(self.r4_controls.items()):
             if server_id not in registered or server_id not in state.servers:

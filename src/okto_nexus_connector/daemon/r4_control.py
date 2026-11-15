@@ -138,13 +138,47 @@ class R4DaemonControl:
         self._bootstrap = None
         self._onboarding_tasks = set()
         self._draining = False
+        self._drain_stop_task = None
 
     def begin_drain(self):
         self._draining = True
         if self.execution is not None:
             self.execution.begin_drain()
+        elif self.phase != 'CONTROL_READY':
+            self._stop_startup_for_drain()
+
+    def _stop_startup_for_drain(self):
+        if self._drain_stop_task is None:
+            # Fence the in-flight attempt before scheduling its join. In
+            # particular, a blocked bootstrap must not publish or negotiate a
+            # new link when it returns. Do not cancel its owned worker.
+            self._discovery_stopped.set()
+            self._stopped.set()
+            self._drain_stop_task = asyncio.create_task(
+                self.stop(), name='r4-drain-startup-' + self.server_id)
+            self._drain_stop_task.add_done_callback(
+                lambda task: None if task.cancelled() else task.exception())
 
     async def drain_status(self):
+        if self._draining and self.phase != 'CONTROL_READY' and self._drain_stop_task is None:
+            if self.execution is not None:
+                state = await self.execution.drain_status()
+                if state != 'QUIESCENT':
+                    return state
+            self._stop_startup_for_drain()
+        task = self._drain_stop_task
+        if task is not None:
+            if not task.done():
+                return 'BUSY'
+            if task.cancelled() or task.exception() is not None:
+                return 'UNKNOWN'
+            # Completion is necessary but not sufficient: failed link cleanup
+            # and durable recovery obligations must remain visible.
+            if (self.cleanup_pending or self._recovery_error or self.connection is not None
+                    or self.execution is not None or self.inventory_owner is not None
+                    or self._onboarding_tasks or self._task is not None and not self._task.done()):
+                return 'UNKNOWN'
+            return 'QUIESCENT'
         if self.cleanup_pending or self._recovery_error:
             return 'UNKNOWN'
         if self._onboarding_tasks or self.phase != 'CONTROL_READY' or self.execution is None:
