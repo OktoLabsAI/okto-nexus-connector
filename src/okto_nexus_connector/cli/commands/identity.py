@@ -42,6 +42,13 @@ def _approve_fallback(args, output: Output, store: StateStore) -> bool:
     state = store.load()
     if state.preferences.get("vault.fallback_file.approved"):
         return True
+    if getattr(args, "credential_stdin", False):
+        raise ConnectorError(
+            "APPROVAL_REQUIRED", "vault",
+            "restricted-file fallback requires approval before credential stdin",
+            action="Approve restricted-file storage separately without "
+                   "--credential-stdin, or install an OS keyring backend. "
+                   "The credential input has not been read.")
     if not args.non_interactive:
         from ..prompts import confirm
         approved = confirm(

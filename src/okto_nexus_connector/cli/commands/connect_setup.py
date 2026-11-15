@@ -125,7 +125,10 @@ async def _resume(args, output, root, store):
         setup.refuse('Resume with the original local identity alias.', 'OPERATION_CONFLICT')
     import os
     if os.environ.get('OKTO_NEXUS_CONNECTOR_VAULT', '').strip().lower() == 'file' or not connect.vault_backend_names():
-        _approve_fallback(args, output, store)
+        if not _approve_fallback(args, output, store):
+            raise ConnectorError('APPROVAL_REQUIRED', 'vault',
+                'Restricted-file fallback was not approved.',
+                action='Approve restricted-file storage separately or install an OS keyring backend before supplying a credential.')
     vault = _vault(root, store)
     supplied = connect.connect_reuse.credential_supplied(args)
     if identity and identity.revoked and not supplied:

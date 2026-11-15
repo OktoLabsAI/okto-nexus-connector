@@ -95,7 +95,11 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
     # approval (test_19: no confirm call with non_interactive=False).
     if not reuse and (forced_file or not vault_backend_names()) and not \
             store.load().preferences.get("vault.fallback_file.approved"):
-        if not args.non_interactive:
+        if args.credential_stdin:
+            # stdin belongs exclusively to the credential, never to consent.
+            from .identity import _approve_fallback
+            _approve_fallback(args, output, store)
+        elif not args.non_interactive:
             approved = confirm(
                 "No OS keyring is available. Store the canonical key in a "
                 "restricted file inside your private state directory? "
