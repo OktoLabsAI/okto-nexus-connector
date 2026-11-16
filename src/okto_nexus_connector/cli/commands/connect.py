@@ -64,7 +64,45 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
         from .connect_setup import run_setup
         return await run_setup(args, output, root, store)
     state = store.load()
-    retained = connect_reuse.saved_request(args, state, select)
+    from .connection_choices import choose_project_intent
+    intent = choose_project_intent(args, state, select)
+    if intent.kind == 'cancel':
+        return dict(saved=False, canceled=True, runtime_started=False, effects_started=False)
+    if intent.kind == 'add':
+        if connect_reuse.credential_supplied(args):
+            raise ConnectorError('OPERATION_CONFLICT', 'connect',
+                'Additional collaborators use their own operator-reviewed bootstrap. Do not supply the previous identity credential.')
+        from .connect_setup import run_setup
+        aliases = {record.alias for record in (*state.binding_intents, *state.bindings)}
+        if args.binding_alias and args.binding_alias in aliases:
+            raise ConnectorError('OPERATION_CONFLICT', 'connect',
+                'Adding cannot replace an existing binding alias. Omit the alias or choose an unused one explicitly.')
+        args.server, args.request_id = intent.server, intent.setup_run_id
+        args.identity = args.alias = args.agent = None
+        args.binding_alias = args.binding_alias or 'connection-' + intent.setup_run_id.removeprefix('remote_')[:20]
+        args.addition_workspace_hint = intent.workspace_hint
+        args.setup_draft = root / 'setup-drafts' / (intent.setup_run_id + '.json')
+        args.setup_auto_export = True
+        records = [record for record in state.execution_executors
+            if record.server_id in state.servers and state.servers[record.server_id].origin == intent.server]
+        if len(records) > 1:
+            raise ConnectorError('PROFILE_DRIFT', 'connect', 'Select the original host executor before adding a collaborator.')
+        args.discovery_configuration = records[0].discovery_configuration if records else {}
+        args.installation_observations = records[0].installation_observations if records else ()
+        output.line('Adding a separate collaborator through operator bootstrap. Existing connections and grants remain unchanged.')
+        return await run_setup(args, output, root, store)
+    if intent.kind == 'pending':
+        from ...services import remote_setup
+        from .connect_setup import run_setup, _resume
+        record = remote_setup.load(store, intent.setup_run_id)
+        args.request_id = intent.setup_run_id
+        if record.get('handoff'):
+            return await _resume(args, output, root, store, retained_handoff=record['handoff'])
+        args.setup_draft = root / 'setup-drafts' / (intent.setup_run_id + '.json')
+        args.setup_auto_export = True
+        args.server = args.server or record['draft']['server_origin']
+        return await run_setup(args, output, root, store)
+    retained = intent.retained
     identity = connect_reuse.selected_identity(args, state, retained)
     if retained:
         if getattr(args, 'customize', False):

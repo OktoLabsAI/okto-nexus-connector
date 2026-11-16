@@ -38,6 +38,9 @@ async def retained(binding, tmp_path, monkeypatch):
     vault = NS(resolve=lambda handle: calls.append('vault.resolve') or service.vault.resolve(handle))
     monkeypatch.setattr(connect, 'open_vault', lambda *a, **kw: vault)
     monkeypatch.setattr(connect, 'StateStore', lambda _: store)
+    # The simple flow now requires an explicit Resume/Add/Cancel choice even
+    # for one legacy association; most authority tests choose Resume here.
+    monkeypatch.setattr(connect, 'select', lambda label, options, **kwargs: options[0][0])
     monkeypatch.setattr(connect, 'NexusHTTPClient', service.http_factory)
     monkeypatch.setattr(connect, '_read_key', lambda *a: pytest.fail('credential re-entry'))
     async def unexpected(*a, **kw):
@@ -66,7 +69,7 @@ async def run(r):
     return await connect.run_connect(r.args, r.output, r.root)
 
 
-async def test_bare_connect_reuses_project_and_current_authority_without_rewrite(retained):
+async def test_selected_connect_reuses_project_and_current_authority_without_rewrite(retained):
     r = retained
     before = r.store.path.read_bytes()
     result = await run(r)
@@ -267,10 +270,10 @@ async def test_ambiguous_saved_connections_require_selection(retained, monkeypat
     asked = []
     def choose(label, options, **kw):
         asked.append(options)
-        return r.storage_key
+        return ('resume', r.storage_key)
     monkeypatch.setattr(connect, 'select', choose)
     assert (await run(r))['reused']
-    assert len(asked) == 1 and len(asked[0]) == 2
+    assert len(asked) == 1 and len(asked[0]) == 4
 
 
 async def test_pending_saved_request_resumes_without_credential_import_or_new_id(retained, monkeypatch):

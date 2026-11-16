@@ -1,0 +1,60 @@
+{
+  "task": "UI-036",
+  "status": "IMPLEMENTED",
+  "version": "0.0.13",
+  "branch": "feature/v0.0.13",
+  "behavior": [
+    "Interactive connect chooses Resume/Add/Cancel before vault access, discovery or replacement.",
+    "Adding uses a new operator-reviewed remote setup root and generated binding alias; no previous identity credential is reused for the additional collaborator.",
+    "Pending drafts and handoffs recover the retained root/checkpoints. Explicit request IDs and legacy scripts remain supported.",
+    "Previous workspace reference is only a review hint, never project or filesystem authority.",
+    "Generated operator-side connection shortcut removes the need to invent CONNECT_PROFILE; operator authentication remains explicit.",
+    "Existing daemon, Core protocol, canonical identity/import/registration/realization/recovery and grants remain reused."
+  ],
+  "tests": [
+    {
+      "passed": 14,
+      "duration_seconds": 7.86,
+      "tool_ref": "be6576",
+      "cut": "Final picker negatives after retained-record and host-label hardening"
+    },
+    {
+      "passed": 13,
+      "duration_seconds": 6.92,
+      "tool_ref": "ae7e6c",
+      "cut": "Picker/import pipeline and two real synthetic registration/realization recovery cases"
+    },
+    {
+      "passed": 51,
+      "duration_seconds": 18.66,
+      "tool_ref": "3fd00a",
+      "cut": "Antecedent before final retained-record/label hardening"
+    },
+    {
+      "passed": 133,
+      "duration_seconds": 30.02,
+      "tool_ref": "fc397e",
+      "cut": "Antecedent remote setup/revision/rotation/conflict/configure compatibility"
+    }
+  ],
+  "ruff": {
+    "exit_code": 0,
+    "tool_ref": "620bc9"
+  },
+  "limitations": [
+    "Fixture transports and temporary file vaults are not a real remote host or provider.",
+    "No native harness, login-session event, paid campaign or personal installation was exercised.",
+    "Full UI/CLI/Connector journey remains a separate Nexus UI-R1 gate."
+  ],
+  "migrations": 0,
+  "provider_calls": 0,
+  "rollback": "Revert picker integration without deleting retained setup roots, bindings, credentials or daemon state. Explicit legacy request/receipt flows remain compatible.",
+  "working_tree_raw_sha256": {
+    "src/okto_nexus_connector/cli/commands/connect.py": "b838a89ee46cb3770ea1959e3501249578e3ea47dfbac10ced733e6a8e62952a",
+    "src/okto_nexus_connector/cli/commands/connect_reuse.py": "290ad1e5e71363551d7088b6a0f20b36e460d2e80ee319d2991686344083cd23",
+    "src/okto_nexus_connector/cli/commands/connect_setup.py": "5fb42ff15a9ac175de9cb07b1f69e31867d7771cc0434ceebc58fe058e6a3e72",
+    "src/okto_nexus_connector/cli/commands/connection_choices.py": "226f477103e888e0843a921d73834dde7efd2c82304b51e95b1bc43b6ec98449",
+    "tests/unit/test_connect_reuse.py": "83b5bddbddd0dd5fade15f02091b63f299b11ee76c29e2581f40d70c7209a8c9",
+    "tests/unit/test_connection_choices.py": "6759561db176039141a94a3ced1893bbcbaff8f85b702e153fd3677a590946c8"
+  }
+}

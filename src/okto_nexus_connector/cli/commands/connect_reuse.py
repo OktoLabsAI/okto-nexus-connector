@@ -7,6 +7,7 @@ from urllib.parse import quote
 from ...errors import ConnectorError
 from ...services.binding_onboarding import BindingOnboarding
 from ...services.executor_registration import _identity, _profile
+from ...transport.https_client import origin_of
 
 _BINDING_FIELDS = ('binding_id', 'server_id', 'executor_id', 'agent_id', 'endpoint_id', 'workspace_id',
     'workspace_binding_id', 'adapter_id', 'candidate_ref', 'inventory_revision',
@@ -17,14 +18,23 @@ def credential_supplied(args):
     return bool(args.credential_stdin or args.credential_env or args.mcp_entry)
 
 
-def saved_request(args, state, choose):
+def saved_requests(args, state, *, include_other_harnesses=False):
     """A recorded canonical association may select an identity; folder names may not."""
     candidates = []
     project = (args.project or Path.cwd()).resolve()
     for key, saved in state.preferences.items():
-        if not key.startswith('configure.') or not isinstance(saved, dict):
+        if not key.startswith('configure.'):
             continue
+        if not isinstance(saved, dict):
+            raise ConnectorError('PROFILE_DRIFT', 'connect', 'The retained connection checkpoint is unavailable; preserve it before adding another connection.')
+        if args.server:
+            contexts = [profile for server_id, profile in state.servers.items()
+                if key.startswith('configure.' + server_id + '.')]
+            if contexts and all(profile.origin != origin_of(args.server) for profile in contexts):
+                continue
         configuration = saved.get('configuration', {})
+        if not isinstance(configuration, dict):
+            raise ConnectorError('PROFILE_DRIFT', 'connect', 'The retained connection configuration is unavailable.')
         if not configuration.get('workspace_root'):
             continue
         identity = state.identity_by_alias(saved.get('identity'))
@@ -48,9 +58,9 @@ def saved_request(args, state, choose):
         profile = _profile(state, identity.server_id)
         if args.server and args.server.rstrip('/') != profile.base_url.rstrip('/'):
             continue
-        if args.harness and args.harness != configuration.get('adapter_id') and not args.request_id:
+        if not include_other_harnesses and args.harness and args.harness != configuration.get('adapter_id') and not args.request_id:
             continue
-        if args.binding_alias and args.binding_alias != configuration.get('alias') and not args.request_id:
+        if not include_other_harnesses and args.binding_alias and args.binding_alias != configuration.get('alias') and not args.request_id:
             continue
         records = [r for r in state.binding_intents if r.identity_alias == identity.alias
                    and r.client_intent_id == saved.get('child_requests', {}).get('prepare', request_id + '_prepare')]
@@ -59,6 +69,12 @@ def saved_request(args, state, choose):
                 raise ConnectorError('OPERATION_CONFLICT', 'connect', 'This setup was superseded. Select the current connection.')
             continue
         candidates.append((key, request_id, identity, saved))
+    return candidates
+
+
+def saved_request(args, state, choose):
+    """Compatibility resolver for explicit callers outside the simple picker."""
+    candidates = saved_requests(args, state)
     if not candidates:
         return None
     if len(candidates) == 1:

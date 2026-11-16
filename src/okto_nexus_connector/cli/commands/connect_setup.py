@@ -85,24 +85,29 @@ async def _draft(args, output, root, store):
         record = setup.prepare(store, setup_run_id=args.request_id, server=args.server,
             configuration=configuration, candidate_ref=effective_installation_ref(candidate),
             inventory_revision=args.discovery_inventory_revision, candidate=candidate,
-            agent_hint=args.agent, login_start_plan=startup)
+            agent_hint=args.agent, workspace_hint=getattr(args, 'addition_workspace_hint', None), login_start_plan=startup)
     if getattr(args, 'setup_auto_export', False):
         args.setup_draft.parent.mkdir(parents=True, exist_ok=True)
     setup.export_draft(args.setup_draft, record['draft'])
     output.line('Setup request: ' + record['draft']['setup_run_id'])
     output.line('Host draft saved: ' + str(args.setup_draft))
-    output.line('On the authenticated operator client: okto-nexus connect --remote-draft DRAFT_FILE --operator-profile OPERATOR_PROFILE --profile CONNECT_PROFILE --plan')
+    from .connection_choices import operator_shortcut
+    workspace = record['draft'].get('workspace_hint')
+    output.line('On the authenticated operator client: okto-nexus connect --remote-draft DRAFT_FILE --operator-profile OPERATOR_PROFILE --profile '
+        + operator_shortcut(record['draft']['setup_run_id']) + ((' --workspace-id ' + workspace) if workspace else '') + ' --plan')
+    if workspace:
+        output.line('The project ID is a previous binding reference, not authority. The operator must review its access and host mapping before approval.')
     output.line('Then resume here with connect --setup-receipt HANDOFF_FILE. Enter only the canonical agent key through the protected input.')
     return dict(saved=False, status='awaiting_operator_bootstrap', request_id=record['draft']['setup_run_id'],
                 draft_file=str(args.setup_draft), draft_revision=record['draft_revision'], runtime_started=False)
 
 
-async def _resume(args, output, root, store):
+async def _resume(args, output, root, store, *, retained_handoff=None):
     from . import connect
     from .identity import _vault, _approve_fallback
     from .configure import PROJECT_PRESET
     from .configure_local import configure_local
-    handoff = setup.read_document(args.setup_receipt)
+    handoff = deepcopy(retained_handoff) if retained_handoff is not None else setup.read_document(args.setup_receipt)
     bootstrap = handoff.get('bootstrap', {}) if isinstance(handoff, dict) else {}
     root_id = setup.identifier(bootstrap.get('setup_run_id'), 100)
     if args.request_id and args.request_id != root_id:
