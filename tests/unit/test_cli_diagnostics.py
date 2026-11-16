@@ -8,6 +8,12 @@ from okto_nexus_connector.cli.commands import diagnostics
 from okto_nexus_connector.cli.main import build_parser
 from okto_nexus_connector.cli.output import Output
 from okto_nexus_connector.daemon.logging_setup import configure_logging
+from okto_nexus_connector.daemon.manager import DaemonStatus
+
+
+def observed_daemon(running):
+    return DaemonStatus(running, 123 if running else None, '', '', '', '', None,
+                        running, state='ready' if running else 'stopped')
 
 
 @pytest.mark.parametrize('running,attached,error,expected', [
@@ -22,8 +28,8 @@ async def test_status_requires_live_agent_attachment(monkeypatch, tmp_path, runn
         identities=[NS(server_id='server', agent_id='claude', alias='local', revoked=False)],
         execution_bindings=[NS(server_id='server', agent_id='claude', adapter_id='claude_stream',
                                binding_id='binding', state='APPROVED')], preferences={})
-    monkeypatch.setattr(diagnostics, 'StateStore', lambda _: NS(load=lambda: state))
-    monkeypatch.setattr(diagnostics.manager, 'status', lambda _: NS(running=running, pid=123 if running else None))
+    monkeypatch.setattr(diagnostics, 'StateStore', lambda _: NS(read_snapshot=lambda: state))
+    monkeypatch.setattr(diagnostics.manager, 'status', lambda _: observed_daemon(running))
     client = NS(call=lambda _: {'ok': True, 'result': {'r4_controls': {'server': {
         'state': 'CONTROL_READY', 'control_ready': not error, 'execution_ready': attached,
         'attached_bindings': ['binding'] if attached else [], 'error_code': error,
@@ -96,8 +102,8 @@ async def test_status_reports_wizard_resume_id_without_exporting_configuration(m
         identities=[NS(server_id='s', agent_id='a', alias='local', revoked=False)],
         preferences={'configure.s.a.my-request': {'stage': 'apply', 'credential': 'do-not-show'},
                      'configure.s.a.finished': {'stage': 'done'}})
-    monkeypatch.setattr(diagnostics, 'StateStore', lambda _: NS(load=lambda: state))
-    monkeypatch.setattr(diagnostics.manager, 'status', lambda _: NS(running=False, pid=None))
+    monkeypatch.setattr(diagnostics, 'StateStore', lambda _: NS(read_snapshot=lambda: state))
+    monkeypatch.setattr(diagnostics.manager, 'status', lambda _: observed_daemon(False))
     async def checked(*args): return {}
     monkeypatch.setattr(diagnostics, '_query_connections', checked)
     result = await diagnostics.run_status(NS(agent=None), Output(json_mode=True), tmp_path)
@@ -109,8 +115,8 @@ async def test_status_reports_each_connection_and_server_revocation(monkeypatch,
     bindings = [NS(server_id='s', agent_id='a', adapter_id='claude_stream', binding_id=b, state='APPROVED') for b in ('one','two')]
     state = NS(servers={'s':NS(base_url='http://server')}, execution_bindings=bindings,
                identities=[NS(server_id='s',agent_id='a',alias='agent',revoked=False)], preferences={})
-    monkeypatch.setattr(diagnostics, 'StateStore', lambda _: NS(load=lambda:state))
-    monkeypatch.setattr(diagnostics.manager, 'status', lambda _:NS(running=True,pid=1))
+    monkeypatch.setattr(diagnostics, 'StateStore', lambda _: NS(read_snapshot=lambda:state))
+    monkeypatch.setattr(diagnostics.manager, 'status', lambda _: observed_daemon(True))
     monkeypatch.setattr(diagnostics.manager, 'connect', lambda _:NS(close=lambda:None,
         call=lambda _:dict(ok=True,result={'r4_controls':{'s':{'control_ready':True,'execution_ready':True,'attached_bindings':['one','two']}}})))
     async def checked(*args):

@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import time
 import weakref
+from functools import wraps
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import FunctionType
@@ -108,6 +109,17 @@ def make_environment(resolver: LaunchSecretResolver, overlay: LaunchOverlay):
     return environment
 
 
+def _owned_composition(method):
+    @wraps(method)
+    async def invoke(self, *args, **kwargs):
+        self._pending_compositions += 1
+        try:
+            return await method(self, *args, **kwargs)
+        finally:
+            self._pending_compositions -= 1
+    return invoke
+
+
 class CoreRuntimeHost:
     """Builds and owns Core runtime instances for the daemon."""
 
@@ -146,6 +158,76 @@ class CoreRuntimeHost:
         self._ledger_task = None
         self._shutdown_task = None
         self._stores_closing = False
+        self._draining = False
+        self._drain_unknown = False
+        self._pending_compositions = 0
+        self._defer_store_close = False
+
+    def defer_store_close(self):
+        """Retain stores while the daemon joins its admitted readers/producers."""
+        self._defer_store_close = True
+
+    async def finish_drain_observation(self):
+        if self._runtimes or self._capacity_services:
+            return False
+        self._stores_closing = True
+        try:
+            await self._close_empty_stores()
+            self._defer_store_close = False
+            return True
+        finally:
+            self._stores_closing = False
+
+    def begin_drain(self):
+        """Fence composition and productive Core admissions without closing owners."""
+        self._draining = True
+        for runtime in self._runtimes.values():
+            try:
+                runtime.begin_drain()
+            except Exception:
+                self._drain_unknown = True
+
+    async def drain_status(self):
+        if not self._draining:
+            return {'state': 'RUNNING', 'quiescent': False}
+        if self._drain_unknown:
+            return {'state': 'UNKNOWN', 'quiescent': False}
+        if self._pending_compositions:
+            return {'state': 'BUSY', 'quiescent': False}
+        selected = tuple(self._runtimes.values())
+        try:
+            if not selected:
+                if self._journal is None:
+                    if self._journal_path.exists():
+                        return {'state': 'UNKNOWN', 'quiescent': False}
+                else:
+                    facts = await self._journal.drain_snapshot()
+                    if (facts.get('truncated') is not False or any(
+                            facts.get(name) != [] for name in ('claims', 'operations', 'streams'))):
+                        return {'state': 'UNKNOWN', 'quiescent': False}
+            reports = []
+            for runtime in selected:
+                report = await runtime.drain_status()
+                if not isinstance(report, dict) or report.get('state') not in {'QUIESCENT', 'BUSY', 'UNKNOWN'}:
+                    return {'state': 'UNKNOWN', 'quiescent': False}
+                reports.append(report)
+            if any(owner.pending_count for owner in self._native_action_owners.values()):
+                return {'state': 'BUSY', 'quiescent': False}
+            if any(runtime.drain_revision() != report.get('activity_revision')
+                   for runtime, report in zip(selected, reports)):
+                return {'state': 'UNKNOWN', 'quiescent': False}
+            if selected:
+                # These instances are composed above with this host's one
+                # physical journal. Only Core may resolve sibling claims.
+                from nexus_connector_core import combine_drain_status
+                combined = combine_drain_status(reports)
+                if combined.get('quiescent') is not True or combined.get('state') != 'QUIESCENT':
+                    return {'state': combined.get('state', 'UNKNOWN'), 'quiescent': False}
+        except Exception:
+            return {'state': 'UNKNOWN', 'quiescent': False}
+        if selected != tuple(self._runtimes.values()):
+            return {'state': 'BUSY', 'quiescent': False}
+        return {'state': 'QUIESCENT', 'quiescent': True}
 
     # -- shared installation stores -------------------------------------
 
@@ -378,6 +460,7 @@ class CoreRuntimeHost:
             store, encode_r4_frame(frame), candidates, setup.opening_selection)
         return setup
 
+    @_owned_composition
     async def build_r4(self, store, *, frame, candidates, environment, factory=None,
                        native_action_factory=None, opening_selection=None):
         """Compose an R4 runtime only from the approved host realization.
@@ -386,6 +469,8 @@ class CoreRuntimeHost:
         The connection owner must install the canonical lease before prepare.
         Revalidate after shared-store waits and around the environment callback.
         """
+        if self._draining:
+            raise CoreError('RUNTIME_DRAINING', 'runtime_composition', retry_safe=True)
         from .execution_selection import (resolve_execution_selection,
                                           revalidate_opening_selection)
         from nexus_connector_core.native_action_socket import PiNativeActionOwner
@@ -416,6 +501,8 @@ class CoreRuntimeHost:
         if await resolve(opening=selection) != selection:
             raise ConnectorError('PROFILE_DRIFT', 'runtime_composition', 'The approved execution selection changed.')
         self._require_stores(journal=journal, ledger=ledger)
+        if self._draining:
+            raise CoreError('RUNTIME_DRAINING', 'runtime_composition', retry_safe=True)
         existing = self._runtimes.get(key)
         if existing is not None:
             if (self._execution_selections.get(key) != selection
@@ -459,6 +546,7 @@ class CoreRuntimeHost:
         self._execution_selections[key] = selection
         return runtime
 
+    @_owned_composition
     async def build(self, binding: BindingRecord, *, environment,
                     factory=None, session_id: str | None = None
                     ) -> LocalRuntimeCore:
@@ -475,6 +563,8 @@ class CoreRuntimeHost:
         contract tests; production always gets the real copied-adapter
         factory inside the Core.
         """
+        if self._draining:
+            raise CoreError('RUNTIME_DRAINING', 'runtime_composition', retry_safe=True)
         key = BindingKey(binding.server_id, binding.binding_id)
         if session_id is not None:
             key = BindingKey(key.server_id,
@@ -486,6 +576,8 @@ class CoreRuntimeHost:
         journal = await self.ensure_journal()
         ledger = await self.ensure_ledger()
         self._require_stores(journal=journal, ledger=ledger)
+        if self._draining:
+            raise CoreError('RUNTIME_DRAINING', 'runtime_composition', retry_safe=True)
         runtime = create_runtime(
             journal=journal,
             environment=environment,
@@ -654,7 +746,12 @@ class CoreRuntimeHost:
             pass
         # These stores belong to the installation, not a single connection.
         # An executor reconnect must not close a sibling's pending composition.
-        if _scope is None and not self._runtimes and not self._capacity_services:
+        if _scope is None and not self._defer_store_close:
+            await self._close_empty_stores()
+        return outcomes
+
+    async def _close_empty_stores(self):
+        if not self._runtimes and not self._capacity_services:
             if self._journal is not None:
                 await self._journal.aclose()
                 self._journal = None
@@ -663,8 +760,6 @@ class CoreRuntimeHost:
                 await self._ledger.aclose()
                 self._ledger = None
             self._ledger_task = None
-        return outcomes
-
     async def storage_status(self):
         """Journal-level storage observation (diagnostics only)."""
         from nexus_connector_core.discovery import fingerprint

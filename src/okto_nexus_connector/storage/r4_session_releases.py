@@ -31,7 +31,7 @@ class R4SessionReleaseStore:
             conn.execute('PRAGMA max_page_count=32768')
             conn.execute('BEGIN IMMEDIATE')
             version = conn.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2, 3, 4, 5):
+            if version not in (0, 1, 2, 3, 4, 5, 6):
                 raise ConnectorError('VERSION_INCOMPATIBLE', 'session_release',
                                      'The release outbox requires a newer Connector.')
             conn.execute('CREATE TABLE IF NOT EXISTS releases ('
@@ -61,7 +61,15 @@ class R4SessionReleaseStore:
                          'json_extract(identity,\'$.scope.executor_id\')) '
                          'WHERE (state=\'ACCEPTED\' OR recovery IS NOT NULL) '
                          'AND (event_retired=0 OR claim_retired=0)')
-            conn.execute('PRAGMA user_version=5')
+            # An accepted reconciliation may precede any direct session.release.
+            # Keep that proof as its own type; never manufacture a direct ACK.
+            conn.execute('CREATE TABLE IF NOT EXISTS reconciliation_checkpoints ('
+                         'identity TEXT PRIMARY KEY,server_id TEXT NOT NULL,executor_id TEXT NOT NULL,'
+                         'proof BLOB NOT NULL,digest TEXT NOT NULL,retired INTEGER NOT NULL DEFAULT 0 '
+                         'CHECK(retired IN (0,1)))')
+            conn.execute('CREATE INDEX IF NOT EXISTS reconciliation_checkpoint_pending '
+                         'ON reconciliation_checkpoints(server_id,executor_id) WHERE retired=0')
+            conn.execute('PRAGMA user_version=6')
             yield conn
             conn.commit()
         except (OSError, sqlite3.Error, ValueError, KeyError, TypeError) as error:
@@ -118,6 +126,15 @@ class R4SessionReleaseStore:
         identity = self._identity(**{k: request[k] for k in
                                      ('scope', 'connection_id', 'connection_generation')})
         with self._transaction() as conn:
+            scope = request['scope']
+            checkpoints = conn.execute('SELECT * FROM reconciliation_checkpoints WHERE server_id=? '
+                "AND executor_id=? AND json_extract(identity,'$.session_id')=?",
+                (scope['server_id'],scope['executor_id'],scope['session_id'])).fetchall()
+            if checkpoints:
+                for checkpoint in checkpoints:
+                    self._decode_checkpoint(checkpoint)
+                raise ConnectorError('STALE_GENERATION','session_release',
+                    'This opening already has an accepted reconciliation checkpoint.')
             row = conn.execute('SELECT * FROM releases WHERE release_id=?',
                                (request['release_id'],)).fetchone()
             if row is not None and self._decode(row) != request:
@@ -271,3 +288,89 @@ class R4SessionReleaseStore:
                 conn.execute('UPDATE releases SET recovery=?,recovery_digest=? WHERE release_id=?',
                              (raw, sha256(raw).hexdigest(), request['release_id']))
             return rows[-1]['rowid'] if len(rows) == limit else None
+
+    @staticmethod
+    def _checkpoint_identity(ack, observation):
+        """Validate internal facts from the exact completed authenticated cycle."""
+        ack = decode_r4_frame(encode_r4_frame(ack))
+        opening, claim, fact, watermark = (observation[k] for k in ('opening','claim','fact','watermark'))
+        strings = ('server_id','executor_id','binding_id','agent_id','session_id',
+                   'operation_id','intent_hash','connection_id','stream_epoch')
+        if (ack['type'] != 'reconcile.accepted' or ack['recovery_remaining']
+                or any(type(opening.get(k)) is not str or not 1 <= len(opening[k]) <= 160 for k in strings)
+                or any(type(opening.get(k)) is not int or opening[k] < 1
+                       for k in ('connection_generation','session_owner_generation'))
+                or any(ack[k] != opening[k] for k in ('server_id','executor_id'))
+                or ack['connection_generation'] <= opening['connection_generation']
+                or ack['connection_id'] == opening['connection_id']
+                or claim.get('session_id') != opening['session_id']
+                or fact.get('session_id') != opening['session_id']
+                or watermark.get('session_id') != opening['session_id']
+                or type(claim.get('owner_generation')) is not int
+                or type(fact.get('owner_generation')) is not int
+                or claim['owner_generation'] != opening['session_owner_generation']
+                or fact['owner_generation'] != opening['session_owner_generation']
+                or claim.get('state') != 'RELEASED' or fact.get('process_state') != 'EXITED'
+                or watermark.get('stream_epoch') != opening['stream_epoch']
+                or type(watermark.get('sequence')) is not int or watermark['sequence'] < 0
+                or type(fact.get('proof_digest')) is not str or len(fact['proof_digest']) != 71
+                or not fact['proof_digest'].startswith('sha256:')
+                or any(c not in '0123456789abcdef' for c in fact['proof_digest'][7:])):
+            raise ValueError('Invalid accepted reconciliation checkpoint.')
+        return canonical_json({k:opening[k] for k in (*strings,'connection_generation','session_owner_generation')}).decode()
+
+    def record_reconciliation_checkpoints(self, ack, observations):
+        """Persist only missing direct-release histories; caller authenticated ACK."""
+        if type(observations) is not dict or len(observations) > 128:
+            raise ValueError('Invalid reconciliation checkpoint page.')
+        with self._transaction() as conn:
+            for key, observation in observations.items():
+                identity = self._checkpoint_identity(ack, observation)
+                opening = observation['opening']
+                if key != (opening['session_id'],opening['session_owner_generation']):
+                    raise ValueError('The reconciliation observation key changed.')
+                # Existing publications keep their exact old bytes/retirement ID.
+                direct = conn.execute('SELECT * FROM releases WHERE '
+                    "json_extract(identity,'$.scope.server_id')=? AND "
+                    "json_extract(identity,'$.scope.executor_id')=? AND "
+                    "json_extract(identity,'$.scope.session_id')=?",
+                    (opening['server_id'],opening['executor_id'],opening['session_id'])).fetchall()
+                if direct:
+                    if not any(self._recovered(self._decode(row),ack,observation) for row in direct):
+                        raise ValueError('The prior release scope changed.')
+                    continue
+                row = conn.execute('SELECT * FROM reconciliation_checkpoints WHERE identity=?',(identity,)).fetchone()
+                raw = canonical_json(dict(ack=ack,observation=observation))
+                if row is not None:
+                    previous = self._decode_checkpoint(row)
+                    if previous['observation'] != observation:
+                        raise ValueError('The accepted reconciliation facts changed.')
+                    continue  # Preserve the first accepted cycle on retries.
+                conn.execute('INSERT INTO reconciliation_checkpoints(identity,server_id,executor_id,proof,digest) '
+                    'VALUES (?,?,?,?,?)',(identity,opening['server_id'],opening['executor_id'],raw,sha256(raw).hexdigest()))
+
+    def _decode_checkpoint(self, row):
+        if sha256(row['proof']).hexdigest() != row['digest']:
+            raise ValueError('Corrupt reconciliation checkpoint.')
+        proof = json.loads(row['proof'])
+        if (self._checkpoint_identity(proof['ack'],proof['observation']) != row['identity']
+                or any(proof['observation']['opening'][k] != row[k] for k in ('server_id','executor_id'))):
+            raise ValueError('The reconciliation checkpoint scope changed.')
+        return proof
+
+    def reconciliation_checkpoint_page(self, server_id, executor_id, *, after=0, limit=128):
+        if type(after) is not int or after < 0 or type(limit) is not int or not 1 <= limit <= 128:
+            raise ValueError('Invalid reconciliation checkpoint cursor.')
+        with self._transaction() as conn:
+            rows = conn.execute('SELECT rowid,* FROM reconciliation_checkpoints WHERE retired=0 AND rowid>? '
+                'AND server_id=? AND executor_id=? ORDER BY rowid LIMIT ?',
+                (after,server_id,executor_id,limit)).fetchall()
+            return [(row['rowid'],self._decode_checkpoint(row),row['digest']) for row in rows]
+
+    def mark_reconciliation_checkpoint_retired(self, proof, digest):
+        identity = self._checkpoint_identity(proof['ack'],proof['observation'])
+        with self._transaction() as conn:
+            row = conn.execute('SELECT * FROM reconciliation_checkpoints WHERE identity=?',(identity,)).fetchone()
+            if row is None or self._decode_checkpoint(row) != proof or row['digest'] != digest:
+                raise ValueError('The original reconciliation checkpoint is required.')
+            conn.execute('UPDATE reconciliation_checkpoints SET retired=1 WHERE identity=?',(identity,))

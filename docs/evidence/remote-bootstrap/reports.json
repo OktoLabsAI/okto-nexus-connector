@@ -1,0 +1,226 @@
+{
+  "installed": {
+    "sha256": "ccc84e8181f20de83e36d871803a8acf3d1511b84734d9f632567ca586649adf",
+    "tests": 276,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "unique_identities": 276,
+    "suites": [
+      {
+        "name": "pytest",
+        "errors": "0",
+        "failures": "0",
+        "skipped": "0",
+        "tests": "276",
+        "time": "112.960",
+        "timestamp": "2026-11-07T04:03:13.181507-03:00",
+        "hostname": "Alienware_m15"
+      }
+    ]
+  },
+  "source": {
+    "source/connector/dx1819-connector-guided-final.xml": {
+      "sha256": "0a68b4714c460d0151161acb557c67e1599e519f1be60177bebdbb3361e2bba6",
+      "tests": 149,
+      "failures": 1,
+      "errors": 0,
+      "skips": 0,
+      "unique_identities": 149,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "1",
+          "skipped": "0",
+          "tests": "149",
+          "time": "53.186",
+          "timestamp": "2026-11-07T03:19:48.600313-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ]
+    },
+    "source/connector/dx1819-connector-guided-retest.xml": {
+      "sha256": "f3e812c49bc30b73a82695099da1e3b4a1f4a521d11d1046a706d38ff8c6b797",
+      "tests": 5,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "unique_identities": 5,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "5",
+          "time": "2.933",
+          "timestamp": "2026-11-07T03:21:15.425098-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ]
+    },
+    "source/connector/dx1819-connector-import-schema-final.xml": {
+      "sha256": "7a5a35cd6aeeb2cd8f5714c9f8429b3e8ee98576959cc64ec4d7ca0985f9644f",
+      "tests": 105,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "unique_identities": 105,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "105",
+          "time": "31.803",
+          "timestamp": "2026-11-07T03:16:26.936288-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ]
+    },
+    "source/connector/dx1819-connector-initial.xml": {
+      "sha256": "dae16056eb0ca08ee4db2fca74579706f21dbb9ae70de6fe51eec0c43dcf063f",
+      "tests": 189,
+      "failures": 10,
+      "errors": 1,
+      "skips": 0,
+      "unique_identities": 189,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "2",
+          "failures": "10",
+          "skipped": "0",
+          "tests": "189",
+          "time": "70.023",
+          "timestamp": "2026-11-07T03:09:53.960801-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ]
+    },
+    "source/connector/dx1819-connector-local-review-focused-final.xml": {
+      "sha256": "0e326fdd87c2b1fa386a4d3caee41b4aaf612c402d1d8f8ef5027252989e44e8",
+      "tests": 55,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "unique_identities": 55,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "55",
+          "time": "20.356",
+          "timestamp": "2026-11-07T03:59:28.009188-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ]
+    },
+    "source/connector/dx1819-connector-local-review-initial.xml": {
+      "sha256": "dc56e4a0893bb996d98667515989cd655903cec3fe76642fed48fd76802f6195",
+      "tests": 76,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "unique_identities": 76,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "76",
+          "time": "37.513",
+          "timestamp": "2026-11-07T03:51:52.185137-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ]
+    },
+    "source/connector/dx1819-connector-local-review-race-final.xml": {
+      "sha256": "b576b6a0f6462f206b4996d152ab42f6fa812bce934bd4049f2c98bea45f1854",
+      "tests": 17,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "unique_identities": 17,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "17",
+          "time": "14.207",
+          "timestamp": "2026-11-07T03:54:50.945581-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ]
+    },
+    "source/connector/dx1819-connector-local-review-regression-final.xml": {
+      "sha256": "3e0d879f3124876c5ebaafbe2065adef3b8472d71d277781a8d246494867bc04",
+      "tests": 275,
+      "failures": 1,
+      "errors": 0,
+      "skips": 0,
+      "unique_identities": 275,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "1",
+          "skipped": "0",
+          "tests": "275",
+          "time": "94.620",
+          "timestamp": "2026-11-07T03:56:55.147434-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ]
+    },
+    "source/connector/dx1819-connector-retest.xml": {
+      "sha256": "d149b7ff934cb1bada275e14d4c032b2949493a202d61c7a7ef0cbdff439d71d",
+      "tests": 12,
+      "failures": 1,
+      "errors": 0,
+      "skips": 0,
+      "unique_identities": 12,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "1",
+          "skipped": "0",
+          "tests": "12",
+          "time": "16.078",
+          "timestamp": "2026-11-07T03:12:30.820984-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ]
+    },
+    "source/connector/dx1819-connector-review-map-initial.xml": {
+      "sha256": "da1c3fd7217a70b185841958c6d06dfefe0d2224aa10620ab4ad36396ce27931",
+      "tests": 172,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "unique_identities": 172,
+      "suites": [
+        {
+          "name": "pytest",
+          "errors": "0",
+          "failures": "0",
+          "skipped": "0",
+          "tests": "172",
+          "time": "61.173",
+          "timestamp": "2026-11-07T03:28:03.875367-03:00",
+          "hostname": "Alienware_m15"
+        }
+      ]
+    }
+  },
+  "source_reports_overlap": true,
+  "initial_failures_preserved": true
+}

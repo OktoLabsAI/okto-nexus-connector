@@ -12,6 +12,7 @@ canonical registration (TC-03/TC-04).
 from __future__ import annotations
 
 import getpass
+import hmac
 import json
 import os
 import stat
@@ -21,7 +22,7 @@ from pathlib import Path
 
 from ..errors import ConnectorError, agent_mismatch, auth_required
 from ..storage.state_store import IdentityRecord, StateStore
-from .vault import RestrictedFileVault, SecretVault, handle_for
+from .vault import SecretVault, handle_for
 
 MAX_KEY_LENGTH = 4096
 
@@ -153,7 +154,8 @@ def _check_key_shape(key: str) -> None:
 
 async def import_identity(http, vault: SecretVault, store: StateStore,
                           *, key: str, alias: str,
-                          agent_hint: str | None) -> ImportResult:
+                          agent_hint: str | None, expected_identity: dict | None = None,
+                          require_remote_setup: bool = False) -> ImportResult:
     """Validate a key against ``/me`` and store it namespaced.
 
     ``http`` is an open ``NexusHTTPClient``. The identity recorded locally
@@ -171,6 +173,9 @@ async def import_identity(http, vault: SecretVault, store: StateStore,
         raise agent_mismatch(
             "me",
             f"hint {agent_hint} but key authenticates as {me.agent_id}")
+    if expected_identity is not None:
+        from ..services.remote_setup import verify_identity
+        verify_identity(me, expected_identity, require_remote_setup=require_remote_setup)
     existing = None
 
     def _mutate(state):
@@ -190,15 +195,30 @@ async def import_identity(http, vault: SecretVault, store: StateStore,
     store.update(_mutate)
     namespace = f"{me.server_id}/{me.agent_id}"
     if existing is None:
-        handle = vault.store(namespace, key)
+        try:
+            handle = vault.store(namespace, key)
+        except ConnectorError as error:
+            if expected_identity is None or error.code != 'VALIDATION_ERROR' or error.stage != 'vault':
+                raise
+            # The vault write may have succeeded before its acknowledgement or
+            # the identity checkpoint was lost. Only this same authenticated
+            # material can recover that handle; never replace an orphan key.
+            handle = handle_for(me.server_id, me.agent_id)
+            if not hmac.compare_digest(vault.resolve(handle).encode('utf-8'), key.encode('utf-8')):
+                raise ConnectorError('OPERATION_CONFLICT', 'identity',
+                    'This canonical namespace already has different protected material. Inspect it before importing another key.') from None
         identity = IdentityRecord(
             alias=alias, server_id=me.server_id, agent_id=me.agent_id,
             secret_handle=handle, credential_epoch=me.credential_epoch,
             added_at=_now(), display_name=me.display_name)
 
         def _append(state_):
-            if state_.identity_for(me.server_id, me.agent_id) is None:
+            current = state_.identity_for(me.server_id, me.agent_id)
+            if current is None:
                 state_.identities.append(identity)
+            elif expected_identity is not None and (current.alias, current.secret_handle, current.credential_epoch, current.revoked) != (
+                    identity.alias, identity.secret_handle, identity.credential_epoch, False):
+                raise ConnectorError('STALE_GENERATION', 'identity', 'The canonical identity changed during import.')
 
         store.update(_append)
         return ImportResult(identity, True, me.agent_id, me.server_id)

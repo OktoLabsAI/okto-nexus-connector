@@ -1,0 +1,19 @@
+{
+  "status": "TEST_FIXTURE_CONTRACT_CORRECTED_NO_RUNTIME_CHANGE",
+  "runtime_source_cut": "daa7f2b3abe6aea9ab72338c1475ebbb014a2340",
+  "runtime_version": "0.0.13",
+  "core_pin": "0.0.14",
+  "change": "Wizard tests already inject native task and runtime observations. They now explicitly inject the bounded-parent observation at that native boundary too. A fake ready PID alone is not presented as parent evidence. A new negative removes that observation and proves DAEMON_UNAVAILABLE/SUPERVISOR_OUTCOME_UNCONFIRMED with no registration, drain or task effect.",
+  "runs": [
+    {"scope": "configure_login_start plus bounded_service_supervisor on installed packages, -I and --asyncio-mode=auto", "passed": 36, "failed": 1, "seconds": 11.31, "tool_ref": "31e5c6", "failure": "New negative expected the internal reason as public code; actual public code is DAEMON_UNAVAILABLE and message retains that exact reason."},
+    {"scope": "Corrected new missing-parent negative only", "passed": 1, "seconds": 1.40, "tool_ref": "5fc3aa"}
+  ],
+  "antecedents": ["Three prior wizard tests failed because the old fixture supplied a ready runtime without the current parent observation.", "Initial root invocation omitted asyncio-mode after intentionally disabling pytest configuration; its async cases did not execute. Preserved separately."],
+  "ruff": {"exit_code": 0, "tool_ref": "10cba1"},
+  "installed_environment": "Owned Temp nexus-ui-r1-packages-wry3ter9 venv, Python3.13.1, Nexus0.3.5/Connector0.0.13/Core0.0.14; no sibling source imports.",
+  "evidence_location": "OktoLabsAI/okto-nexus feature/v0.3.5 NEXUS_UI_R1/execution/evidence/pr07-service/login-fixture-*.xml",
+  "limits": ["Not one37/37 run; retain36-pass/1-oracle-fail plus separate corrected1-pass.", "Native task/process observation remains injected. No Windows login task was installed, and no account/provider was accessed.", "This does not qualify a live-work/observer-exit/rollback journey."],
+  "runtime_changes": 0,
+  "migrations": 0,
+  "personal_installation_changes": 0
+}

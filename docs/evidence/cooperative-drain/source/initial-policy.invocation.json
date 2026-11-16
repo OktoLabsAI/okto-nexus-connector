@@ -1,0 +1,18 @@
+{
+  "command": [
+    "rtk",
+    "proxy",
+    "C:\\Users\\jpamb\\AppData\\Local\\Temp\\nexus-ci-connector-refresh-la1tb1l6\\venv\\Scripts\\python.exe",
+    "-m",
+    "pytest",
+    "-q",
+    "-o",
+    "cache_dir=C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-cache",
+    "--basetemp=C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy-fixtures",
+    "--junitxml=C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-zfwdu6r_\\initial-policy.xml",
+    "tests/unit/test_operator_drain.py"
+  ],
+  "exit_code": 1,
+  "core_source": false,
+  "scope": "Synthetic tests; no provider/personal service or vault"
+}

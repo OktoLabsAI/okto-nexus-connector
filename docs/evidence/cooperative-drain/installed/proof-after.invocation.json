@@ -1,0 +1,13 @@
+{
+  "command": [
+    "C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-installed-_r091tbk\\venv\\Scripts\\python.exe",
+    "-I",
+    "C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-installed-_r091tbk\\package_proof.py",
+    "C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-installed-_r091tbk",
+    "C:\\Users\\jpamb\\AppData\\Local\\Temp\\r3-cooperative-drain-09ucmgsr\\core-v2-wheels\\okto_nexus_connector_core-0.0.14-py3-none-any.whl",
+    "after"
+  ],
+  "cwd": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-installed-_r091tbk",
+  "exit_code": 0,
+  "environment": "Explicit OS-tool allowlist; all homes in this Temp; no inherited credential variables or PYTHONPATH"
+}

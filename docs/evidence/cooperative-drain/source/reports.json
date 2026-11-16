@@ -1,0 +1,90 @@
+{
+  "scope": "Connector SVC-07 source qualification, Windows/local synthetic",
+  "reports": {
+    "initial-policy": {
+      "tests": 12,
+      "passed": 7,
+      "failed": 5,
+      "errors": 0,
+      "skipped": []
+    },
+    "policy-fixed": {
+      "tests": 61,
+      "passed": 61,
+      "failed": 0,
+      "errors": 0,
+      "skipped": []
+    },
+    "policy-additions": {
+      "tests": 14,
+      "passed": 14,
+      "failed": 0,
+      "errors": 0,
+      "skipped": []
+    },
+    "initial-core-r4": {
+      "tests": 105,
+      "passed": 105,
+      "failed": 0,
+      "errors": 0,
+      "skipped": []
+    },
+    "owner-latch": {
+      "tests": 67,
+      "passed": 67,
+      "failed": 0,
+      "errors": 0,
+      "skipped": []
+    },
+    "final-v2": {
+      "tests": 161,
+      "passed": 160,
+      "failed": 1,
+      "errors": 0,
+      "skipped": []
+    },
+    "fixes-v3": {
+      "tests": 26,
+      "passed": 26,
+      "failed": 0,
+      "errors": 0,
+      "skipped": []
+    },
+    "final-v3": {
+      "tests": 195,
+      "passed": 194,
+      "failed": 0,
+      "errors": 0,
+      "skipped": [
+        {
+          "name": "test_shim_resolution_never_runs_outside_windows",
+          "reason": "covered above"
+        }
+      ]
+    }
+  },
+  "authoritative_final": "final-v3.xml",
+  "new_test_cases": 26,
+  "overlapping_campaigns_not_added": true,
+  "diagnostics": {
+    "initial-policy": "5 fixture failures: synthetic app lacked run/; fixture fixed without changing production.",
+    "final-v2": "1 fixture failure: omitted SUBMISSION_STARTED transition before SUBMITTED; fixed through public journal API.",
+    "lint-initial": "2 new fixture-reexport F811 errors fixed; 15 preexisting issues unchanged."
+  },
+  "reviewed_fixes": [
+    "Direct IPC latches supervisor before admission fence with owner generation proof and launch exclusion.",
+    "Force reaches containment independently of a blocked owned status reader; stores/IPC remain until reader and admitted requests join.",
+    "Unknown R4 controls remain owned across retries.",
+    "Shared journal sibling claims aggregate only through public Core proofs/revisions; orphan or unopened history remains UNKNOWN."
+  ],
+  "validation": [
+    "194 PASS, 1 existing non-Windows-only SKIP, 0 failures/errors in final source regression.",
+    "Ruff: 15 current issues equal 15 baseline issues; zero new issues, all new files pass."
+  ],
+  "limitations": [
+    "No personal provider, credential vault, native service installation or productive M1/M2 campaign.",
+    "Native execution peers and supervisor adapter are synthetic; real Core/SQLite and existing fake HTTP/WSS/IPC integrations are exercised.",
+    "Current source tested with isolated installed dependencies; final wheel/installed-product qualification belongs to root.",
+    "No ledger, general documentation, existing evidence, commit or push changes by this agent."
+  ]
+}

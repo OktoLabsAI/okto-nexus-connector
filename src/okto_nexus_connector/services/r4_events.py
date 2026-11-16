@@ -49,6 +49,7 @@ class R4EventPublisher:
         self.tasks={}
         self.errors={}
         self._stopped=asyncio.Event()
+        self._busy = 0
 
     async def ensure(self, scope):
         if self._stopped.is_set(): return
@@ -65,6 +66,39 @@ class R4EventPublisher:
             self.tasks[key]=asyncio.create_task(self._follow(scope),name="r4-event-publisher")
 
     async def step(self, scope):
+        self._busy += 1
+        try:
+            return await self._step(scope)
+        finally:
+            self._busy -= 1
+
+    async def quiescent(self):
+        if self._busy or self.errors:
+            return False
+        state = self.connection.state
+        after, high = 0, None
+        journal = await self.host.ensure_history_journal()
+        while True:
+            rows, high = await asyncio.to_thread(self.store.page, state.server_id, state.executor_id,
+                                                after=after, high=high)
+            if not rows:
+                break
+            for after, row in rows:
+                if row['remote_acked'] != row['core_applied']:
+                    return False
+                scope = row['scope']
+                iterator = journal.events(EventCursor(scope['server_id'], scope['executor_id'],
+                    scope['session_id'], scope['stream_epoch'], row['core_applied']))
+                try:
+                    if await anext(iterator, None) is not None:
+                        return False
+                finally:
+                    close = getattr(iterator, 'aclose', None)
+                    if close is not None:
+                        await close()
+        return not self._busy and not self.errors
+
+    async def _step(self, scope):
         state=await asyncio.to_thread(self.store.read,scope)
         journal=await self.host.ensure_history_journal()
         cursor=EventCursor(scope["server_id"],scope["executor_id"],scope["session_id"],scope["stream_epoch"])

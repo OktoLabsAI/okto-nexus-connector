@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "artifacts": [
+    {
+      "path": "docs/evidence/diagnostics-v1/connector-source-initial.xml",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-diagnostics-proposal-yv2lnouo\\connector-source-initial.xml",
+      "bytes": 7915,
+      "sha256": "d884f08abfee902783c9247a0c5de722b83dc98f8d52a0551a2ad3988ab9db74",
+      "original_sha256": "d884f08abfee902783c9247a0c5de722b83dc98f8d52a0551a2ad3988ab9db74",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/connector-source-second.xml",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-diagnostics-proposal-yv2lnouo\\connector-source-second.xml",
+      "bytes": 6851,
+      "sha256": "5fe1d990a6fdaecc1f1a97d5f84d69632cb0ac30a62c4a3a15958d216aa954fa",
+      "original_sha256": "5fe1d990a6fdaecc1f1a97d5f84d69632cb0ac30a62c4a3a15958d216aa954fa",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/connector-source-final.xml",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-diagnostics-proposal-yv2lnouo\\connector-source-final.xml",
+      "bytes": 13581,
+      "sha256": "2a83dde917148ebbdc9cf89e174961d77cd5f294717bcf55e0268f333d5cf0f2",
+      "original_sha256": "2a83dde917148ebbdc9cf89e174961d77cd5f294717bcf55e0268f333d5cf0f2",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/connector-source-final-v2.xml",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-diagnostics-proposal-yv2lnouo\\connector-source-final-v2.xml",
+      "bytes": 13915,
+      "sha256": "d2081ad4460fd0c270a621ff7a90e1828b935ee6b940e3522b9fd74684b125d3",
+      "original_sha256": "d2081ad4460fd0c270a621ff7a90e1828b935ee6b940e3522b9fd74684b125d3",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/connector-contract-final-v2.xml",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-diagnostics-proposal-yv2lnouo\\connector-contract-final-v2.xml",
+      "bytes": 692,
+      "sha256": "d907273313ee8675b4e1110d46fae169211fd682de9667ddbf7f943873e6e743",
+      "original_sha256": "d907273313ee8675b4e1110d46fae169211fd682de9667ddbf7f943873e6e743",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/connector-contract-final-v3.xml",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-diagnostics-proposal-yv2lnouo\\connector-contract-final-v3.xml",
+      "bytes": 692,
+      "sha256": "d2fc1c6759855b82fbab57e511cc4c951d95d84448ae07792f163225a8aafb4c",
+      "original_sha256": "d2fc1c6759855b82fbab57e511cc4c951d95d84448ae07792f163225a8aafb4c",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/connector-schema-conformance.json",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-diagnostics-proposal-yv2lnouo\\connector-schema-conformance.json",
+      "bytes": 307,
+      "sha256": "06016218ae6dccc74980bef03bbbf42ac532a2d1579c03d5704ae05b50e8ea5f",
+      "original_sha256": "06016218ae6dccc74980bef03bbbf42ac532a2d1579c03d5704ae05b50e8ea5f",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/connector-schema-conformance-final-v2.json",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-diagnostics-proposal-yv2lnouo\\connector-schema-conformance-final-v2.json",
+      "bytes": 307,
+      "sha256": "22385fd4fedefceac4ba4b4f8e9cd4a2124c8f54e952e93b4f24561f9af950ad",
+      "original_sha256": "22385fd4fedefceac4ba4b4f8e9cd4a2124c8f54e952e93b4f24561f9af950ad",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/connector-schema-conformance-final-v3.json",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-diagnostics-proposal-yv2lnouo\\connector-schema-conformance-final-v3.json",
+      "bytes": 307,
+      "sha256": "d6ab001bd951736b50094f1fa404262bddb2a0144047822ee6e921a188389ad7",
+      "original_sha256": "d6ab001bd951736b50094f1fa404262bddb2a0144047822ee6e921a188389ad7",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/connector_doctor_test_guard.py",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-diagnostics-proposal-yv2lnouo\\connector_doctor_test_guard.py",
+      "bytes": 1054,
+      "sha256": "842549feb35b7a3a4289985eef2e801be411e2efeece6b95f3a306337c67dd2d",
+      "original_sha256": "842549feb35b7a3a4289985eef2e801be411e2efeece6b95f3a306337c67dd2d",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/build_connector.py",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-installed-22ml_97o\\build_connector.py",
+      "bytes": 4107,
+      "sha256": "726d157bede62c90417c73305b78c4c8df9ff7636e86b73e8a087771c58a582a",
+      "original_sha256": "726d157bede62c90417c73305b78c4c8df9ff7636e86b73e8a087771c58a582a",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/qualify_connector.py",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-installed-22ml_97o\\qualify_connector.py",
+      "bytes": 4475,
+      "sha256": "5ffa82a516f184b9b4ea752445ae6a49e2e98c17b5923dd6dbede3f5a38c4c6b",
+      "original_sha256": "5ffa82a516f184b9b4ea752445ae6a49e2e98c17b5923dd6dbede3f5a38c4c6b",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/retain_connector_evidence.py",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-installed-22ml_97o\\retain_connector_evidence.py",
+      "bytes": 5502,
+      "sha256": "71ed2ab24d4c9cf291044d18428a3886252229544f3e3fa195c060a83d5d5a0d",
+      "original_sha256": "71ed2ab24d4c9cf291044d18428a3886252229544f3e3fa195c060a83d5d5a0d",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/package-proof.json",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-installed-22ml_97o\\qualified-connector\\package-proof.json",
+      "bytes": 39283,
+      "sha256": "80294946b4f93344ed92185c5c1ed469f405302ce6c592a6eec876827feb7eff",
+      "original_sha256": "80294946b4f93344ed92185c5c1ed469f405302ce6c592a6eec876827feb7eff",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/installed.xml",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-installed-22ml_97o\\qualified-connector\\installed.xml",
+      "bytes": 13896,
+      "sha256": "35d89a7b38b7c5aabeba6a688c2063a865619072fb973ef7cea9139dbc16b007",
+      "original_sha256": "35d89a7b38b7c5aabeba6a688c2063a865619072fb973ef7cea9139dbc16b007",
+      "exact_original_bytes": true
+    },
+    {
+      "path": "docs/evidence/diagnostics-v1/installed-qualification.json",
+      "original_path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\dx0714-installed-22ml_97o\\qualified-connector\\installed-qualification.json",
+      "bytes": 78569,
+      "sha256": "dedfae68fe7b86ab4a550dc17499eedc6ab1dd30022e442ce92982e94b53f163",
+      "original_sha256": "dedfae68fe7b86ab4a550dc17499eedc6ab1dd30022e442ce92982e94b53f163",
+      "exact_original_bytes": true
+    }
+  ],
+  "reports": {
+    "connector-source-initial.xml": {
+      "tests": 38,
+      "passed": 37,
+      "failures": 1,
+      "errors": 0,
+      "skipped": 0
+    },
+    "connector-source-second.xml": {
+      "tests": 41,
+      "passed": 41,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "connector-source-final.xml": {
+      "tests": 91,
+      "passed": 91,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "connector-source-final-v2.xml": {
+      "tests": 93,
+      "passed": 93,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "connector-contract-final-v2.xml": {
+      "tests": 3,
+      "passed": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "connector-contract-final-v3.xml": {
+      "tests": 3,
+      "passed": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "installed.xml": {
+      "tests": 93,
+      "passed": 93,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "distinct_final_source_cases": 93,
+  "distinct_installed_cases": 93,
+  "source_installed_overlap": 93,
+  "reruns_not_summed": true,
+  "common_contract_sha256": "06dbbea77eb0870058bc2fe4c9afc81023ea99f857612984321d1f8e6d20c422",
+  "qualification": "Installed non-editable Connector/Core; synthetic vault, HTTP, inventory and containment observations only.",
+  "initial_failure": "A synthetic IdentityRecord used alias/agent positional arguments in the wrong order. Corrected to keyword arguments; original failure XML retained. No product fix was inferred from it.",
+  "excluded": [
+    "wheel files",
+    "databases",
+    "private credential material",
+    "isolated test profiles"
+  ]
+}

@@ -45,6 +45,7 @@ async def continue_pending_bindings(store, vault, *, server_id, executor_id,
                         and saved.get('proposal', {}).get('proposal_id') == record.proposal['proposal_id']):
                     saved.update(stage='done', binding=applied['binding'], result=dict(
                         saved=True, connection_name=record.alias, binding=applied['binding'],
-                        runtime_started=False, request_id=record.client_intent_id.removesuffix('_prepare')))
+                        runtime_started=False, request_id=(record.remote_setup or {}).get('setup_run_id')
+                        or record.client_intent_id.removesuffix('_prepare')))
         await asyncio.to_thread(store.update, complete)
         logging.getLogger(__name__).info('Connection approved and configured: alias=%s', record.alias)

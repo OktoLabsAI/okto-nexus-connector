@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import socket
 import time
-from pathlib import Path
 from typing import Iterator
 
 from ..errors import ConnectorError
@@ -23,10 +22,11 @@ _HELLO_TIMEOUT_SECONDS = 20.0
 
 
 class IPCClient:
-    def __init__(self, transport: str, address: str, token: str):
+    def __init__(self, transport: str, address: str, token: str, *, connect_timeout: float = _CONNECT_TIMEOUT):
         self.transport = transport
         self.address = address
         self.token = token
+        self.connect_timeout = connect_timeout
         self._socket: socket.socket | NamedPipeSocket | None = None
         self._buffer = b""
         self._closed = False
@@ -54,7 +54,7 @@ class IPCClient:
         else:
             raise ConnectorError('VALIDATION_ERROR', 'ipc_connect',
                                  'unknown IPC transport')
-        sock.settimeout(_CONNECT_TIMEOUT)
+        sock.settimeout(self.connect_timeout)
         try:
             sock.connect(target)
         except OSError as exc:
@@ -67,7 +67,7 @@ class IPCClient:
         try:
             self._send({"op": "hello", "token": self.token, "version": 1})
             hello = self._read_object(deadline=time.monotonic() +
-                                      _HELLO_TIMEOUT_SECONDS)
+                                      min(_HELLO_TIMEOUT_SECONDS, self.connect_timeout))
             if not hello.get("ok"):
                 raise ConnectorError("AGENT_AUTH_REQUIRED", "ipc_hello",
                                      "daemon rejected IPC authentication")
@@ -83,24 +83,25 @@ class IPCClient:
             finally:
                 self._socket = None
 
-    def call(self, op: str, params: dict[str, object] | None = None
+    def call(self, op: str, params: dict[str, object] | None = None, *, timeout: float | None = None
              ) -> dict[str, object]:
         """One request → one terminal response."""
-        responses = list(self.stream(op, params))
+        responses = list(self.stream(op, params, timeout=timeout))
         if not responses:
             raise ConnectorError("DAEMON_UNAVAILABLE", "ipc_call",
                                  "daemon closed the connection",
                                  retry_safe=True)
         return responses[-1]
 
-    def stream(self, op: str, params: dict[str, object] | None = None
+    def stream(self, op: str, params: dict[str, object] | None = None, *, timeout: float | None = None
                ) -> Iterator[dict[str, object]]:
         """Yield streamed records and the terminal response."""
         self.connect()
         assert self._socket is not None
         self._send({"op": op, "seq": _next_seq(), "params": params or {}})
+        deadline = None if timeout is None else time.monotonic() + timeout
         while True:
-            payload = self._read_object()
+            payload = self._read_object(deadline=deadline)
             yield payload
             if payload.get("done"):
                 return
@@ -115,7 +116,7 @@ class IPCClient:
         while b"\n" not in self._buffer:
             if deadline is not None and time.monotonic() >= deadline:
                 raise ConnectorError('DAEMON_UNAVAILABLE', 'ipc_hello',
-                                     'daemon did not authenticate IPC in time',
+                                     'daemon did not respond within the observation timeout',
                                      retry_safe=True)
             if self._closed or self._socket is None:
                 raise ConnectorError("DAEMON_UNAVAILABLE", "ipc_read",
@@ -148,16 +149,16 @@ def _next_seq() -> int:
     return _seq
 
 
-def connect_readiness(readiness, token: str) -> IPCClient:
-    client = IPCClient(readiness.transport, readiness.address, token)
+def connect_readiness(readiness, token: str, *, timeout: float = 5.0) -> IPCClient:
+    client = IPCClient(readiness.transport, readiness.address, token, connect_timeout=timeout)
     client.connect()
     return client
 
 
 def ping(readiness, token: str, *, timeout: float = 5.0) -> bool:
     try:
-        with connect_readiness(readiness, token) as client:
-            response = client.call("ping")
+        with connect_readiness(readiness, token, timeout=timeout) as client:
+            response = client.call("ping", timeout=timeout)
             return bool(response.get("ok"))
     except (ConnectorError, OSError):
         return False

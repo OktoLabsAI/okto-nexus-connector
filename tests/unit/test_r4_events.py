@@ -38,6 +38,37 @@ async def append(journal, count):
         await journal.record_event(RuntimeEvent("srv","exe","session","epoch",0,"text_delta",None,{"text":"Hello"}))
 
 
+async def test_core_thread_configuration_is_forwarded_and_acknowledged_once(publisher):
+    from nexus_connector_core.native.codex_thread_configuration import observe_thread_response
+
+    owner, journal, connection = publisher
+    payload = observe_thread_response({
+        'model': 'fixture-model',
+        'modelProvider': 'fixture-provider',
+        'approvalPolicy': 'on-request',
+        'sandbox': {'type': 'readOnly'},
+        'instructionSources': [],
+        'thread': {'turns': [{'text': 'not part of the observation'}]},
+    }, method='thread/start', thread_id='fixture-thread')
+    await journal.record_event(RuntimeEvent(
+        'srv', 'exe', 'session', 'epoch', 0, 'lifecycle',
+        'core/codex_thread_configuration', payload))
+    assert await owner.step(SCOPE)
+    assert len(connection.calls) == 1 and len(connection.calls[0]) == 1
+    event = connection.calls[0][0]
+    assert event['native_type'] == 'core/codex_thread_configuration'
+    assert event['payload'] == payload
+    assert event['payload']['fields']['instructionSources'] == {'status': 'reported', 'value': []}
+    assert event['payload']['fields']['cwd'] == {'status': 'missing'}
+    assert event['session_id'] == SCOPE['session_id']
+    assert event['stream_epoch'] == SCOPE['stream_epoch']
+    assert event.get('operation_id') is None
+    assert owner.store.read(SCOPE)['remote_acked'] == 1
+    assert owner.store.read(SCOPE)['core_applied'] == 1
+    assert not await owner.step(SCOPE)
+    assert len(connection.calls) == 1
+
+
 async def test_large_event_upload_precedes_reference_and_retry_preserves_content(publisher):
     from nexus_connector_core.event_artifacts import event_reference, hydrate_event
     owner,journal,connection=publisher

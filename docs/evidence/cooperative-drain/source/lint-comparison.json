@@ -1,0 +1,12 @@
+{
+  "current_issues": 17,
+  "baseline_issues": 15,
+  "new_issues": [
+    [
+      "tests\\unit\\test_r4_operator_drain.py",
+      "F811",
+      "Redefinition of unused `execution` from line 7: `execution` redefined here"
+    ]
+  ],
+  "all_new_files_pass": false
+}

@@ -934,19 +934,12 @@ async def test_19_noninteractive_connect_does_not_prompt(tmp_path,
 async def test_24_select_second_installation_selects_that_exact_path(
         tmp_path, monkeypatch):
     import okto_nexus_connector.cli.commands.connect as connect_module
-    from okto_nexus_connector.services.discovery_service import (
-        InventoryEntry,
-    )
+    from okto_nexus_connector.services.discovery_service import select_explicit
     suffix = ".exe" if sys.platform == "win32" else ""
     a = _exe(tmp_path / f"a{suffix}", _MINIMAL_BINARY())
     b = _exe(tmp_path / f"b{suffix}", _MINIMAL_BINARY())
-    inventory = [
-        InventoryEntry("codex_app_server", str(a), "explicit", "selected",
-                       fingerprint(a), None, None),
-        InventoryEntry("codex_app_server", str(b), "explicit", "selected",
-                       fingerprint(b), None, None),
-    ]
-    monkeypatch.setattr(connect_module, "discover_inventory",
+    inventory = [select_explicit('codex_app_server', path) for path in (a, b)]
+    monkeypatch.setattr(connect_module, "configured_candidates",
                         lambda *a, **k: _ret(inventory))
     # The human chooses the SECOND entry; input feeds "2".
     inputs = iter(["2"])

@@ -1,0 +1,89 @@
+{
+  "files": [
+    {
+      "path": "src/okto_nexus_connector/cli/commands/daemon.py",
+      "qualified_sha256": "a6325a122c921b68801cdc1b30c2616b3695278eed796e7c8b28328747b62fde",
+      "git_index_sha256": "a6325a122c921b68801cdc1b30c2616b3695278eed796e7c8b28328747b62fde",
+      "lf_normalized_equal": true
+    },
+    {
+      "path": "src/okto_nexus_connector/cli/main.py",
+      "qualified_sha256": "0ab9fe7e9f6b6680699e127f32c0377a553459e0791a5276adf0d4a726b48c4b",
+      "git_index_sha256": "2e30d148fdacacb54fcfc4118870ede90e8b33f696b0496e3ff92e1c23a63642",
+      "lf_normalized_equal": true
+    },
+    {
+      "path": "src/okto_nexus_connector/daemon/app.py",
+      "qualified_sha256": "2b901aee2284606c3ad20caf670a848b950e8d44d2785fd0cf3daebfbf3d6db5",
+      "git_index_sha256": "e84987a3e97a48bd89fe8715b3e38c45735a7861ecf7ef554fbf0b49de33bea2",
+      "lf_normalized_equal": true
+    },
+    {
+      "path": "src/okto_nexus_connector/daemon/drain.py",
+      "qualified_sha256": "7588880d14c4e9e3d42160ea250a4bd4ee0409ff03e34e6af2c7e1ebe6e2c33b",
+      "git_index_sha256": "7588880d14c4e9e3d42160ea250a4bd4ee0409ff03e34e6af2c7e1ebe6e2c33b",
+      "lf_normalized_equal": true
+    },
+    {
+      "path": "src/okto_nexus_connector/daemon/lifecycle.py",
+      "qualified_sha256": "3b7541b832ed1ff7eaba213ddefbc841a56d869754a7eb863f3930ada420c4d8",
+      "git_index_sha256": "3b7541b832ed1ff7eaba213ddefbc841a56d869754a7eb863f3930ada420c4d8",
+      "lf_normalized_equal": true
+    },
+    {
+      "path": "src/okto_nexus_connector/daemon/manager.py",
+      "qualified_sha256": "65ee837a61af3bbb2c4a3e98f13e2d02cd691c0ca2bf41d4f0c555d6d9a47611",
+      "git_index_sha256": "1803a57627a56415930fc99750e2a1d6ef60d376570c3f24b7b3a4ae0b459edb",
+      "lf_normalized_equal": true
+    },
+    {
+      "path": "src/okto_nexus_connector/daemon/r4_control.py",
+      "qualified_sha256": "fc490e38a73d6cad94f7eb20a403300b9e1917204ea61a1bd6fae91e0b9ce75a",
+      "git_index_sha256": "489354cf3aadb3d455d186d6208fc98584918174c568c59123086fdd7273e579",
+      "lf_normalized_equal": true
+    },
+    {
+      "path": "src/okto_nexus_connector/daemon/r4_execution.py",
+      "qualified_sha256": "3a9f62ce21f692e5caa473b7fe29e79b1563328d714aae2707dd9f69b55a1039",
+      "git_index_sha256": "4a737eb043d7885b2fecb967f02fa4c4a7a8f28ee2273a6cfeaa6c0958388015",
+      "lf_normalized_equal": true
+    },
+    {
+      "path": "src/okto_nexus_connector/services/core_host.py",
+      "qualified_sha256": "ba1f0afc0c45c38d45d39cb557394b4a34726f47c1b569165afc84e054bf181e",
+      "git_index_sha256": "91559b172ece71d832330588c293cd950bb550c0363d73fe8b400b4eb3cda69e",
+      "lf_normalized_equal": true
+    },
+    {
+      "path": "src/okto_nexus_connector/services/r4_events.py",
+      "qualified_sha256": "a64a4862edf064240831cfc629de21c632e9248d2a3be3f4097b68aeefb1fcfd",
+      "git_index_sha256": "2a035b36a5994a6ce6df693d48e827fc77758706aff076160e135bf029119fed",
+      "lf_normalized_equal": true
+    },
+    {
+      "path": "src/okto_nexus_connector/services/r4_execution.py",
+      "qualified_sha256": "5549ff7265f67f7531efe3d0961eacfc8a7f339e0981e9dc6a22e83acd4bd4f6",
+      "git_index_sha256": "8c2f3b5e196abc257ffae73ebfc620ecececde266a1dee939941500b2e5193f8",
+      "lf_normalized_equal": true
+    },
+    {
+      "path": "src/okto_nexus_connector/transport/r4_connection.py",
+      "qualified_sha256": "9a05a58ebf724e0821d75e6c9a6ef89ba48b42229fa64ddb0feb9aa0fcb0d76c",
+      "git_index_sha256": "7a59e42bc46f0900b0d880b1b5f85ddbb0d2dbe2d4346c1f35fa5e284c9d4d9c",
+      "lf_normalized_equal": true
+    },
+    {
+      "path": "tests/unit/test_operator_drain.py",
+      "qualified_sha256": "8d2837641551b4da79e72dd10655eaeb707702714b7655a61066d7d7db9c0dba",
+      "git_index_sha256": "8d2837641551b4da79e72dd10655eaeb707702714b7655a61066d7d7db9c0dba",
+      "lf_normalized_equal": true
+    },
+    {
+      "path": "tests/unit/test_r4_operator_drain.py",
+      "qualified_sha256": "8ea41603e642135375a4d25c0b71fd162ec58072331435927bab56da966b7be1",
+      "git_index_sha256": "8ea41603e642135375a4d25c0b71fd162ec58072331435927bab56da966b7be1",
+      "lf_normalized_equal": true
+    }
+  ],
+  "classification": "Only Git newline normalization is accepted; original qualification hashes retained."
+}

@@ -102,7 +102,7 @@ class Output:
                 print(f"action: {payload['action']}", file=sys.stderr)
         if payload.get("code") == "OUTCOME_UNKNOWN":
             return EXIT_UNKNOWN_OUTCOME
-        if payload.get("code") in ("DAEMON_UNAVAILABLE", "EXECUTOR_OFFLINE"):
+        if payload.get("code") in ("DAEMON_UNAVAILABLE", "EXECUTOR_OFFLINE", "STATE_UNAVAILABLE", "LOG_UNAVAILABLE"):
             return EXIT_UNAVAILABLE
         return EXIT_ERROR
 

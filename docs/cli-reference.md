@@ -152,6 +152,7 @@ usage: okto-nexus-connector configure [-h] [--file FILE] [--identity IDENTITY]
                                       [--request-id REQUEST_ID]
                                       [--operator-identity OPERATOR_IDENTITY]
                                       [--operator-proof-ref OPERATOR_PROOF_REF]
+                                      [--start-at-login | --no-start-at-login]
                                       [--json] [--verbose]
 
 options:
@@ -185,6 +186,10 @@ options:
                         after binding approval
   --operator-proof-ref OPERATOR_PROOF_REF
                         operator approval reference from the binding proposal
+  --start-at-login      include this Connector user logon task in the
+                        connection review
+  --no-start-at-login   keep the current service mode; existing tasks are
+                        preserved
   --json                machine-readable JSON output
   --verbose             include technical details
 ```
@@ -192,7 +197,8 @@ options:
 ## okto-nexus-connector connect
 
 ```text
-usage: okto-nexus-connector connect [-h] --server SERVER [--agent AGENT]
+usage: okto-nexus-connector connect [-h] [--server SERVER]
+                                    [--identity IDENTITY] [--agent AGENT]
                                     [--alias ALIAS]
                                     [--binding-alias BINDING_ALIAS]
                                     [--harness HARNESS]
@@ -205,13 +211,20 @@ usage: okto-nexus-connector connect [-h] --server SERVER [--agent AGENT]
                                     [--trusted-provider-home]
                                     [--provider-home PROVIDER_HOME]
                                     [--request-id REQUEST_ID]
+                                    [--setup-draft SETUP_DRAFT |
+                                    --setup-receipt SETUP_RECEIPT]
+                                    [--review-current] [--customize]
                                     [--operator-identity OPERATOR_IDENTITY]
                                     [--operator-proof-ref OPERATOR_PROOF_REF]
+                                    [--start-at-login | --no-start-at-login]
                                     [--json] [--verbose]
 
 options:
   -h, --help            show this help message and exit
-  --server SERVER       Nexus Server base URL
+  --server SERVER       Nexus Server base URL; reused from a saved project or
+                        identity
+  --identity IDENTITY   reuse this imported local identity without entering
+                        its key again
   --agent AGENT         agent id hint from the Server screen
   --alias ALIAS         local identity alias (default: agent id)
   --binding-alias BINDING_ALIAS
@@ -235,10 +248,24 @@ options:
                         provider login directory on this computer
   --request-id REQUEST_ID
                         resume the same R4 onboarding request
+  --setup-draft SETUP_DRAFT
+                        save a non-secret host draft for operator
+                        identity/workspace review; no key required
+  --setup-receipt SETUP_RECEIPT
+                        resume the retained host draft with the operator
+                        bootstrap handoff and a protected canonical key
+  --review-current      explicitly review changed local choices for --setup-
+                        draft and the same --request-id
+  --customize           edit advanced preferences before reviewing a new
+                        project connection
   --operator-identity OPERATOR_IDENTITY
                         imported operator identity for Nexus configuration
   --operator-proof-ref OPERATOR_PROOF_REF
                         operator approval reference from Nexus
+  --start-at-login      include this Connector user logon task in the
+                        connection review
+  --no-start-at-login   keep the current service mode; existing tasks are
+                        preserved
   --json                machine-readable JSON output
   --verbose             include technical details
 ```
@@ -853,12 +880,15 @@ options:
 
 ```text
 usage: okto-nexus-connector daemon [-h] [--json] [--verbose]
-                                   {start,run,status,stop} ...
+                                   {start,run,status,stop,restart,recover-start} ...
 
 positional arguments:
-  {start,run,status,stop}
+  {start,run,status,stop,restart,recover-start}
     start               background; returns after readiness
     run                 foreground (containers/diagnostics)
+    restart             drain, then start the same configured instance
+    recover-start       fence a reviewed detached launch that has not entered
+                        bootstrap
 
 options:
   -h, --help            show this help message and exit
@@ -869,12 +899,14 @@ options:
 ## okto-nexus-connector daemon start
 
 ```text
-usage: okto-nexus-connector daemon start [-h] [--json] [--verbose]
+usage: okto-nexus-connector daemon start [-h] [--timeout TIMEOUT] [--json]
+                                         [--verbose]
 
 options:
-  -h, --help  show this help message and exit
-  --json      machine-readable JSON output
-  --verbose   include technical details
+  -h, --help         show this help message and exit
+  --timeout TIMEOUT
+  --json             machine-readable JSON output
+  --verbose          include technical details
 ```
 
 ## okto-nexus-connector daemon run
@@ -902,22 +934,64 @@ options:
 ## okto-nexus-connector daemon stop
 
 ```text
-usage: okto-nexus-connector daemon stop [-h] [--json] [--verbose]
+usage: okto-nexus-connector daemon stop [-h] [--timeout TIMEOUT] [--force]
+                                        [--expected-generation EXPECTED_GENERATION]
+                                        [--json] [--verbose]
 
 options:
-  -h, --help  show this help message and exit
-  --json      machine-readable JSON output
-  --verbose   include technical details
+  -h, --help            show this help message and exit
+  --timeout TIMEOUT
+  --force               contain the same generation after its drain deadline
+  --expected-generation EXPECTED_GENERATION
+                        generation reviewed with daemon status; required with
+                        --force
+  --json                machine-readable JSON output
+  --verbose             include technical details
+```
+
+## okto-nexus-connector daemon restart
+
+```text
+usage: okto-nexus-connector daemon restart [-h] [--timeout TIMEOUT] [--json]
+                                           [--verbose]
+
+options:
+  -h, --help         show this help message and exit
+  --timeout TIMEOUT
+  --json             machine-readable JSON output
+  --verbose          include technical details
+```
+
+## okto-nexus-connector daemon recover-start
+
+```text
+usage: okto-nexus-connector daemon recover-start [-h]
+                                                 --expected-revision EXPECTED_REVISION
+                                                 [--json] [--verbose]
+
+options:
+  -h, --help            show this help message and exit
+  --expected-revision EXPECTED_REVISION
+                        receipt_revision reviewed with daemon status --json
+  --json                machine-readable JSON output
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector service
 
 ```text
 usage: okto-nexus-connector service [-h] [--json] [--verbose]
-                                    {install,uninstall,status} ...
+                                    {install,uninstall,status,enable,disable,upgrade-plan,upgrade-apply} ...
 
 positional arguments:
-  {install,uninstall,status}
+  {install,uninstall,status,enable,disable,upgrade-plan,upgrade-apply}
+    enable              enable the selected user task without starting it
+    disable             disable future task starts; use daemon stop to drain
+                        active work
+    upgrade-plan        review an installed environment replacement without
+                        starting it
+    upgrade-apply       apply a reviewed environment replacement after
+                        canonical drain
 
 options:
   -h, --help            show this help message and exit
@@ -962,6 +1036,58 @@ options:
   --verbose   include technical details
 ```
 
+## okto-nexus-connector service enable
+
+```text
+usage: okto-nexus-connector service enable [-h] [--json] [--verbose]
+
+options:
+  -h, --help  show this help message and exit
+  --json      machine-readable JSON output
+  --verbose   include technical details
+```
+
+## okto-nexus-connector service disable
+
+```text
+usage: okto-nexus-connector service disable [-h] [--json] [--verbose]
+
+options:
+  -h, --help  show this help message and exit
+  --json      machine-readable JSON output
+  --verbose   include technical details
+```
+
+## okto-nexus-connector service upgrade-plan
+
+```text
+usage: okto-nexus-connector service upgrade-plan [-h] --python PYTHON
+                                                 [--output OUTPUT] [--json]
+                                                 [--verbose]
+
+options:
+  -h, --help       show this help message and exit
+  --python PYTHON
+  --output OUTPUT  save the plan as a new UTF-8 JSON file
+  --json           machine-readable JSON output
+  --verbose        include technical details
+```
+
+## okto-nexus-connector service upgrade-apply
+
+```text
+usage: okto-nexus-connector service upgrade-apply [-h] --plan-file PLAN_FILE
+                                                  --expected-revision EXPECTED_REVISION
+                                                  [--json] [--verbose]
+
+options:
+  -h, --help            show this help message and exit
+  --plan-file PLAN_FILE
+  --expected-revision EXPECTED_REVISION
+  --json                machine-readable JSON output
+  --verbose             include technical details
+```
+
 ## okto-nexus-connector reconnect
 
 ```text
@@ -1003,13 +1129,18 @@ options:
 ## okto-nexus-connector doctor
 
 ```text
-usage: okto-nexus-connector doctor [-h] [--probe] [--json] [--verbose]
+usage: okto-nexus-connector doctor [-h] [--probe]
+                                   [--diagnostic-format {legacy,v1}] [--json]
+                                   [--verbose]
 
 options:
-  -h, --help  show this help message and exit
-  --probe     attempt live network probes
-  --json      machine-readable JSON output
-  --verbose   include technical details
+  -h, --help            show this help message and exit
+  --probe               attempt live network probes
+  --diagnostic-format {legacy,v1}
+                        diagnostic report contract; legacy preserves existing
+                        JSON and exit codes
+  --json                machine-readable JSON output
+  --verbose             include technical details
 ```
 
 ## okto-nexus-connector approvals

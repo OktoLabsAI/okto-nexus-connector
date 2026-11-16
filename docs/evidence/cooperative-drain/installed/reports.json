@@ -1,0 +1,63 @@
+{
+  "scope": "Connector SVC-07 installed wheel, Windows/local synthetic",
+  "wheel": {
+    "path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-installed-_r091tbk\\wheels\\okto_nexus_connector-0.0.12-py3-none-any.whl",
+    "sha256": "73f1a3ba6daf1a4db6f98a9eaf7badaed0d32b151a30b4c0c6a0cf66c2eae1b5"
+  },
+  "core_wheel": {
+    "path": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\r3-cooperative-drain-09ucmgsr\\core-v2-wheels\\okto_nexus_connector_core-0.0.14-py3-none-any.whl",
+    "sha256": "1407014ea12f7e6f04ac70b9da8dbf8ebd9a57d8021bb5e74437bc22bd274f7a"
+  },
+  "tests": {
+    "report": "installed.xml",
+    "collected": 195,
+    "passed": 194,
+    "failed": 0,
+    "errors": 0,
+    "skipped": [
+      {
+        "name": "test_shim_resolution_never_runs_outside_windows",
+        "classname": "tests.unit.test_core02_integration",
+        "reason": "covered above"
+      }
+    ],
+    "new_cases": 26
+  },
+  "package_proof": {
+    "connector_source_wheel_install_equal": 124,
+    "core_wheel_install_equal": 166,
+    "input_files_unchanged": 332,
+    "checked_before_and_after": true,
+    "installed_module_origins": 173
+  },
+  "isolation": {
+    "python_isolated": true,
+    "source_paths_on_sys_path": false,
+    "fixture_paths": "snapshot root/tests only",
+    "environment": "Explicit OS-tool allowlist, synthetic Temp homes, no inherited credentials or PYTHONPATH",
+    "shared_venv_modified": false,
+    "nexus_wheel_used": false
+  },
+  "dependencies": {
+    "versions": {
+      "okto-nexus-connector": "0.0.12",
+      "okto-nexus-connector-core": "0.0.14",
+      "mcp": "1.30.0",
+      "setuptools": "84.0.0",
+      "wheel": "0.45.1",
+      "pytest": "9.2.0",
+      "pip": "24.3.1"
+    },
+    "third_party_sha256": "73fbc65e7255da7fe9ea293feabefc90b49d43619889d5e13e288879934f770d",
+    "pip_check_core": "PASS",
+    "pip_check_final": "PASS"
+  },
+  "preparation_failures": 0,
+  "all_preparation_stdout_stderr_retained": true,
+  "limits": [
+    "Synthetic native peers and supervisor adapter; no personal provider/vault/native-service installation.",
+    "This selection does not qualify productive M1/M2 or Nexus SVC-07 (not installed in this environment).",
+    "Source and installed campaigns overlap; do not add their testcase counts.",
+    "No checkout, vendor or shared environment changes by this qualification. No commit/push."
+  ]
+}

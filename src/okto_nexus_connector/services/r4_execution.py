@@ -160,6 +160,8 @@ class R4ExecutionOwner:
         self._consumers = []
         self._producers = set()
         self._stopping = False
+        self._draining = False
+        self._receipt_busy = False
         self._receipt_stop = asyncio.Event()
         self._receipt_monitor = None
         self.failure = None
@@ -177,6 +179,32 @@ class R4ExecutionOwner:
     @property
     def pending_count(self):
         return len(self._producers)
+
+    def begin_drain(self):
+        self._draining = True
+
+    async def drain_status(self):
+        if self.failure is not None or not self.connection.online:
+            return 'UNKNOWN'
+        pending = getattr(self.connection, 'pending_operations', None)
+        if type(pending) is not int:
+            return 'UNKNOWN'
+        if self.pending_count or pending or self._receipt_busy:
+            return 'BUSY'
+        state = self.connection.state
+        if await asyncio.to_thread(self.publications.pending, state.server_id, state.executor_id):
+            return 'BUSY'
+        for session in tuple(self._sessions.values()):
+            if session.containment_error is not None:
+                return 'UNKNOWN'
+            if session.gate.active or session.gate.renewing:
+                return 'BUSY'
+            if await asyncio.to_thread(self.session_releases.outbox.pending, scope=session.scope,
+                    connection_id=session.connection_id, connection_generation=session.connection_generation):
+                return 'BUSY'
+        if not await self.events.quiescent():
+            return 'BUSY'
+        return 'BUSY' if self.pending_count or self.connection.pending_operations or self._receipt_busy else 'QUIESCENT'
 
     def _record_execution_outcome(self, receipt):
         binding_id = receipt['binding_id']
@@ -229,13 +257,17 @@ class R4ExecutionOwner:
             journal = await self.host.ensure_journal()
             while not self._receipt_stop.is_set():
                 state = self.connection.state
-                after, frames = await refresh_receipt_facts(self.publications, journal,
-                    server_id=state.server_id, executor_id=state.executor_id, after=after,
-                    connection=(state.connection_id, state.connection_generation))
-                for frame in frames:
-                    self._record_execution_outcome(frame)
-                    await self.publish_receipt(frame)
-                    await asyncio.to_thread(self.publications.acknowledge, frame)
+                self._receipt_busy = True
+                try:
+                    after, frames = await refresh_receipt_facts(self.publications, journal,
+                        server_id=state.server_id, executor_id=state.executor_id, after=after,
+                        connection=(state.connection_id, state.connection_generation))
+                    for frame in frames:
+                        self._record_execution_outcome(frame)
+                        await self.publish_receipt(frame)
+                        await asyncio.to_thread(self.publications.acknowledge, frame)
+                finally:
+                    self._receipt_busy = False
                 try:
                     await asyncio.wait_for(self._receipt_stop.wait(), .25)
                 except TimeoutError:
@@ -399,7 +431,10 @@ class R4ExecutionOwner:
     async def _execute_with_recorded_outcome(self, item):
         try:
             return await self._execute_with_capacity_wait(item)
-        except Exception:
+        except Exception as error:
+            if (self._draining and getattr(error, 'code', None) == 'RUNTIME_DRAINING'
+                    and not getattr(error, 'possible_effect', False)):
+                return await self._refuse_draining_operation(item)
             # Core may have durably classified a native exception before
             # raising it. Publish that exact uncertain fact instead of taking
             # unrelated bindings offline. No operation is invoked again and
@@ -554,6 +589,26 @@ class R4ExecutionOwner:
         return project_r4_bound_receipt(binding, receipt,
             key=OperationKey(frame['server_id'], frame['executor_id'], frame['operation_id']), receipt_revision=1)
 
+    async def _refuse_draining_operation(self, item):
+        frame = self.connection.require_current(item)
+        operation = OperationKey(frame['server_id'], frame['executor_id'], frame['operation_id'])
+        journal = await self.host.ensure_history_journal()
+        prior = await asyncio.to_thread(self.publications.lookup, frame['server_id'], frame['executor_id'],
+                                       [frame['operation_id']])
+        stored = prior.get(frame['operation_id'], {})
+        fact = await journal.get_receipt(operation)
+        if fact is not None:
+            binding = stored.get('binding')
+            if binding is None:
+                raise CoreError('RECONCILIATION_REQUIRED', 'operator_drain')
+            return project_r4_bound_receipt(binding, fact, key=operation, receipt_revision=1)
+        refusal = prepare_r4_stopped_refusal(frame, scope={k: frame[k] for k in _SCOPE},
+            connection_id=frame['connection_id'], connection_generation=frame['connection_generation'],
+            error_code='RUNTIME_DRAINING')
+        await asyncio.to_thread(self.publications.bind, refusal['binding'], refusal=refusal)
+        receipt = await persist_r4_operation_refusal(journal, refusal)
+        return project_r4_bound_receipt(refusal['binding'], receipt, key=operation, receipt_revision=1)
+
     async def _contain_session(self, session, source, *, publish_release=True):
         """Retain one stop producer, retrying only this session's resources.
 
@@ -650,6 +705,8 @@ class R4ExecutionOwner:
 
     async def _execute(self, item):
         frame = self.connection.require_current(item)
+        if self._draining and frame['action'] in ('runtime.open', 'turn.submit', 'turn.steer'):
+            return await self._refuse_draining_operation(item)
         key = ExecutionRuntimeKey(frame["server_id"], frame["executor_id"], frame["binding_id"], frame["session_id"])
         session = self._sessions.get(key)
         if frame['action'] == 'runtime.open':

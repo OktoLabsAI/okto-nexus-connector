@@ -137,6 +137,53 @@ class R4DaemonControl:
         self._bootstrap_gate = asyncio.Lock()
         self._bootstrap = None
         self._onboarding_tasks = set()
+        self._draining = False
+        self._drain_stop_task = None
+
+    def begin_drain(self):
+        self._draining = True
+        if self.execution is not None:
+            self.execution.begin_drain()
+        elif self.phase != 'CONTROL_READY':
+            self._stop_startup_for_drain()
+
+    def _stop_startup_for_drain(self):
+        if self._drain_stop_task is None:
+            # Fence the in-flight attempt before scheduling its join. In
+            # particular, a blocked bootstrap must not publish or negotiate a
+            # new link when it returns. Do not cancel its owned worker.
+            self._discovery_stopped.set()
+            self._stopped.set()
+            self._drain_stop_task = asyncio.create_task(
+                self.stop(), name='r4-drain-startup-' + self.server_id)
+            self._drain_stop_task.add_done_callback(
+                lambda task: None if task.cancelled() else task.exception())
+
+    async def drain_status(self):
+        if self._draining and self.phase != 'CONTROL_READY' and self._drain_stop_task is None:
+            if self.execution is not None:
+                state = await self.execution.drain_status()
+                if state != 'QUIESCENT':
+                    return state
+            self._stop_startup_for_drain()
+        task = self._drain_stop_task
+        if task is not None:
+            if not task.done():
+                return 'BUSY'
+            if task.cancelled() or task.exception() is not None:
+                return 'UNKNOWN'
+            # Completion is necessary but not sufficient: failed link cleanup
+            # and durable recovery obligations must remain visible.
+            if (self.cleanup_pending or self._recovery_error or self.connection is not None
+                    or self.execution is not None or self.inventory_owner is not None
+                    or self._onboarding_tasks or self._task is not None and not self._task.done()):
+                return 'UNKNOWN'
+            return 'QUIESCENT'
+        if self.cleanup_pending or self._recovery_error:
+            return 'UNKNOWN'
+        if self._onboarding_tasks or self.phase != 'CONTROL_READY' or self.execution is None:
+            return 'BUSY'
+        return await self.execution.drain_status()
 
     def start(self):
         if self._task is not None or self._stopped.is_set():
@@ -149,12 +196,14 @@ class R4DaemonControl:
         self._stopped.set()
         if self.connection is not None:
             await self.connection.close()
+            if getattr(self.connection, 'close_error', None) is None:
+                self.cleanup_pending = False
         if self._task is not None:
             await asyncio.shield(self._task)
         await asyncio.gather(*tuple(self._onboarding_tasks), return_exceptions=True)
 
     async def realize(self, **params):
-        if self._stopped.is_set():
+        if self._stopped.is_set() or self._draining:
             raise ConnectorError("RUNTIME_DRAINING", "executor_onboarding",
                                  "The executor cannot accept another onboarding request.")
         if len(self._onboarding_tasks) >= 16:
@@ -500,6 +549,8 @@ class R4DaemonControl:
             self.inventory_owner = inventory
             from .r4_execution import R4DaemonExecution
             self.execution = R4DaemonExecution(self, http, recovered_lanes=recovered_lanes)
+            if self._draining:
+                self.execution.begin_drain()
             onboarding_task = None
             try:
                 inventory.start()
@@ -515,7 +566,7 @@ class R4DaemonControl:
                     await self._require(snapshot)
                     if inventory.failure is not None:
                         raise inventory.failure
-                    if self.clock() >= onboarding_at and (onboarding_task is None or onboarding_task.done()):
+                    if not self._draining and self.clock() >= onboarding_at and (onboarding_task is None or onboarding_task.done()):
                         onboarding_task = asyncio.create_task(self._continue_onboarding())
                         onboarding_at = self.clock() + 5
                     lane_renew_at = self.execution.renewal_deadline()
@@ -586,6 +637,11 @@ class R4DaemonControl:
     async def _run(self):
         from nexus_connector_core import RuntimeAutomation, RuntimeAutomationPolicy
         async def cycle():
+            if self._draining:
+                # Never create a replacement link while operator drain owns
+                # the instance. Existing failed-link containment is separate.
+                await self._stopped.wait()
+                return
             self.attempts += 1
             if self.cleanup_pending and self.connection is not None:
                 await self.connection.close()

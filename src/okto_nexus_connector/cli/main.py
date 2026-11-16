@@ -13,13 +13,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import sys
 from pathlib import Path
 
 from .. import __version__
 from ..errors import ConnectorError
-from .output import EXIT_OK, EXIT_USAGE, Output
+from .output import EXIT_OK, EXIT_USAGE, EXIT_UNAVAILABLE, EXIT_UNKNOWN_OUTCOME, Output
 from .presentation import styled
 
 
@@ -96,8 +95,8 @@ def build_parser() -> argparse.ArgumentParser:
     configure.add_argument('--operator-proof-ref', help='operator approval reference from the binding proposal')
 
     connect = sub.add_parser("connect", help="guided first-use flow")
-    connect.add_argument("--server", required=True,
-                         help="Nexus Server base URL")
+    connect.add_argument("--server", help="Nexus Server base URL; reused from a saved project or identity")
+    connect.add_argument("--identity", help="reuse this imported local identity without entering its key again")
     connect.add_argument("--agent", default=None,
                          help="agent id hint from the Server screen")
     connect.add_argument("--alias", default=None,
@@ -126,8 +125,23 @@ def build_parser() -> argparse.ArgumentParser:
                          help="approve using the provider's own home dir")
     connect.add_argument('--provider-home', help='provider login directory on this computer')
     connect.add_argument('--request-id', help='resume the same R4 onboarding request')
+    remote_setup = connect.add_mutually_exclusive_group()
+    remote_setup.add_argument('--setup-draft', type=Path,
+        help='save a non-secret host draft for operator identity/workspace review; no key required')
+    remote_setup.add_argument('--setup-receipt', type=Path,
+        help='resume the retained host draft with the operator bootstrap handoff and a protected canonical key')
+    connect.add_argument('--review-current', action='store_true',
+        help='explicitly review changed local choices for --setup-draft and the same --request-id')
+    connect.add_argument('--customize', action='store_true', help='edit advanced preferences before reviewing a new project connection')
     connect.add_argument('--operator-identity', help='imported operator identity for Nexus configuration')
     connect.add_argument('--operator-proof-ref', help='operator approval reference from Nexus')
+
+    for wizard in (configure, connect):
+        startup = wizard.add_mutually_exclusive_group()
+        startup.add_argument('--start-at-login', dest='start_at_login', action='store_true', default=None,
+            help='include this Connector user logon task in the connection review')
+        startup.add_argument('--no-start-at-login', dest='start_at_login', action='store_false',
+            help='keep the current service mode; existing tasks are preserved')
 
     identity = sub.add_parser("identity", help="imported identity management")
     identity_sub = identity.add_subparsers(dest="subcommand", required=True)
@@ -224,7 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
     bind_create.add_argument("--pi-node", default=None)
     bind_create.add_argument("--alias", required=True)
     bind_create.add_argument("--project", type=Path, default=None)
-    bind_list = bind_sub.add_parser("list")
+    bind_sub.add_parser("list")
     bind_show = bind_sub.add_parser("show")
     bind_show.add_argument("alias")
     bind_remove = bind_sub.add_parser("remove")
@@ -283,10 +297,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     daemon = sub.add_parser("daemon", help="local daemon lifecycle")
     daemon_sub = daemon.add_subparsers(dest="subcommand", required=True)
-    daemon_sub.add_parser("start", help="background; returns after readiness")
+    daemon_sub.add_parser("start", help="background; returns after readiness").add_argument('--timeout', type=float, default=45)
     daemon_sub.add_parser("run", help="foreground (containers/diagnostics)")
     daemon_sub.add_parser("status")
-    daemon_sub.add_parser("stop")
+    daemon_stop = daemon_sub.add_parser("stop")
+    daemon_stop.add_argument('--timeout', type=float, default=60)
+    daemon_stop.add_argument('--force', action='store_true', help='contain the same generation after its drain deadline')
+    daemon_stop.add_argument('--expected-generation', help='generation reviewed with daemon status; required with --force')
+    daemon_sub.add_parser('restart', help='drain, then start the same configured instance').add_argument('--timeout', type=float, default=45)
+    recovery = daemon_sub.add_parser('recover-start', help='fence a reviewed detached launch that has not entered bootstrap')
+    recovery.add_argument('--expected-revision', required=True, help='receipt_revision reviewed with daemon status --json')
 
     service = sub.add_parser("service", help="OS autostart management")
     service_sub = service.add_subparsers(dest="subcommand", required=True)
@@ -295,6 +315,14 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall = service_sub.add_parser("uninstall")
     uninstall.add_argument("--dry-run", action="store_true")
     service_sub.add_parser("status")
+    service_sub.add_parser('enable', help='enable the selected user task without starting it')
+    service_sub.add_parser('disable', help='disable future task starts; use daemon stop to drain active work')
+    upgrade_plan = service_sub.add_parser('upgrade-plan', help='review an installed environment replacement without starting it')
+    upgrade_plan.add_argument('--python', required=True)
+    upgrade_plan.add_argument('--output', type=Path, help='save the plan as a new UTF-8 JSON file')
+    upgrade_apply = service_sub.add_parser('upgrade-apply', help='apply a reviewed environment replacement after canonical drain')
+    upgrade_apply.add_argument('--plan-file', type=Path, required=True)
+    upgrade_apply.add_argument('--expected-revision', required=True)
 
     sub.add_parser('reconnect', help='gracefully restart the daemon to reconnect all configured connections')
     status = sub.add_parser('status', help='show live server and agent connection health')
@@ -307,6 +335,8 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="layered diagnostics")
     doctor.add_argument("--probe", action="store_true",
                         help="attempt live network probes")
+    doctor.add_argument('--diagnostic-format', choices=('legacy', 'v1'), default='legacy',
+                        help='diagnostic report contract; legacy preserves existing JSON and exit codes')
 
     approvals = sub.add_parser("approvals",
                                help="pending HITL requests (decision "
@@ -412,16 +442,39 @@ def main(argv: list[str] | None = None) -> int:
         render_summary(result, output, harness=args.harness)
     elif args.command == 'doctor' and not args.json and not args.verbose:
         output.heading('Diagnostic checks')
-        output.table(['Layer', 'Check', 'Status', 'Detail'],
-                     [[c['layer'], c['name'], c['status'], c['detail']] for c in result['checks']])
-        actions = [c for c in result['checks'] if c.get('action')]
+        common = result.get('schema') == 'okto.diagnostics'
+        if common:
+            output.line('Report: ' + result['state'] + ' (independent proofs, not a readiness guarantee)')
+            output.table(['Check', 'Subject', 'Status', 'Code', 'Reason'],
+                         [[c['id'], c['subject']['id'], c['status'], c['code'], c['reason']] for c in result['checks']])
+        else:
+            output.table(['Layer', 'Check', 'Status', 'Detail'],
+                         [[c['layer'], c['name'], c['status'], c['detail']] for c in result['checks']])
+        action_key = 'next_action' if common else 'action'
+        actions = [c for c in result['checks'] if c.get(action_key)]
         if actions:
             output.heading('Next steps')
             for check in actions:
-                output.line(f"  {check['name']}: {check['action']}")
-        output.line('\nDetails: doctor --verbose | JSON: doctor --json')
+                output.line(f"  {check['id'] if common else check['name']}: {check[action_key]}")
+        selector = ' --diagnostic-format v1' if common else ''
+        output.line(f'\nDetails: doctor{selector} --verbose | JSON: doctor{selector} --json')
     else:
         output.result(result)
+    if args.command == 'daemon' and args.subcommand == 'status':
+        return EXIT_OK if result.get('state') in {'ready', 'stopped'} else EXIT_UNAVAILABLE
+    if args.command == 'status':
+        return EXIT_OK if result['daemon']['state'] in {'ready', 'stopped'} else EXIT_UNAVAILABLE
+    if args.command == 'daemon' and args.subcommand == 'stop' and not result.get('stopped'):
+        return EXIT_OK if result.get('state') == 'stopped' and not result.get('was_running') else EXIT_UNKNOWN_OUTCOME
+    if args.command == 'daemon' and args.subcommand == 'restart' and result.get('state') != 'ready':
+        return EXIT_UNKNOWN_OUTCOME
+    if args.command == 'daemon' and args.subcommand == 'recover-start':
+        return EXIT_OK if result.get('recovered') else EXIT_UNKNOWN_OUTCOME
+    if args.command == 'service' and args.subcommand in {'install', 'uninstall'}:
+        if not result.get('dry_run') and not result.get('installed' if args.subcommand == 'install' else 'uninstalled'):
+            return EXIT_UNAVAILABLE
+    if args.command == 'service' and args.subcommand in {'enable', 'disable'} and not result.get('enablement_confirmed'):
+        return EXIT_UNKNOWN_OUTCOME
     return EXIT_OK
 
 

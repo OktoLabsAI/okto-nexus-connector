@@ -12,7 +12,7 @@ def pending(monkeypatch):
         status='APPLY_PENDING', connection_configuration={'version': 2},
         client_intent_id='configure_test_prepare', apply_client_intent_id='configure_test_apply',
         identity_alias='agent', alias='claude', approved_diff_hash='hash', operator_proof_ref='apr_test',
-        proposal={'proposal_id': 'proposal'})
+        proposal={'proposal_id': 'proposal'}, remote_setup=None)
     state = NS(binding_intents=[record], preferences={})
     store = NS(load=lambda: state, update=lambda change: change(state))
     calls = []
@@ -42,6 +42,20 @@ async def test_background_continues_after_cli_exit_and_does_not_apply_twice(pend
     assert len(calls) == 2
     assert calls[0] == calls[1]
     assert calls[1]['operator_proof_ref'] == 'apr_test'
+
+
+async def test_operator_completion_preserves_independent_local_startup_checkpoint(pending):
+    store, state, record, _, gate = pending
+    key = 'configure.server.agent.configure_test'
+    startup = dict(state='done', plan_revision='local-review-revision')
+    state.preferences[key] = dict(stage='apply', single_approval=True, proposal=record.proposal,
+        login_start_operation=startup, login_start_plan={'scope': {'root': 'local-only'}})
+    gate['error'] = None
+    await background.continue_pending_bindings(store, None, server_id='server', executor_id='host')
+    saved = state.preferences[key]
+    assert saved['stage'] == 'done' and saved['result']['saved']
+    assert saved['login_start_operation'] == startup
+    assert saved['login_start_plan']['scope']['root'] == 'local-only'
 
 
 @pytest.mark.parametrize('code', ['PERMISSION_DENIED', 'CONFLICT', 'PROFILE_DRIFT'])

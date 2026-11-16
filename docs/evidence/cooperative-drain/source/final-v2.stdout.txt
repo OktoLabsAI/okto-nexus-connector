@@ -1,0 +1,78 @@
+.......................F................................................ [ 44%]
+........................................................................ [ 89%]
+.................                                                        [100%]
+================================== FAILURES ===================================
+_ test_empty_restarted_host_does_not_erase_orphan_or_open_history_for_status __
+
+tmp_path = WindowsPath('C:/Users/jpamb/AppData/Local/Temp/connector-svc07-zfwdu6r_/final-v2-fixtures/test_empty_restarted_host_does0')
+
+    async def test_empty_restarted_host_does_not_erase_orphan_or_open_history_for_status(tmp_path):
+        root = state_dir(tmp_path / 'runtime')
+        previous = CoreRuntimeHost(root, None)
+        journal = await previous.ensure_history_journal()
+        key = OperationKey('server', 'executor', 'orphan-opening')
+        await journal.admit(key, 'digest', 'orphan', claim_session=True, action='runtime.open')
+>       await journal.record_receipt(key, OperationReceipt(key.operation_id, 'digest', 'SUBMITTED', True, False, 'orphan'))
+
+tests\unit\test_r4_operator_drain.py:98: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+..\okto-nexus-connector-core\src\nexus_connector_core\journal.py:1332: in record_receipt
+    return await self._run(_worker_impl, urgent=False)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+..\okto-nexus-connector-core\src\nexus_connector_core\journal.py:1776: in _run
+    return await future
+           ^^^^^^^^^^^^
+..\okto-nexus-connector-core\src\nexus_connector_core\offloop.py:176: in _execute
+    result = work(self._resource)
+             ^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+db = <sqlite3.Connection object at 0x00000196412454E0>
+
+    def _worker_impl(db):
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            old = self._get(db, key)
+            if (receipt.operation_id != key.operation_id or old is None or
+                    old.intent_hash != receipt.intent_hash or
+                    old.session_id != receipt.session_id):
+                raise CoreError("OPERATION_CONFLICT", "record",
+                                operation_id=receipt.operation_id)
+            if (receipt.stage not in _STAGE_TRANSITIONS or
+                old.stage not in _STAGE_TRANSITIONS or
+                (old.native_id is not None and receipt.native_id is not None
+                 and old.native_id != receipt.native_id)):
+                raise CoreError("OPERATION_STAGE_CONFLICT", "record",
+                                operation_id=receipt.operation_id)
+            if receipt.stage == old.stage:
+                if (receipt.error_code != old.error_code or
+                        receipt.possible_effect != old.possible_effect or
+                        receipt.retry_safe != old.retry_safe):
+                    raise CoreError("OPERATION_STAGE_CONFLICT", "record",
+                                    operation_id=receipt.operation_id)
+                effective = replace(old, native_id=old.native_id or receipt.native_id)
+            elif receipt.stage in _STAGE_TRANSITIONS[old.stage]:
+                effective = replace(receipt,
+                                    possible_effect=old.possible_effect or receipt.possible_effect,
+                                    retry_safe=old.retry_safe and receipt.retry_safe,
+                                    native_id=old.native_id or receipt.native_id)
+            elif (receipt.stage in _EARLY_STAGES and
+                  (old.stage in _TERMINAL_STAGES or
+                   old.stage in {"RUNNING", "WAITING_INPUT", "OUTCOME_UNKNOWN"} or
+                   (old.stage in _EARLY_STAGES and
+                    _EARLY_RANK[receipt.stage] < _EARLY_RANK[old.stage]))):
+                # Native evidence can race a synchronous write result.
+                # Late weaker receipts may add a native ID, never lower
+                # the durable stage or erase terminal evidence.
+                effective = replace(old, native_id=old.native_id or receipt.native_id)
+            elif old.stage in _TERMINAL_STAGES and receipt.stage not in _TERMINAL_STAGES:
+                effective = replace(old, native_id=old.native_id or receipt.native_id)
+            else:
+>               raise CoreError("OPERATION_STAGE_CONFLICT", "record",
+                                operation_id=receipt.operation_id)
+E                               nexus_connector_core.models.CoreError: OPERATION_STAGE_CONFLICT
+
+..\okto-nexus-connector-core\src\nexus_connector_core\journal.py:1315: CoreError
+=========================== short test summary info ===========================
+FAILED tests/unit/test_r4_operator_drain.py::test_empty_restarted_host_does_not_erase_orphan_or_open_history_for_status
+1 failed, 160 passed in 54.28s

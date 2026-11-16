@@ -1,0 +1,5 @@
+Using Python 3.13.1 environment at: venv
+Resolved 1 package in 32ms
+Prepared 1 package in 243ms
+Installed 1 package in 359ms
+ + okto-nexus-connector==0.0.12 (from file:///C:/Users/jpamb/AppData/Local/Temp/connector-svc07-installed-_r091tbk/wheels/okto_nexus_connector-0.0.12-py3-none-any.whl)

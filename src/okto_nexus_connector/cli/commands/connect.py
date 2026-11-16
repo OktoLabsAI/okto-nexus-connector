@@ -20,13 +20,14 @@ from ...identity.import_flow import (
 from ...identity.vault import open_vault, vault_backend_names
 from ...platform import paths
 from ...services.discovery_service import (
-    discover_inventory, known_adapter, pi_candidate, probe_version,
-    select_explicit,
+    display_name, known_adapter, resolve_selection,
 )
+from ...services.discovery_configuration import configured_candidates
 from ...storage.state_store import StateStore
 from ...transport.https_client import NexusHTTPClient, origin_of
 from ..output import Output
 from ..prompts import confirm, select
+from . import connect_reuse
 
 
 def _read_key(args, output: Output) -> str:
@@ -54,23 +55,89 @@ def _read_key(args, output: Output) -> str:
 
 
 async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
-    if args.non_interactive:
+    if args.non_interactive or getattr(args, 'json', False):
         raise ConnectorError('VALIDATION_ERROR', 'connect',
             'connect is an interactive R4 connection wizard.',
             action='Use connection-config apply with explicit parameters for automation.')
     store = StateStore(paths.state_file(root))
-    # 1. Identity import with /me validation and hint comparison.
-    key = _read_key(args, output)
+    if getattr(args, 'setup_draft', None) or getattr(args, 'setup_receipt', None) or getattr(args, 'review_current', False):
+        from .connect_setup import run_setup
+        return await run_setup(args, output, root, store)
+    state = store.load()
+    from .connection_choices import choose_project_intent
+    intent = choose_project_intent(args, state, select)
+    if intent.kind == 'cancel':
+        return dict(saved=False, canceled=True, runtime_started=False, effects_started=False)
+    if intent.kind == 'add':
+        if connect_reuse.credential_supplied(args):
+            raise ConnectorError('OPERATION_CONFLICT', 'connect',
+                'Additional collaborators use their own operator-reviewed bootstrap. Do not supply the previous identity credential.')
+        from .connect_setup import run_setup
+        aliases = {record.alias for record in (*state.binding_intents, *state.bindings)}
+        if args.binding_alias and args.binding_alias in aliases:
+            raise ConnectorError('OPERATION_CONFLICT', 'connect',
+                'Adding cannot replace an existing binding alias. Omit the alias or choose an unused one explicitly.')
+        args.server, args.request_id = intent.server, intent.setup_run_id
+        args.identity = args.alias = args.agent = None
+        args.binding_alias = args.binding_alias or 'connection-' + intent.setup_run_id.removeprefix('remote_')[:20]
+        args.addition_workspace_hint = intent.workspace_hint
+        args.setup_draft = root / 'setup-drafts' / (intent.setup_run_id + '.json')
+        args.setup_auto_export = True
+        records = [record for record in state.execution_executors
+            if record.server_id in state.servers and state.servers[record.server_id].origin == intent.server]
+        if len(records) > 1:
+            raise ConnectorError('PROFILE_DRIFT', 'connect', 'Select the original host executor before adding a collaborator.')
+        args.discovery_configuration = records[0].discovery_configuration if records else {}
+        args.installation_observations = records[0].installation_observations if records else ()
+        output.line('Adding a separate collaborator through operator bootstrap. Existing connections and grants remain unchanged.')
+        return await run_setup(args, output, root, store)
+    if intent.kind == 'pending':
+        from ...services import remote_setup
+        from .connect_setup import run_setup, _resume
+        record = remote_setup.load(store, intent.setup_run_id)
+        args.request_id = intent.setup_run_id
+        if record.get('handoff'):
+            return await _resume(args, output, root, store, retained_handoff=record['handoff'])
+        args.setup_draft = root / 'setup-drafts' / (intent.setup_run_id + '.json')
+        args.setup_auto_export = True
+        args.server = args.server or record['draft']['server_origin']
+        return await run_setup(args, output, root, store)
+    retained = intent.retained
+    identity = connect_reuse.selected_identity(args, state, retained)
+    if retained:
+        if getattr(args, 'customize', False):
+            raise ConnectorError('OPERATION_CONFLICT', 'connect',
+                'This request already has reviewed settings. Resume it unchanged; use configure for an explicit configuration change.')
+        args.request_id = retained[1]
+        connect_reuse.validate_choices(args, retained[3], state)
+    if args.server and identity is None and retained is None and not connect_reuse.credential_supplied(args) and not args.agent:
+        mode = select('How should this host obtain its canonical identity?', [
+            ('draft', 'Prepare a host draft for operator identity/workspace review'),
+            ('key', 'Import an existing canonical agent key')], non_interactive=False)
+        if mode == 'draft':
+            import uuid
+            from .connect_setup import run_setup
+            args.request_id = args.request_id or 'remote_' + uuid.uuid4().hex
+            args.setup_draft = root / 'setup-drafts' / (args.request_id + '.json')
+            args.setup_auto_export = True
+            return await run_setup(args, output, root, store)
+    if not args.server:
+        raise ConnectorError('SERVER_REQUIRED', 'connect',
+            'Select --server for a new connection, or --identity for an imported identity.')
+    reuse = identity is not None and not connect_reuse.credential_supplied(args)
     import os as _os
     forced_file = _os.environ.get(
         "OKTO_NEXUS_CONNECTOR_VAULT", "").strip().lower() == "file"
-    from ...identity.vault import vault_backend_names
     # CN1/A14: --non-interactive NEVER prompts. An unapproved vault
     # fallback in headless mode is a prescriptive error, not an implicit
     # approval (test_19: no confirm call with non_interactive=False).
-    if (forced_file or not vault_backend_names()) and not \
+    if not reuse and (forced_file or not vault_backend_names()) and not \
             store.load().preferences.get("vault.fallback_file.approved"):
-        if not args.non_interactive:
+        if args.credential_stdin:
+            # stdin belongs exclusively to the credential, never to consent.
+            from .identity import _approve_fallback
+            _approve_fallback(args, output, store)
+        elif not args.non_interactive:
             approved = confirm(
                 "No OS keyring is available. Store the canonical key in a "
                 "restricted file inside your private state directory? "
@@ -89,15 +156,31 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
     vault = open_vault(paths.vault_dir(root),
                       approved_fallback=bool(store.load().preferences.get(
                           "vault.fallback_file.approved", False)))
+    before = connect_reuse.identity_snapshot(state, identity) if reuse else None
+    key = await asyncio.to_thread(vault.resolve, identity.secret_handle) if reuse else _read_key(args, output)
+    current_binding = None
+    completed_reuse = None
     async with NexusHTTPClient(args.server) as http:
-        identity_result = await import_identity(
-            http, vault, store, key=key,
-            alias=args.alias or _default_alias(args),
-            agent_hint=args.agent)
-        # Record/refresh the server profile from the authenticated /me.
-        _remember_server(store, args.server, identity_result.server_id)
-        output.line(f"identity ok: {identity_result.identity.alias} -> "
-                    f"{identity_result.me_agent_id}")
+        if reuse:
+            me = await http.me(key)
+            if (me.server_id, me.agent_id, me.credential_epoch) != (identity.server_id, identity.agent_id, identity.credential_epoch):
+                raise ConnectorError('AGENT_ID_MISMATCH', 'connect',
+                    'The stored credential does not match the selected identity and credential revision.')
+            if connect_reuse.identity_snapshot(store.load(), identity) != before:
+                raise ConnectorError('STALE_GENERATION', 'connect', 'The selected identity changed during authentication.')
+        else:
+            identity_result = await import_identity(
+                http, vault, store, key=key,
+                alias=identity.alias if identity else args.alias or _default_alias(args),
+                agent_hint=args.agent)
+            _remember_server(store, args.server, identity_result.server_id)
+            identity = identity_result.identity
+        if retained:
+            if store.load().preferences.get(retained[0]) != retained[3]:
+                raise ConnectorError('STALE_GENERATION', 'connect', 'The saved request changed during authentication.')
+            current_binding = await connect_reuse.verify_binding(http, key, store, identity, retained)
+            completed_reuse = connect_reuse.completed_remote_reuse(args, store, identity, retained, current_binding)
+        output.line(f"identity ok: {identity.alias} -> {identity.agent_id}")
 
 
     # The current Server accepts R4 registrations, realizations and binding
@@ -108,24 +191,46 @@ async def run_connect(args, output: Output, root: Path) -> dict[str, object]:
     from .configure import template
     from .configure_local import configure_local
 
-    identity = identity_result.identity
     request_id = getattr(args, 'request_id', None)
     saved = store.load().preferences.get(
         f'configure.{identity.server_id}.{identity.agent_id}.{request_id}') if request_id else None
     candidate_ref = None
     portable = template()
     if not saved:
+        records = [r for r in store.load().execution_executors if r.server_id == identity.server_id]
+        if len(records) > 1:
+            raise ConnectorError('PROFILE_DRIFT', 'connect', 'The local executor registration is ambiguous.')
+        args.discovery_configuration = records[0].discovery_configuration if records else {}
+        args.installation_observations = records[0].installation_observations if records else ()
         adapter_id, candidate, version = await _choose_harness(args, output)
-        output.line(f'harness selected: {adapter_id} ({candidate.executable}, version {version})')
+        output.line(f'Harness recommendation: {display_name(adapter_id)} ({candidate.executable}'
+                    + (f', {candidate.launch_script}' if getattr(candidate, 'launch_script', None) else '') + ').')
+        output.line('Discovery does not confirm provider login or session readiness. Version and protocol checks run after the review is accepted.')
         candidate_ref = effective_installation_ref(candidate)
         portable.update(adapter_id=adapter_id, alias=args.binding_alias or _binding_alias(adapter_id))
     wizard = SimpleNamespace(identity=identity.alias, agent=args.agent, request_id=request_id,
-        candidate_ref=candidate_ref, project=str(args.project.resolve()) if args.project else None,
+        project_preset_flow=True, customize=getattr(args, 'customize', False),
+        discovery_inventory_revision=getattr(args, 'discovery_inventory_revision', None),
+        start_at_login=getattr(args, 'start_at_login', None),
+        candidate_ref=candidate_ref, project=str((args.project or Path.cwd()).resolve()) if not saved or args.project else None,
         workspace_label=None, provider_home=getattr(args, 'provider_home', None),
         workspace_id=None, binding_id=None,
         operator_identity=getattr(args, 'operator_identity', None),
         operator_proof_ref=getattr(args, 'operator_proof_ref', None))
-    result = await configure_local(wizard, output, root, store, identity, args.server, portable)
+    if completed_reuse is not None:
+        result, _ = connect_reuse.completed_remote_reuse(args, store, identity, retained, current_binding,
+            expected=completed_reuse[1])
+    else:
+        result = await configure_local(wizard, output, root, store, identity, args.server, portable)
+    if retained and result.get('saved'):
+        from ...daemon import manager
+        from . import configure_startup
+        from .configure_local import ipc
+        await asyncio.to_thread(manager.start, root)
+        await ipc(root, 'state.reload')
+        result = dict(result, reused=True, current_binding=current_binding)
+        result = await configure_startup.result(root, store.load().preferences[retained[0]], result)
+        output.line('Reused the saved project connection. Current execution grants and provider readiness remain subject to Nexus admission.')
     if result.get('saved') and args.start:
         from .runtime import start_runtime
         result['runtime_start'] = await start_runtime(output, root,
@@ -160,63 +265,39 @@ def _binding_alias(adapter_id: str) -> str:
 
 
 async def _choose_harness(args, output: Output):
-    """Discovery + selection; nothing is executed during discovery."""
-    inventory = await discover_inventory()
-    executable_choice = None
-    if args.harness:
-        adapter_id = args.harness
-        if not known_adapter(adapter_id):
-            raise ConnectorError("VALIDATION_ERROR", "connect",
-                                 f"unknown harness {adapter_id!r}")
-    elif args.non_interactive:
-        raise ConnectorError("AMBIGUOUS_BINDING", "connect",
-                             "harness choice required",
-                             action="Pass --harness explicitly in "
-                                    "non-interactive mode.")
-    else:
-        # CN1/A14+CN-01.04 (test_24): the selection value is the EXACT
-        # installation — the entry's executable/ref — never a bare
-        # adapter id that falls back to matches[0].
-        options = []
-        for entry in inventory:
-            name = {"codex_app_server": "Codex", "pi_rpc": "Pi",
-                    "claude_stream": "Claude Code"}.get(entry.adapter_id, entry.adapter_id)
-            options.append((entry.executable,
-                            f"{name} - {entry.executable}"
-                            f" [{entry.source}]"
-                            f"{f' v{entry.version}' if entry.version else ''}"))
-        if not options:
-            raise ConnectorError("BINARY_NOT_FOUND", "connect",
-                                 "no local harness installation found",
-                                 action="Install Codex/Pi/Claude or pass "
-                                        "--executable explicitly.")
-        adapter_id = None
-        executable_choice = select(
-            "Which local harness should this agent use?",
-            options, non_interactive=args.non_interactive)
-        for entry in inventory:
-            if entry.executable == executable_choice:
-                adapter_id = entry.adapter_id
-                break
-        if adapter_id is None:
-            raise ConnectorError("VALIDATION_ERROR", "connect",
-                                 "selected installation vanished from the "
-                                 "inventory")
-    executable_path = (args.executable if args.executable
-                       else executable_choice)
-    if executable_path is None:
-        raise ConnectorError("VALIDATION_ERROR", "connect",
-                             "no installation selected")
-    if adapter_id == "pi_rpc":
-        if not args.pi_node:
-            raise ConnectorError("VALIDATION_ERROR", "connect",
-                                 "Pi selection requires --pi-node "
-                                 "(trusted Node executable)")
-        candidate = pi_candidate(args.pi_node, executable_path)
-    else:
-        candidate = select_explicit(adapter_id, executable_path)
-    probed = await probe_version(candidate)
-    return adapter_id, probed, probed.version
+    """Recommend one exact host candidate; executable checks belong after review."""
+    from nexus_connector_core import calculate_inventory_revision
+    from nexus_connector_core.installation import effective_installation_ref
+    if args.harness and not known_adapter(args.harness):
+        raise ConnectorError('VALIDATION_ERROR', 'connect', f'unknown harness {args.harness!r}')
+    inventory = await configured_candidates(getattr(args, 'discovery_configuration', {}),
+        observations=getattr(args, 'installation_observations', ()))
+    candidates = [c for c in inventory if known_adapter(c.adapter_id)
+                  and (not args.harness or c.adapter_id == args.harness)]
+    if args.executable:
+        target = Path(args.executable).expanduser().resolve()
+        candidates = [c for c in candidates if Path(c.launch_script or c.executable).resolve() == target]
+    if args.pi_node:
+        node = Path(args.pi_node).expanduser().resolve()
+        candidates = [c for c in candidates if c.adapter_id == 'pi_rpc' and Path(c.executable).resolve() == node]
+    if not candidates:
+        raise ConnectorError('BINARY_NOT_FOUND', 'connect', 'No matching installation is available in this host inventory.',
+            action='Install a supported harness or review this executor discovery configuration. Explicit paths must select an inventoried installation.')
+    choices = {}
+    for candidate in candidates:
+        ref = effective_installation_ref(candidate)
+        # The Core resolves aliases/duplicate rows and rejects conflicting refs.
+        choices[(candidate.adapter_id, ref)] = resolve_selection(candidates, candidate.adapter_id, ref)
+    options = [(key, f'{display_name(c.adapter_id)} — {c.executable}'
+                + (f' + {c.launch_script}' if c.launch_script else '') + f' [{c.source}]')
+               for key, c in choices.items()]
+    selected = options[0][0] if len(options) == 1 else select(
+        'Which local harness should this project use?', options, non_interactive=args.non_interactive)
+    if selected not in choices:
+        raise ConnectorError('VALIDATION_ERROR', 'connect', 'Select an installation from this host inventory.')
+    candidate = choices[selected]
+    args.discovery_inventory_revision = calculate_inventory_revision(inventory)
+    return candidate.adapter_id, candidate, candidate.version
 
 
 def _remember_server(store: StateStore, base_url: str, server_id: str) -> None:

@@ -6,12 +6,38 @@ from pathlib import Path
 
 from ...errors import ConnectorError
 from ...platform import service_install
+from ...service_upgrade import UpgradeError
+from ...service_environment import EnvironmentInspectionError
 from ..output import Output
 from ..prompts import confirm
 
 
 async def run_service(args, output: Output, root: Path):
+    try:
+        return await _run_service(args, output, root)
+    except (UpgradeError, EnvironmentInspectionError) as error:
+        raise ConnectorError(error.code, 'service_upgrade', 'The selected upgrade requires review.',
+            possible_effect=args.subcommand == 'upgrade-apply', action=error.action) from error
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ConnectorError('SERVICE_OPERATION_UNCONFIRMED', 'service',
+            'The selected native operation or retained receipt was not confirmed.',
+            possible_effect=args.subcommand != 'status' and not getattr(args, 'dry_run', False),
+            action='Inspect this instance in Task Scheduler and its retained lifecycle receipts. No forced overwrite or detached fallback was used.') from error
+
+
+async def _run_service(args, output: Output, root: Path):
     sub = args.subcommand
+    if sub in {'upgrade-plan', 'upgrade-apply'}:
+        from ...platform.service_upgrade import for_instance
+        from ...platform.service_context import read_document
+        upgrade = for_instance(root)
+        if sub == 'upgrade-plan':
+            document = upgrade.plan(args.python)
+            if args.output:
+                from ...service_upgrade import save_plan
+                save_plan(args.output, document)
+            return document
+        return upgrade.apply(read_document(args.plan_file), args.expected_revision)
     if sub == "install":
         if not args.dry_run and not args.non_interactive:
             plan = service_install.plan(root)
@@ -20,15 +46,19 @@ async def run_service(args, output: Output, root: Path):
                            non_interactive=False, default=False):
                 return {"installed": False, "aborted": True}
         result = service_install.install(root, dry_run=args.dry_run)
-        output.line("service install planned" if args.dry_run else
-                    "service installed")
+        output.line('service install planned' if args.dry_run else
+                    'service installed' if result.get('installed') else 'service install pending — see report')
         return result
     if sub == "uninstall":
         result = service_install.uninstall(root, dry_run=args.dry_run)
-        output.line("service uninstall planned" if args.dry_run else
-                    "service uninstalled")
+        output.line('service uninstall planned' if args.dry_run else
+                    'service uninstalled' if result.get('uninstalled') else 'service uninstall pending — see report')
         return result
     if sub == "status":
         return service_install.status(root)
+    if sub in {'enable', 'disable'}:
+        result = service_install.set_enabled(root, sub == 'enable')
+        output.line('user service enabled' if result['enabled'] else 'user service disabled')
+        return result
     raise ConnectorError("CAPABILITY_UNSUPPORTED", "service",
                          f"unknown subcommand {sub!r}")

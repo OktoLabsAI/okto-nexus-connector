@@ -1,0 +1,56 @@
+{
+  "format": 1,
+  "file_count": 12,
+  "aggregate_sha256": "4ee992b0da8c013d388a1f9af889e1dc41aa85b186d9dbfc28687fb97b207d02",
+  "algorithm": "sha256 of canonical JSON files map (sort_keys,compact separators)",
+  "files": {
+    "candidate-v1/connector/installed.xml": {
+      "size": 33435,
+      "sha256": "4e815df851bcbe88525fa7f15197baf73d9650bff7da634458450894177a8a2f"
+    },
+    "candidate-v1/connector/pytest.raw.log": {
+      "size": 491,
+      "sha256": "7a551489c34038af127e6866f44a5e3f4d01b3adcaa71fcbdc2f2ec6a2514e5d"
+    },
+    "candidate-v1/connector/qualification.json": {
+      "size": 61059,
+      "sha256": "dedb735131f24543e3846f070b3ec13252a1e249da0320fc84444fe72315ceaa"
+    },
+    "package-proof.json": {
+      "size": 13519,
+      "sha256": "5fdf078b3ee3d35d1854e89f1893c868b5e9947fb8e36722cad8ca1f4beea9c1"
+    },
+    "README.md": {
+      "size": 1740,
+      "sha256": "63df4fe8bb93e129fbe8b59dc601839e761f0b714d7c2d17842bf7dace7e0180"
+    },
+    "reports.json": {
+      "size": 6514,
+      "sha256": "bdebf6cd9cacc3bb318fc9678b9c3d0e332d1cccb2e8db0ebffd6ee0de3cdd91"
+    },
+    "source/connector/dx1819-connector-rotation-cas-final.xml": {
+      "size": 842,
+      "sha256": "c0e7ccb4fd2ca6032b33518d2c0dc3adf83b88a2ca4091811d6c2268cceb5e81"
+    },
+    "source/connector/dx1819-connector-rotation-focused-initial.xml": {
+      "size": 4022,
+      "sha256": "67d3ff82007f690eebc54c0863753846b7ff1664de69f5e7a53b16d5e1ca392e"
+    },
+    "source/connector/dx1819-connector-rotation-initial.xml": {
+      "size": 6523,
+      "sha256": "50cdc99134a47c7586429ce24553a5ad941d26773948db4369e16c6072566b68"
+    },
+    "source/connector/dx1819-connector-rotation-regression-final.xml": {
+      "size": 35424,
+      "sha256": "d9e391f909d99fd972f1aac9240139d487302fd4735222c7209b8dcb40692e58"
+    },
+    "source/connector/qualification-nodes.json": {
+      "size": 408,
+      "sha256": "e148ce3b3eed5a8117397394eb7a8878572a57ec73c46b451b2cc7651d6f7872"
+    },
+    "source/connector/reports.json": {
+      "size": 3854,
+      "sha256": "95336a7c2362fc8f1e6882e0437588d8df19df74fa7ab113ea2403f39395e586"
+    }
+  }
+}

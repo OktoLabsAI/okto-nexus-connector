@@ -1,0 +1,12 @@
+{
+  "command": [
+    "C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-installed-_r091tbk\\venv\\Scripts\\python.exe",
+    "-I",
+    "-m",
+    "pip",
+    "check"
+  ],
+  "cwd": "C:\\Users\\jpamb\\AppData\\Local\\Temp\\connector-svc07-installed-_r091tbk",
+  "exit_code": 0,
+  "environment": "Explicit OS-tool allowlist; all homes in this Temp; no inherited credential variables or PYTHONPATH"
+}

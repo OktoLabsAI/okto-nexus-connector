@@ -1,5 +1,6 @@
 """Bounded reconciliation from public Core facts and persisted wire bindings."""
 import asyncio
+import copy
 import logging
 import secrets
 
@@ -7,7 +8,9 @@ from nexus_connector_core import EventCursor, OperationKey, project_r4_bound_rec
 
 from ..errors import ConnectorError
 from ..storage.r4_publications import R4PublicationStore
-from .r4_session_release import SessionReleaseRecoveryOutbox,retire_resolved_checkpoint
+from .r4_session_release import (
+    SessionReleaseRecoveryOutbox, retire_resolved_checkpoint, retire_reconciliation_checkpoint,
+)
 
 
 class R4ReconciliationReporter:
@@ -49,15 +52,19 @@ class R4ReconciliationReporter:
         if (ack['type'] != 'reconcile.accepted' or ack['recovery_remaining']
                 or (ack['server_id'], ack['executor_id']) != (self.server_id, self.executor_id)
                 or tuple(ack[k] for k in ('connection_id', 'connection_generation', 'reconcile_id')) != self.cycle
-                or not self._report_complete or self.blocked):
+                or not self._report_complete or self.cursor is not None or self.blocked):
             raise ConnectorError('RECONCILIATION_REQUIRED', 'session_release',
                                  'The original complete reconciliation was not confirmed.')
-        for frame in self._preopen_sent.values():
+        # Capture the exact completed cycle before the first worker await. A
+        # later report must not lend its facts to this earlier authenticated ACK.
+        accepted_observations = copy.deepcopy(self._release_observations)
+        accepted_preopen = tuple(self._preopen_sent.values())
+        for frame in accepted_preopen:
             await asyncio.to_thread(self.publications.acknowledge, frame)
         after = 0
         for _ in range(256):
             next_after = await asyncio.to_thread(self.release_outbox.reconcile_page,
-                ack, self._release_observations, after=after)
+                ack, accepted_observations, after=after)
             if next_after is None:
                 break
             if next_after <= after:
@@ -65,6 +72,10 @@ class R4ReconciliationReporter:
             after = next_after
         else:
             raise ConnectorError('RECONCILIATION_REQUIRED', 'session_release', 'Release recovery exceeded its page budget.')
+        observations = list(accepted_observations.items())
+        for offset in range(0,len(observations),128):
+            await asyncio.to_thread(self.release_outbox.record_reconciliation_checkpoints,
+                ack,dict(observations[offset:offset+128]))
         # Only the release proof commit gates readiness. Maintenance starts
         # independently and rechecks if another accepted cycle arrives while
         # its previous pass is still running.
@@ -94,6 +105,22 @@ class R4ReconciliationReporter:
                                 log.warning('Resolved checkpoint deferred: type=%s code=%s stage=%s',
                                     type(error).__name__,getattr(error,'code',None),getattr(error,'stage',None))
                         if len(page)<128: break
+                        await asyncio.sleep(0)
+                    after = 0
+                    while True:
+                        page = await asyncio.to_thread(self.release_outbox.reconciliation_checkpoint_page,
+                            self.server_id,self.executor_id,after=after)
+                        if not page:
+                            break
+                        for after,proof,digest in page:
+                            try:
+                                await retire_reconciliation_checkpoint(self.store,proof,digest,journal)
+                            except Exception as error:
+                                failed = True
+                                log.warning('Reconciliation checkpoint deferred: type=%s code=%s stage=%s',
+                                    type(error).__name__,getattr(error,'code',None),getattr(error,'stage',None))
+                        if len(page)<128:
+                            break
                         await asyncio.sleep(0)
                 except Exception as error:
                     failed=True

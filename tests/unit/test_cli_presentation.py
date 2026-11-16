@@ -47,7 +47,7 @@ def test_usage_errors_are_json_with_original_exit_code(capsys):
 @pytest.mark.parametrize('non_interactive', [False, True])
 def test_json_preserves_explicit_interaction_mode_and_payload(monkeypatch, capsys, non_interactive):
     from okto_nexus_connector.cli import commands
-    payload = {'items': [{'id': 'original', 'empty': None}], 'ok': True}
+    payload = {'items': [{'id': 'original', 'empty': None}], 'ok': True, 'daemon': {'state': 'stopped'}}
     async def dispatch(args, output):
         assert args.non_interactive == non_interactive and output.verbose
         output.heading('Must not appear')
@@ -94,7 +94,7 @@ def test_color_is_explicit_and_terminal_control_payload_is_removed(monkeypatch):
 def test_status_summary_keeps_failures_and_actions_visible():
     stream = io.StringIO()
     output = Output(json_mode=False, stream=stream)
-    render_status(dict(daemon=dict(running=True, pid=123),
+    render_status(dict(daemon=dict(state='ready', running=True, pid=123),
         servers=[dict(server='http://nexus:8202', state='CONTROL_READY', error=None)],
         agents=[dict(identity='claude', agent='coder', harnesses=['claude_stream'],
                      status='HARNESS_ERROR', action='Inspect provider login.', pending_requests=[{'request_id': 'long-id'}])],

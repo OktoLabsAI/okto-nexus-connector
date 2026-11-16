@@ -13,6 +13,14 @@ okto-nexus-connector doctor --probe
 
 `status` queries current server and daemon facts. `daemon status` only describes the local process/IPC. `reach` checks the public server endpoint, not credentials or a harness. `doctor` checks individual environment layers; a mostly green report does not prove an approved, connected R4 binding. Its legacy binding count can be zero while an R4 setup is pending; use `status` for connection progress.
 
+Use `doctor --diagnostic-format v1 --json` for the versioned common proof report.
+It preserves unknown evidence and separates Server reachability, saved Server
+identity and participant authentication. Legacy binding counts do not become an
+R4 connection approval, and passive candidate validation does not become provider
+authentication or a native execution test. The default format and process exit
+codes are unchanged. Both formats reject an explicit probe response from a
+different Server installation without changing the saved profile.
+
 ## Interpret progress
 
 | Status | Meaning | Next action |
@@ -100,6 +108,10 @@ No Nexus records or authorizations are deleted/revoked. Reconfiguring creates a 
 | Linux/macOS | `$XDG_STATE_HOME/okto-nexus-connector`, otherwise `~/.local/state/okto-nexus-connector` |
 
 `--state-dir PATH` overrides `OKTO_NEXUS_CONNECTOR_STATE` and the platform default. Use one consistent directory for CLI, daemon and service. Logs are `logs/daemon.log`, rotated at 2 MiB with three backups. `logs --errors` includes warnings. Review host paths/identifiers before sharing diagnostics.
+
+Status, logs and default doctor do not initialize this directory or start a process. `STATE_UNAVAILABLE` means the existing snapshot could not be read; `STATE_INVALID` means it could not be decoded. Both preserve the file. `LOG_UNAVAILABLE` leaves work state unknown. Check the selected path and its access permissions before changing lifecycle state. A partial log view reports truncation and is not a complete execution history.
+
+Passive state reads can observe the previous atomic snapshot while a writer is updating it. They do not participate in mutation transactions. On Windows the writer briefly retries a replacement denied by a concurrent reader; persistent denial retains the previous file and reports failure. No diagnostic migrates or repairs state implicitly.
 
 ## Reconnect all connections
 
