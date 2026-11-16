@@ -12,7 +12,7 @@ from okto_nexus_connector.cli.main import build_parser
 from okto_nexus_connector.daemon import manager, lifecycle
 from okto_nexus_connector.daemon.lock import InstanceLock
 from okto_nexus_connector.errors import ConnectorError
-from okto_nexus_connector.platform import paths, service_install
+from okto_nexus_connector.platform import paths, service_install, service_supervision
 from okto_nexus_connector.platform.service_context import CONTEXT, write_document
 from okto_nexus_connector.platform.user_service import UserService, SUPERVISOR
 from okto_nexus_connector.storage.state_store import StateStore
@@ -45,6 +45,18 @@ def login(local_wizard, monkeypatch):
     service = UserService(root, tasks=tasks)
     process = dict(active=True, supervisor='detached', drain=True, ready=True)
     effects = []
+    # This wizard unit fixture injects native process observation, including
+    # the bounded parent port introduced after the original detached fixture.
+    # Receipt/guard/OS identity validation is exercised by the separate bounded
+    # supervisor suite; a fake ready runtime alone is no longer parent proof.
+    def parent_observation(*args, **kwargs):
+        if not process['active'] or process['supervisor'] != SUPERVISOR:
+            return None
+        return dict(state='running', phase='running', cycle_id='synthetic-cycle',
+            attempts_started=1, max_attempts=4, next_retry_monotonic=None,
+            last_exit_code=None, parent_state='alive', launcher_state='alive',
+            child_state='alive', child_acknowledged=True, child_exit_confirmed=False)
+    monkeypatch.setattr(service_supervision, 'observation', parent_observation)
     def observed(*args, **kwargs):
         return manager.DaemonStatus(process['active'], os.getpid() if process['active'] else None,
             'loopback', '127.0.0.1:1', '0.0.12', '', None, process['active'],
@@ -211,6 +223,21 @@ async def test_disabled_task_requires_enable_review_and_later_disable_is_preserv
     result = await r.run()
     assert result['login_start']['current_user_service']['enabled'] is False
     assert r.tasks.calls == before
+
+
+async def test_existing_bounded_task_without_parent_proof_is_not_reused(login, monkeypatch):
+    r = login
+    r.process['active'] = False
+    r.tasks.create = FakeTasks.create.__get__(r.tasks)
+    assert service_install.install(r.root, dry_run=False)['installed']
+    r.process.update(active=True, supervisor=SUPERVISOR)
+    monkeypatch.setattr(service_supervision, 'observation', lambda *args, **kwargs: None)
+    before = list(r.tasks.calls)
+    with pytest.raises(ConnectorError) as error:
+        await r.run()
+    assert error.value.code == 'DAEMON_UNAVAILABLE'
+    assert 'SUPERVISOR_OUTCOME_UNCONFIRMED' in error.value.message
+    assert r.tasks.calls == before and not r.calls and not r.effects
 
 
 @pytest.mark.parametrize('already_enabled', [False, True])
