@@ -602,11 +602,7 @@ class CoreRuntimeHost:
                    if isinstance(key, BindingKey) and key.binding_id == binding_id]
         return matches[0] if len(matches) == 1 else None
 
-    async def prove_r4_native_session(
-            self, scope: Mapping, target: NativeSessionTarget, *,
-            connection_id: str, connection_generation: int) -> NativeSessionOwnerProof:
-        """Resolve an existing R4 runtime in this host without composing a new one."""
-        stage = 'native_session_proof'
+    def _existing_presentation_runtime(self, scope: Mapping, stage: str):
         if self._draining:
             raise CoreError('RUNTIME_DRAINING', stage)
         if not isinstance(scope, Mapping):
@@ -618,11 +614,31 @@ class CoreRuntimeHost:
         runtime = self._runtimes.get(key)
         if runtime is None:
             raise CoreError('SESSION_UNKNOWN', stage)
+        return key, runtime
+
+    async def prove_r4_native_session(
+            self, scope: Mapping, target: NativeSessionTarget, *,
+            connection_id: str, connection_generation: int) -> NativeSessionOwnerProof:
+        """Resolve an existing R4 runtime in this host without composing a new one."""
+        stage = 'native_session_proof'
+        key, runtime = self._existing_presentation_runtime(scope, stage)
         proof = await runtime.prove_live_native_session(
             scope, target, connection_id=connection_id, connection_generation=connection_generation)
         if self._draining or self._runtimes.get(key) is not runtime:
             raise CoreError('STALE_GENERATION', stage)
         return proof
+
+    async def read_r4_codex_thread(
+            self, scope: Mapping, target: NativeSessionTarget, thread_id: str, *,
+            connection_id: str, connection_generation: int) -> dict:
+        """Read metadata through the exact registered Core runtime."""
+        stage = 'native_presentation_read'
+        key, runtime = self._existing_presentation_runtime(scope, stage)
+        result = await runtime.read_live_codex_thread(scope, target, thread_id,
+            connection_id=connection_id, connection_generation=connection_generation)
+        if self._draining or self._runtimes.get(key) is not runtime:
+            raise CoreError('STALE_GENERATION', stage)
+        return result
 
     @property
     def _journals(self) -> list[SQLiteJournal]:

@@ -1,9 +1,9 @@
 # Current development dependency
 
-Connector 0.0.15 pins Core 0.0.16 from `30f349b293fd8d4458dee0267c04aaf3eda132af`.
-The unpublished wheel SHA-256 is `fd7d598a83a4586be4bd02a057cd785593dc44dcd00d304dc4797309f406c8a7`.
-This milestone adds a read-only owner proof for an exact registered runtime.
-Terminal presentation still requires its own scoped authorization and transport.
+Connector 0.0.15 pins Core 0.0.16 from `566f02349caa861abafd8cc600abc69d1d7d8a75`.
+The unpublished wheel SHA-256 is `0a1729af4a9b996e73d3df3300a4c57d5aadffa47a594ceaa94287517c0b919c`.
+The host can prove the existing runtime and read bounded Codex thread metadata.
+Terminal presentation still requires human authorization and a scoped transport.
 
 ## Previous development dependency
 

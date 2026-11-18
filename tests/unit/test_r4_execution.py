@@ -192,6 +192,15 @@ async def test_native_owner_proof_uses_only_the_exact_registered_runtime(executi
         await owner.host.prove_r4_native_session(scope | {'session_owner_generation': 2}, target, **channel)
     key = ExecutionRuntimeKey(*(scope[field] for field in ('server_id', 'executor_id', 'binding_id', 'session_id')))
     runtime = owner.host._runtimes[key]
+    async def observe_thread(thread_id):
+        assert thread_id == 'owned-thread'
+        return {'thread_id': thread_id, 'status': 'idle'}
+
+    factory.native.read_owned_codex_thread = observe_thread
+    assert await owner.host.read_r4_codex_thread(scope, target, 'owned-thread', **channel) == {
+        'thread_id': 'owned-thread', 'status': 'idle'}
+    with pytest.raises(CoreError, match='SESSION_UNKNOWN'):
+        await owner.host.read_r4_codex_thread(scope | {'binding_id': 'sibling'}, target, 'owned-thread', **channel)
     original = runtime.prove_live_native_session
 
     async def unregistered(*args, **kwargs):
