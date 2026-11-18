@@ -5,12 +5,15 @@ import hashlib
 import secrets
 
 import pytest
-from nexus_connector_core import CoreError, RuntimeEvent, R4_PREVIEW_REVISION, encode_r4_frame, r4_submit_intent_hash
+from nexus_connector_core import (
+    CoreError, NativeSessionTarget, OperationKey, ProcessBirthEvidence, RuntimeEvent,
+    R4_PREVIEW_REVISION, encode_r4_frame, r4_submit_intent_hash,
+)
 from nexus_connector_core.protocol import canonical_json
 
-from okto_nexus_connector.services.core_host import CoreRuntimeHost
+from okto_nexus_connector.services.core_host import CoreRuntimeHost, ExecutionRuntimeKey
 from okto_nexus_connector.services.execution_selection import acknowledge_execution_binding
-from okto_nexus_connector.services.r4_execution import R4ExecutionOwner, R4LaunchSetup
+from okto_nexus_connector.services.r4_execution import R4ExecutionOwner, R4LaunchSetup, _SCOPE
 from okto_nexus_connector.platform.paths import state_dir
 from okto_nexus_connector.transport.r4_connection import ReceivedOperation
 from okto_nexus_connector.transport.wss_r4 import R4ControlState
@@ -162,6 +165,48 @@ async def observed(queue, owner):
         raise AssertionError(
             "Receipt exceeded the fifteen-second test watchdog.\n"
             + pending_task_locations()) from error
+
+
+async def test_native_owner_proof_uses_only_the_exact_registered_runtime(execution, monkeypatch):
+    from nexus_connector_core.native import process
+
+    owner, connection, factory, receipts, opening = execution
+    await connection.emit(opening)
+    assert (await observed(receipts, owner))['stage'] == 'SUBMITTED'
+    scope = {key: opening[key] for key in _SCOPE}
+    channel = {key: opening[key] for key in ('connection_id', 'connection_generation')}
+    target = NativeSessionTarget(opening['operation_id'], opening['payload']['adapter_id'],
+                                 factory.native.native_id, factory.scope[3])
+    birth = ProcessBirthEvidence('win32', 1234, 'filetime:12345678', 'windows_job')
+    journal = await owner.host.ensure_history_journal()
+    operation_key = OperationKey(scope['server_id'], scope['executor_id'], target.opening_operation_id)
+    await journal.record_process_birth(operation_key, scope['session_id'], birth)
+    factory.native.owned_process_birth = birth
+    monkeypatch.setattr(process, 'observe_recorded_process_birth',
+                        lambda evidence: 'MATCHING_LIVE' if evidence == birth else 'DIFFERENT_BIRTH')
+    proof = await owner.host.prove_r4_native_session(scope, target, **channel)
+    assert proof.key.session_id == scope['session_id'] and proof.target == target
+    with pytest.raises(CoreError, match='SESSION_UNKNOWN'):
+        await owner.host.prove_r4_native_session(scope | {'executor_id': 'sibling'}, target, **channel)
+    with pytest.raises(CoreError, match='STALE_GENERATION'):
+        await owner.host.prove_r4_native_session(scope | {'session_owner_generation': 2}, target, **channel)
+    key = ExecutionRuntimeKey(*(scope[field] for field in ('server_id', 'executor_id', 'binding_id', 'session_id')))
+    runtime = owner.host._runtimes[key]
+    original = runtime.prove_live_native_session
+
+    async def unregistered(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        owner.host._runtimes.pop(key)
+        return result
+
+    with monkeypatch.context() as temporary:
+        temporary.setattr(runtime, 'prove_live_native_session', unregistered)
+        try:
+            with pytest.raises(CoreError, match='STALE_GENERATION'):
+                await owner.host.prove_r4_native_session(scope, target, **channel)
+        finally:
+            owner.host._runtimes[key] = runtime
+    assert not factory.native.sent and len(factory.opened) == 1
 
 
 @pytest.mark.parametrize('fact_mode', ['durable', 'missing', 'wrong_hash'])

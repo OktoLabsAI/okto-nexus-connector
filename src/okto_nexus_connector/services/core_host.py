@@ -21,7 +21,7 @@ from types import FunctionType
 from typing import Mapping
 
 from nexus_connector_core import (
-    InstallationCandidate, LocalRuntimeCore, SQLiteOwnedSlotLedger,
+    InstallationCandidate, LocalRuntimeCore, NativeSessionOwnerProof, NativeSessionTarget, SQLiteOwnedSlotLedger,
     create_runtime, ExecutionCapacity, CoreError,
     require_audit_snapshot_not_rolled_back,
 )
@@ -601,6 +601,28 @@ class CoreRuntimeHost:
         matches = [runtime for key, runtime in self._runtimes.items()
                    if isinstance(key, BindingKey) and key.binding_id == binding_id]
         return matches[0] if len(matches) == 1 else None
+
+    async def prove_r4_native_session(
+            self, scope: Mapping, target: NativeSessionTarget, *,
+            connection_id: str, connection_generation: int) -> NativeSessionOwnerProof:
+        """Resolve an existing R4 runtime in this host without composing a new one."""
+        stage = 'native_session_proof'
+        if self._draining:
+            raise CoreError('RUNTIME_DRAINING', stage)
+        if not isinstance(scope, Mapping):
+            raise CoreError('VALIDATION_ERROR', stage)
+        identity = tuple(scope.get(field) for field in ('server_id', 'executor_id', 'binding_id', 'session_id'))
+        if any(type(value) is not str or not 1 <= len(value) <= 160 or not value.isprintable() for value in identity):
+            raise CoreError('VALIDATION_ERROR', stage)
+        key = ExecutionRuntimeKey(*identity)
+        runtime = self._runtimes.get(key)
+        if runtime is None:
+            raise CoreError('SESSION_UNKNOWN', stage)
+        proof = await runtime.prove_live_native_session(
+            scope, target, connection_id=connection_id, connection_generation=connection_generation)
+        if self._draining or self._runtimes.get(key) is not runtime:
+            raise CoreError('STALE_GENERATION', stage)
+        return proof
 
     @property
     def _journals(self) -> list[SQLiteJournal]:

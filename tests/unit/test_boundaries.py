@@ -72,7 +72,8 @@ def test_no_mcp_symbols_in_package():
 def test_no_subprocess_spawn_outside_platform_layer():
     """Process creation is allowed only for the daemon spawn and OS
     service integration; native harness launches belong to the Core."""
-    allowed = ("daemon/manager.py", "platform/service_install.py",
+    # The bounded supervisor launches the existing daemon service process.
+    allowed = ("daemon/manager.py", "daemon/service_supervisor.py", "platform/service_install.py",
                "platform/sysinfo.py", "cli/main.py")
     for path in _python_files():
         relative = path.relative_to(PACKAGE).as_posix()
