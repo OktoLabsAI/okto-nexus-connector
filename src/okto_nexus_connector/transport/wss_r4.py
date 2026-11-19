@@ -118,7 +118,8 @@ async def negotiate_r4_control(
                                  'nexus-launch-recovery-v1'],
     }
     if capacity_enabled:
-        hello['control_capabilities'].append(CAPACITY_CONTRACT_REVISION)
+        from nexus_connector_core.targeted_control_link import CLAUDE_OPERATION_STEER_CODEC
+        hello['control_capabilities'].extend((CAPACITY_CONTRACT_REVISION, CLAUDE_OPERATION_STEER_CODEC.revision))
     if presentation_enabled:
         from nexus_connector_core.presentation_link import PRESENTATION_LINK_REVISION
         hello['control_capabilities'].append(PRESENTATION_LINK_REVISION)

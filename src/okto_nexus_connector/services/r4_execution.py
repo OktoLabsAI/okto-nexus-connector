@@ -871,10 +871,10 @@ class R4ExecutionOwner:
             raise CoreError('SESSION_UNKNOWN', 'r4_execution')
         runtime = session.runtime
         context = self._context(item, runtime)
-        if item.expected_pi_run_id is not None:
+        if item.target is not None:
+            codec, target = item.target
             operation = ControlOperation(frame['operation_id'], frame['session_id'], action.split('.')[1],
-                text=payload.get('text'), reason=payload.get('reason'),
-                expected_pi_run_id=item.expected_pi_run_id)
+                text=payload.get('text'), reason=payload.get('reason'), **{codec.target_field: target})
             context = await self._bind(item, runtime, context, applied_operation=operation)
             receipt = await self._command_receipt(lambda: runtime.control(operation, context))
             operation_key = OperationKey(frame['server_id'], frame['executor_id'], frame['operation_id'])

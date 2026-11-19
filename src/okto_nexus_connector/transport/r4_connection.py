@@ -34,11 +34,12 @@ from nexus_connector_core.presentation_link import (
     PI_PRESENTATION_LINK_REVISION, PI_PRESENTATION_REQUESTS, encode_pi_presentation_frame, pi_presentation_result,
     PRESENTATION_LINK_REVISION, PRESENTATION_READ, encode_presentation_frame, presentation_result,
 )
-from nexus_connector_core.pi_control_link import PI_RUN_CONTROL, decode_pi_run_control
+from nexus_connector_core.targeted_control_link import TARGETED_CONTROL_CODECS, TargetedControlCodec
 
 
 _CONTROL = frozenset({'turn.steer', 'turn.interrupt', 'runtime.close',
                       'approval.decide', 'input.provide'})
+_TARGETED_CONTROL = {codec.kind: codec for codec in TARGETED_CONTROL_CODECS}
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,12 +50,12 @@ class ReceivedOperation:
     encoded: bytes
     control: bool
     lane_attempt_id: str
-    expected_pi_run_id: str | None = None
+    target: tuple[TargetedControlCodec, str] | None = None
 
     @property
     def frame(self) -> dict:
-        if self.expected_pi_run_id is not None:
-            return decode_pi_run_control(self.encoded)['operation']
+        if self.target is not None:
+            return self.target[0].decode(self.encoded)['operation']
         return decode_r4_frame(self.encoded)
 
 
@@ -285,9 +286,10 @@ class R4Connection:
                     raise
                 encoded = raw.encode('utf-8') if isinstance(raw, str) else raw
                 frame = decode_control_frame(encoded, capabilities=self.state.control_capabilities)
-                expected_pi_run_id = None
-                if frame['type'] == PI_RUN_CONTROL:
-                    expected_pi_run_id = frame['expected_pi_run_id']
+                codec = _TARGETED_CONTROL.get(frame['type'])
+                target = None
+                if codec is not None:
+                    target = (codec, frame[codec.target_field])
                     frame = frame['operation']
                 kind = frame['type']
                 release_reply = kind in ('session.release.accepted', 'session.release.deferred')
@@ -306,7 +308,7 @@ class R4Connection:
                 elif kind == PRESENTATION_READ or kind in PI_PRESENTATION_REQUESTS:
                     self._admit_presentation(frame)
                 elif kind == 'operation.submit':
-                    self._admit(frame, encoded, expected_pi_run_id=expected_pi_run_id)
+                    self._admit(frame, encoded, target=target)
                 elif release_reply or startup_reply:
                     reply_type = 'startup.refuse.accepted' if startup_reply else 'session.release.accepted'
                     reply_id = envelope['request_id'] if startup_reply else envelope['release_id']
@@ -758,13 +760,13 @@ class R4Connection:
         except CoreError:
             return False
 
-    def _admit(self, frame, encoded, *, expected_pi_run_id=None):
+    def _admit(self, frame, encoded, *, target=None):
         lane = self._lane(frame)
         control = frame['action'] in _CONTROL
         used, limit = self._used[control], self.limits[control]
         if used[0] >= limit[0] or used[1] + len(encoded) > limit[1]:
             raise ConnectorError('CAPACITY_EXCEEDED', 'r4_link', 'The operation inbox capacity is exhausted.')
-        item = ReceivedOperation(secrets.token_hex(16), encoded, control, lane.attach_request_id, expected_pi_run_id)
+        item = ReceivedOperation(secrets.token_hex(16), encoded, control, lane.attach_request_id, target)
         used[0] += 1
         used[1] += len(encoded)
         self._reservations[item.token] = item
