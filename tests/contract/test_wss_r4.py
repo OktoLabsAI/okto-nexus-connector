@@ -13,6 +13,7 @@ from nexus_connector_core import (
 )
 from nexus_connector_core.journal import open_journal
 from nexus_connector_core.discovery import fingerprint
+from nexus_connector_core.presentation_link import PI_PRESENTATION_LINK_REVISION
 
 from okto_nexus_connector.transport.wss_r4 import apply_r4_lease, negotiate_r4_control
 
@@ -73,7 +74,8 @@ class Peer:
 
 
 @pytest.mark.parametrize('accepted', [(), ('nexus-lease-denial-v1',),
-    ('nexus-session-release-v1',), ('nexus-lease-denial-v1', 'nexus-session-release-v1')])
+    ('nexus-session-release-v1',), ('nexus-lease-denial-v1', 'nexus-session-release-v1'),
+    (PI_PRESENTATION_LINK_REVISION,)])
 async def test_handshake_advertises_scoped_containment_and_retains_only_accepted_extensions(accepted):
     peer = Peer()
     original_send = peer.send
@@ -90,8 +92,9 @@ async def test_handshake_advertises_scoped_containment_and_retains_only_accepted
             cursor=None, next_cursor=None, complete=True, receipts=[], claims=[], stream_watermarks=[], ownership_facts=[])
     state = await asyncio.wait_for(negotiate_r4_control(peer, server_id='srv', executor_id='exe',
         management_revision=MANAGEMENT, snapshot_format=SNAPSHOT_FORMAT_VERSION,
-        boot_id='boot', report_reconciliation=report), 2)
+        boot_id='boot', report_reconciliation=report, pi_presentation_enabled=True), 2)
     assert {'nexus-lease-denial-v1', 'nexus-session-release-v1'} <= set(peer.sent[0]['control_capabilities'])
+    assert PI_PRESENTATION_LINK_REVISION in peer.sent[0]['control_capabilities']
     assert state.control_ready and state.control_capabilities == accepted
 
 

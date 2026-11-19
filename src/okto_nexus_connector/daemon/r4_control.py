@@ -544,6 +544,7 @@ class R4DaemonControl:
                     reconciliation_accepted=self._reconciliation_accepted,
                     recover_before_report=recover_events,
                     presentation_handler=self._presentation_read,
+                    pi_presentation_host=self.host,
                     **({'capacity_handler': self._capacity_control} if self.host.capacity_enabled else {})), min(30, remaining))
             finally:
                 recovery_active.clear()

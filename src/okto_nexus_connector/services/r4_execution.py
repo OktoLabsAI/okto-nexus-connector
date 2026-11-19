@@ -800,7 +800,8 @@ class R4ExecutionOwner:
             runtime = await self.host.build_r4(self.store, frame=item.frame,
                 candidates=candidates, environment=setup.environment, factory=self.native_factory,
                 native_action_factory=setup.native_action_factory,
-                opening_selection=setup.opening_selection)
+                opening_selection=setup.opening_selection,
+                **({'pi_presentation_enabled': True} if getattr(self.connection, 'pi_presentation_enabled', False) else {}))
             self.connection.require_current(item)
             session = _Session(runtime, frame['intent_hash'], 'stream_' + secrets.token_hex(16),
                 {k: frame[k] for k in _SCOPE}, frame['connection_id'], frame['connection_generation'])

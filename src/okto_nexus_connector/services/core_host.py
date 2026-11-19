@@ -12,8 +12,10 @@ candidate and workspace root.
 from __future__ import annotations
 
 import asyncio
+import sys
 import time
 import weakref
+from contextlib import asynccontextmanager
 from functools import wraps
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -33,6 +35,7 @@ from nexus_connector_core.installation import (
 )
 from nexus_connector_core.journal import JournalLimits, SQLiteJournal, open_journal
 from nexus_connector_core.ports import SecretResolver
+from nexus_connector_core.pi_extension_resource import reviewed_pi_renderer_build
 
 from ..errors import ConnectorError
 from ..platform import paths
@@ -462,7 +465,7 @@ class CoreRuntimeHost:
 
     @_owned_composition
     async def build_r4(self, store, *, frame, candidates, environment, factory=None,
-                       native_action_factory=None, opening_selection=None):
+                       native_action_factory=None, opening_selection=None, pi_presentation_enabled=False):
         """Compose an R4 runtime only from the approved host realization.
 
         Composition is effect-free and does not install execution authority.
@@ -525,6 +528,10 @@ class CoreRuntimeHost:
             if native_owner is None:
                 raise ConnectorError("BINDING_NOT_AUTHORIZED", "native_action_launch")
             return await native_owner.launch(prepared, session_id, context)
+        candidate = selection.candidate
+        hosted_pi = (pi_presentation_enabled and factory is None and candidate.adapter_id == 'pi_rpc'
+            and candidate.launch_script and reviewed_pi_renderer_build(
+                candidate.version, sys.platform, candidate.architecture, candidate.build_identity))
         runtime = create_runtime(journal=journal, environment=checked_environment,
             # The approved binding and local consent select this exact entry.
             # Preserve passive inventory evidence; only this scoped runtime
@@ -534,7 +541,8 @@ class CoreRuntimeHost:
             native_factory=factory, owned_slot_ledger=ledger,
             capacity_enabled=self.capacity_enabled,
             native_approvals_from_lease=True,
-            pi_native_action=native_launch if native_action_factory is not None else None)
+            pi_native_action=native_launch if native_action_factory is not None else None,
+            **({'pi_hosted_rpc': True} if hosted_pi else {}))
         if native_action_factory is not None:
             native_owner = native_action_factory(runtime)
             if not isinstance(native_owner, PiNativeActionOwner):
@@ -639,6 +647,42 @@ class CoreRuntimeHost:
         if self._draining or self._runtimes.get(key) is not runtime:
             raise CoreError('STALE_GENERATION', stage)
         return result
+
+    async def prove_r4_pi_presentation(self, scope, target, *, connection_id, connection_generation):
+        stage = 'pi_presentation'
+        key, runtime = self._existing_presentation_runtime(scope, stage)
+        await runtime.prove_live_pi_renderer(scope, target, connection_id=connection_id,
+                                            connection_generation=connection_generation)
+        if self._draining or self._runtimes.get(key) is not runtime:
+            raise CoreError('STALE_GENERATION', stage)
+
+    @asynccontextmanager
+    async def open_r4_pi_presentation(self, scope, target, *, connection_id, connection_generation,
+                                      columns, rows, editor):
+        stage = 'pi_presentation'
+        key, runtime = self._existing_presentation_runtime(scope, stage)
+        open_native = runtime.open_live_pi_editor if editor else runtime.open_live_pi_renderer
+
+        def verify():
+            if self._draining or self._runtimes.get(key) is not runtime:
+                raise CoreError('STALE_GENERATION', stage)
+
+        async with open_native(scope, target, connection_id=connection_id, connection_generation=connection_generation,
+                               columns=columns, rows=rows) as native:
+            verify()
+
+            async def read():
+                verify()
+                value = await native.read_event() if editor else await anext(native, None)
+                verify()
+                return value
+
+            async def edit(key, *, text):
+                verify()
+                await native.edit(key, text=text)
+                verify()
+
+            yield read, edit if editor else None
 
     @property
     def _journals(self) -> list[SQLiteJournal]:

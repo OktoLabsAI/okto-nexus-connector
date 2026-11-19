@@ -22,6 +22,7 @@ from nexus_connector_core import (
 
 from ..errors import ConnectorError
 from .lease_denial import LeaseRequestDenied
+from .pi_presentation import PiPresentationStreams
 from .wss_r4 import R4ControlState
 from nexus_connector_core.session_release import (
     SESSION_RELEASE_REVISION, encode_session_release, decode_session_release,
@@ -30,6 +31,7 @@ from nexus_connector_core.startup_refusal_link import (
     STARTUP_REFUSAL_REVISION, encode_startup_refusal, decode_startup_refusal,
 )
 from nexus_connector_core.presentation_link import (
+    PI_PRESENTATION_LINK_REVISION, PI_PRESENTATION_REQUESTS, encode_pi_presentation_frame, pi_presentation_result,
     PRESENTATION_LINK_REVISION, PRESENTATION_READ, encode_presentation_frame, presentation_result,
 )
 
@@ -58,7 +60,7 @@ class R4Connection:
                  control_bytes=128 * 1024, max_requests=16, max_lanes=256,
                  request_timeout=15.0, send_timeout=5.0, heartbeat_seconds=15.0, initial_lanes=None, resume=None,
                  capacity_handler=None, max_capacity_requests=8, max_capacity_recovery=4, max_capacity_replies=64,
-                 presentation_handler=None):
+                 presentation_handler=None, pi_presentation_host=None):
         limits = (regular_items, control_items, regular_bytes, control_bytes, max_requests, max_lanes,
                   max_capacity_requests, max_capacity_recovery, max_capacity_replies)
         if (not state.control_ready or not boot_id or
@@ -73,6 +75,11 @@ class R4Connection:
             raise ValueError('Negotiated presentation reads require an installed handler.')
         self._presentation_handler = presentation_handler if presentation_negotiated else None
         self._presentation_tasks = {}
+        pi_negotiated = PI_PRESENTATION_LINK_REVISION in state.control_capabilities
+        if pi_negotiated and pi_presentation_host is None:
+            raise ValueError('Negotiated Pi presentation requires an installed host.')
+        self._pi_presentation = PiPresentationStreams(pi_presentation_host) if pi_negotiated else None
+        self._pi_presentation_tasks = {}
         self.websocket, self.state, self.boot_id = websocket, state, boot_id
         self._capacity_handler = capacity_handler if capacity_negotiated else None
         self._capacity_limits = {False: max_capacity_requests, True: max_capacity_recovery}
@@ -116,6 +123,10 @@ class R4Connection:
     @property
     def online(self):
         return self._reader is not None and not self._closed
+
+    @property
+    def pi_presentation_enabled(self):
+        return self._pi_presentation is not None
 
     @property
     def usage(self):
@@ -232,11 +243,14 @@ class R4Connection:
         tasks = [t for t in (self._reader, self._heartbeat, self._closer, self._capacity_writer) if t is not None]
         tasks.extend(self._producers)
         tasks.extend(item[0] for item in self._capacity_tasks.values())
-        for task in self._presentation_tasks.values():
+        presentations = [*self._presentation_tasks.values(), *self._pi_presentation_tasks.values()]
+        for task in presentations:
             task.cancel()
-        tasks.extend(self._presentation_tasks.values())
+        tasks.extend(presentations)
         if tasks:
             await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
+        if self._pi_presentation is not None:
+            await self._pi_presentation.reset()
 
     async def _beat(self):
         try:
@@ -281,7 +295,7 @@ class R4Connection:
                 self._last_received_monotonic = time.monotonic()
                 if kind in CAPACITY_REQUEST_TYPES:
                     self._admit_capacity(frame, encoded)
-                elif kind == PRESENTATION_READ:
+                elif kind == PRESENTATION_READ or kind in PI_PRESENTATION_REQUESTS:
                     self._admit_presentation(frame)
                 elif kind == 'operation.submit':
                     self._admit(frame, encoded)
@@ -351,13 +365,16 @@ class R4Connection:
 
     def _admit_presentation(self, frame):
         request_id = frame['request_id']
-        if request_id in self._presentation_tasks or len(self._presentation_tasks) >= 4:
+        pi = frame['type'] in PI_PRESENTATION_REQUESTS
+        presentation_tasks = self._pi_presentation_tasks if pi else self._presentation_tasks
+        if request_id in presentation_tasks or len(presentation_tasks) >= (8 if pi else 4):
             return
-        task = asyncio.create_task(self._serve_presentation(frame), name='r4-presentation-read')
-        self._presentation_tasks[request_id] = task
+        serve = self._serve_pi_presentation if pi else self._serve_presentation
+        task = asyncio.create_task(serve(frame), name='r4-presentation')
+        presentation_tasks[request_id] = task
 
         def finished(done):
-            self._presentation_tasks.pop(request_id, None)
+            presentation_tasks.pop(request_id, None)
             if not done.cancelled():
                 done.exception()
 
@@ -373,6 +390,17 @@ class R4Connection:
             response = encode_presentation_frame(presentation_result(frame, context))
         except (CoreError, TimeoutError, ValueError):
             response = encode_presentation_frame(presentation_result(frame, None))
+        if self.online and self.websocket is socket:
+            await self.send(response.decode('utf-8'), expected_socket=socket)
+
+    async def _serve_pi_presentation(self, frame):
+        socket = self.websocket
+        try:
+            async with asyncio.timeout(4):
+                result = await self._pi_presentation.request(frame, self._lane)
+            response = encode_pi_presentation_frame(pi_presentation_result(frame, result))
+        except (CoreError, OSError, TimeoutError, ValueError):
+            response = encode_pi_presentation_frame(pi_presentation_result(frame, {'state': 'refused'}))
         if self.online and self.websocket is socket:
             await self.send(response.decode('utf-8'), expected_socket=socket)
 
@@ -394,6 +422,8 @@ class R4Connection:
             if self._closed:
                 await replacement.close()
                 return False
+            if self._pi_presentation is not None:
+                await self._pi_presentation.reset()
             self.websocket = replacement
             self._last_received_monotonic = time.monotonic()
             logging.getLogger(__name__).info('Control transport resumed; runtime sessions and lease ownership retained.')

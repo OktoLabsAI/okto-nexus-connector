@@ -1,6 +1,8 @@
 """Single-reader correlation, bounded reservations and owned request completion."""
 
 import asyncio
+from contextlib import asynccontextmanager
+from dataclasses import replace
 
 import pytest
 from nexus_connector_core import (
@@ -9,8 +11,15 @@ from nexus_connector_core import (
 )
 from nexus_connector_core.discovery import fingerprint
 from nexus_connector_core.journal import open_journal
+from nexus_connector_core.native.pi_renderer import PiEditorUpdate
+from nexus_connector_core.presentation_link import (
+    PI_PRESENTATION_CLOSE, PI_PRESENTATION_EDIT, PI_PRESENTATION_LINK_REVISION, PI_PRESENTATION_NEXT,
+    PI_PRESENTATION_OPEN, PI_PRESENTATION_PROBE, decode_pi_presentation_frame, decode_pi_presentation_output,
+    encode_pi_presentation_frame, presentation_request_hash,
+)
 
 from okto_nexus_connector.errors import ConnectorError
+from okto_nexus_connector.transport.pi_presentation import PiPresentationStreams
 from okto_nexus_connector.transport.r4_connection import R4Connection
 from okto_nexus_connector.transport.wss_r4 import R4ControlState, apply_r4_lease
 
@@ -114,6 +123,124 @@ async def attach(owner, socket, **changes):
     request = await asyncio.wait_for(socket.outgoing.get(), 2)
     await socket.emit(attached(request))
     await asyncio.wait_for(task, 2)
+
+
+async def test_pi_presentation_control_pulls_exact_editor_and_retires_on_disconnect():
+    class PiSocket(Socket):
+        async def send(self, raw):
+            if PI_PRESENTATION_LINK_REVISION in raw:
+                await self.outgoing.put(decode_pi_presentation_frame(raw.encode()))
+            else:
+                await super().send(raw)
+
+    calls, viewports = [], []
+    output = asyncio.Queue()
+    retired = asyncio.Event()
+
+    class Host:
+        async def prove_r4_pi_presentation(self, scope, target, **channel):
+            assert scope == SCOPE and target.native_session_id == 'owned' and channel == CHANNEL
+            calls.append('prove')
+
+        @asynccontextmanager
+        async def open_r4_pi_presentation(self, scope, target, *, columns, rows, editor, **channel):
+            await self.prove_r4_pi_presentation(scope, target, **channel)
+            viewports.append((columns, rows, editor))
+
+            async def edit(key, *, text):
+                calls.append((key, text))
+                await output.put(PiEditorUpdate(1, 'Draft accepted by the editor'))
+
+            try:
+                yield output.get, edit if editor else None
+            finally:
+                retired.set()
+
+    socket = PiSocket()
+    owner = R4Connection(socket, replace(STATE, control_capabilities=(PI_PRESENTATION_LINK_REVISION,)),
+                         boot_id='boot', pi_presentation_host=Host())
+    owner.start()
+    serial = 0
+    stream = 'piv_' + 'a' * 32
+
+    async def request(kind, *, stream_id=stream, **payload):
+        nonlocal serial
+        serial += 1
+        frame = {'type': kind, 'contract_revision': PI_PRESENTATION_LINK_REVISION, 'server_id': 'srv',
+                 'executor_id': 'exe', **CHANNEL, 'stream_id': stream_id, 'request_id': f'request-{serial}', **payload}
+        await socket.incoming.put(encode_pi_presentation_frame(frame).decode())
+        result = await asyncio.wait_for(socket.outgoing.get(), 2)
+        assert result['request_hash'] == presentation_request_hash(frame) and result['stream_id'] == stream_id
+        return result['result']
+
+    scope = {'scope': SCOPE, 'target': dict(adapter_id='pi_rpc', native_session_id='owned',
+                                         opening_operation_id='opening', stream_epoch='epoch')}
+    options = {'columns': 80, 'rows': 24, 'editor': True}
+    try:
+        assert (await request(PI_PRESENTATION_PROBE, **scope))['state'] == 'refused'
+        assert not calls
+        await attach(owner, socket)
+        assert (await request(PI_PRESENTATION_PROBE, **scope))['state'] == 'available'
+        assert not viewports
+        assert (await request(PI_PRESENTATION_OPEN, **scope, **options))['state'] == 'opened'
+        assert viewports == [(80, 24, True)]
+        assert (await request(PI_PRESENTATION_OPEN, stream_id='piv_' + 'b' * 32, **scope, **options))['state'] == 'refused'
+        assert (await request(PI_PRESENTATION_NEXT))['state'] == 'idle'
+        assert (await request(PI_PRESENTATION_EDIT, key='enter', text=None, sequence=1))['state'] == 'edited'
+        assert (await request(PI_PRESENTATION_EDIT, key='enter', text=None, sequence=1))['state'] == 'refused'
+        assert decode_pi_presentation_output(await request(PI_PRESENTATION_NEXT)) == PiEditorUpdate(
+            1, 'Draft accepted by the editor')
+        assert calls == ['prove', 'prove', ('enter', None)]
+
+        assert (await request(PI_PRESENTATION_NEXT))['state'] == 'idle'
+        owner._lanes.clear()
+        assert (await request(PI_PRESENTATION_EDIT, key='enter', text=None, sequence=2))['state'] == 'refused'
+        assert retired.is_set() and owner.online and not socket.closed
+        assert (await request(PI_PRESENTATION_CLOSE))['state'] == 'closed'
+
+        retired.clear()
+        await attach(owner, socket)
+        reader = 'piv_' + 'c' * 32
+        assert (await request(PI_PRESENTATION_OPEN, stream_id=reader, **scope, **(options | {'editor': False})))['state'] == 'opened'
+        assert (await request(PI_PRESENTATION_EDIT, stream_id=reader, key='enter', text=None, sequence=1))['state'] == 'refused'
+        assert (await request(PI_PRESENTATION_NEXT, stream_id=reader))['state'] == 'idle'
+    finally:
+        await owner.close()
+    assert retired.is_set() and socket.closed
+    assert calls.count(('enter', None)) == 1
+
+
+async def test_cancelled_pi_draft_edit_cannot_be_replayed_on_the_same_viewer():
+    entered, retired = asyncio.Event(), asyncio.Event()
+    calls = []
+
+    class Host:
+        @asynccontextmanager
+        async def open_r4_pi_presentation(self, *args, **kwargs):
+            async def edit(key, *, text):
+                calls.append((key, text))
+                entered.set()
+                await asyncio.Future()
+
+            try:
+                yield None, edit
+            finally:
+                retired.set()
+
+    streams = PiPresentationStreams(Host())
+    identity = {'stream_id': 'piv_' + 'a' * 32, **CHANNEL}
+    target = dict(adapter_id='pi_rpc', native_session_id='owned', opening_operation_id='opening', stream_epoch='epoch')
+    assert await streams.request(identity | {'type': PI_PRESENTATION_OPEN, 'scope': SCOPE, 'target': target,
+        'columns': 80, 'rows': 24, 'editor': True}, lambda _: None) == {'state': 'opened'}
+    edit = identity | {'type': PI_PRESENTATION_EDIT, 'key': 'insert', 'text': 'uncertain draft', 'sequence': 1}
+    task = asyncio.create_task(streams.request(edit, lambda _: None))
+    await asyncio.wait_for(entered.wait(), 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert retired.is_set()
+    assert await streams.request(edit, lambda _: None) == {'state': 'refused'}
+    assert calls == [('insert', 'uncertain draft')]
 
 
 @pytest.mark.parametrize('reject',[False,True])
