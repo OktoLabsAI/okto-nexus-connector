@@ -1,8 +1,8 @@
 # Current development dependency
 
-Connector 0.0.15 pins Core 0.0.16 from `6a9a91a2e94c305adcafdb9e21ffc7e6139b1391`.
-The unpublished wheel SHA-256 is `9b8a0471a4ed352b4fd285f7c39f73026f0ec6ab854ee781e87b7b13531a19e0`.
-The Core wheel includes the private transcript and reports settled capacity for the reviewed hosted Pi owner.
+Connector 0.0.15 pins Core 0.0.16 from `a62aa2a4a4b9dca8d2ce13baa088f7a4d44d5b1f`.
+The unpublished wheel SHA-256 is `7945c77161d8527e0978f7e085a59cfb0c3c343127be39ff1009b6931a107760`.
+The Core wheel includes the private transcript and native draft editor for the reviewed hosted Pi owner.
 
 ## Previous development dependency
 
