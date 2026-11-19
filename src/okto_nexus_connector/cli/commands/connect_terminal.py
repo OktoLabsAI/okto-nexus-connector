@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +15,10 @@ from ..prompts import confirm
 _PROFILE = re.compile(r'[A-Za-z0-9_-]{1,80}')
 _ID = re.compile(r'[A-Za-z0-9_-]{1,160}')
 _SCOPE = ('server_id', 'executor_id', 'binding_id', 'workspace_id', 'workspace_binding_id', 'agent_id')
+_VIEWERS = {
+    'codex_app_server': ('Codex', 'codex_remote_read'),
+    'pi_rpc': ('Pi', 'pi_remote_read'),
+}
 
 
 def _tty(output):
@@ -50,13 +55,22 @@ def _operator_environment(credential_env):
     return {key: value for key, value in os.environ.items() if key.upper() in names}
 
 
-def _launch(executable, argv, scope, credential_env):
+def _launch(executable, argv, scope, credential_env, *, expected_strategy):
     """Run the Nexus client in this terminal and read its non-secret detach receipt."""
     try:
         with TemporaryDirectory(prefix='nexus-connect-terminal-') as temporary:
             receipt = Path(temporary) / 'attachment.json'
-            result = subprocess.run([str(executable), *argv[1:], '--attachment-receipt', str(receipt)],
-                                    env=_operator_environment(credential_env), check=False)
+            previous_interrupt = None
+            if expected_strategy == 'pi_remote_read':
+                # The shared console delivers Ctrl+C to both processes. Pi's
+                # viewer detaches on it and writes the receipt we must read.
+                previous_interrupt = signal.signal(signal.SIGINT, lambda *_: None)
+            try:
+                result = subprocess.run([str(executable), *argv[1:], '--attachment-receipt', str(receipt)],
+                                        env=_operator_environment(credential_env), check=False)
+            finally:
+                if previous_interrupt is not None:
+                    signal.signal(signal.SIGINT, previous_interrupt)
             if result.returncode != 0:
                 return {'status': 'unavailable', 'reason': 'nexus_attach_failed'}
             with receipt.open('rb') as file:
@@ -77,7 +91,7 @@ def _launch(executable, argv, scope, credential_env):
             or type(value.get('attachment_id')) is not str or not re.fullmatch(r'att_[0-9a-f]{32}', value['attachment_id'])
             or type(value.get('capability_revision')) is not str
             or not re.fullmatch(r'sha256:[0-9a-f]{64}', value['capability_revision'])
-            or value.get('attach_strategy') != 'codex_remote_read'):
+            or value.get('attach_strategy') != expected_strategy):
         return {'status': 'unconfirmed', 'reason': 'attachment_receipt_mismatch'}
     return {key: value[key] for key in ('status', 'scope', 'attachment_id', 'attach_strategy', 'capability_revision')}
 
@@ -92,7 +106,9 @@ def offer_terminal(args, output, result):
     binding = result.get('current_binding') or result.get('binding') or {}
     scope = {key: binding.get(key) for key in _SCOPE}
     revision = binding.get('binding_revision')
-    if (binding.get('adapter_id') != 'codex_app_server' or type(revision) is not int or revision <= 0
+    adapter = binding.get('adapter_id')
+    viewer = _VIEWERS.get(adapter) if isinstance(adapter, str) else None
+    if (viewer is None or type(revision) is not int or revision <= 0
             or any(type(value) is not str or not _ID.fullmatch(value) for value in scope.values())):
         if requested != 'none':
             interaction.update(status='unavailable', reason='binding_presentation_unavailable')
@@ -110,7 +126,8 @@ def offer_terminal(args, output, result):
         interaction.update(status='unavailable', reason='nexus_cli_unavailable')
         return result
     output.line('Connection saved.')
-    if requested == 'ask' and not confirm('Open Codex in this terminal?', non_interactive=False, default=False):
+    name, strategy = viewer
+    if requested == 'ask' and not confirm(f'Open {name} in this terminal?', non_interactive=False, default=False):
         interaction['status'] = 'declined'
         return result
     if profile is None:
@@ -125,7 +142,7 @@ def offer_terminal(args, output, result):
             interaction.update(status='unavailable', reason='operator_profile_invalid')
             return result
     interaction['attach_argv'] = [*argv, profile]
-    launched = _launch(executable, interaction['attach_argv'], scope, args.credential_env)
+    launched = _launch(executable, interaction['attach_argv'], scope, args.credential_env, expected_strategy=strategy)
     interaction.update(launched)
     if launched['status'] == 'detached':
         interaction['resolved_surface'] = 'native'
