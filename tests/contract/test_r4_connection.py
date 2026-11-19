@@ -12,6 +12,7 @@ from nexus_connector_core import (
 from nexus_connector_core.discovery import fingerprint
 from nexus_connector_core.journal import open_journal
 from nexus_connector_core.native.pi_renderer import PiEditorUpdate
+from nexus_connector_core.pi_control_link import PI_RUN_CONTROL_REVISION, encode_pi_run_control
 from nexus_connector_core.presentation_link import (
     PI_PRESENTATION_CLOSE, PI_PRESENTATION_EDIT, PI_PRESENTATION_LINK_REVISION, PI_PRESENTATION_NEXT,
     PI_PRESENTATION_OPEN, PI_PRESENTATION_PROBE, decode_pi_presentation_frame, decode_pi_presentation_output,
@@ -292,6 +293,35 @@ def operation(operation_id='op', action='turn.submit'):
              'grant_id': 'grant', 'expected_turn_id': None}
     frame['intent_hash'] = r4_submit_intent_hash(frame)
     return frame
+
+
+@pytest.mark.parametrize('mode', ['current', 'unnegotiated', 'stale', 'oversize'])
+async def test_pi_control_reserves_only_a_negotiated_current_exact_target(mode):
+    socket = Socket()
+    capabilities = () if mode == 'unnegotiated' else (PI_RUN_CONTROL_REVISION,)
+    state = replace(STATE, control_capabilities=capabilities)
+    frame = operation('pi-stop', 'turn.interrupt')
+    if mode == 'stale':
+        frame['connection_generation'] = 1
+    target = 'prun_' + '1' * 32
+    raw = encode_pi_run_control(frame, target)
+    limit = len(raw) - 1 if mode == 'oversize' else len(raw)
+    owner = R4Connection(socket, state, boot_id='boot', control_bytes=limit)
+    owner.start()
+    try:
+        await attach(owner, socket)
+        await socket.incoming.put(raw.decode())
+        if mode == 'current':
+            item = await asyncio.wait_for(owner.receive_operation(control=True), 2)
+            assert item.encoded == raw and item.expected_pi_run_id == target
+            assert owner.require_current(item) == frame
+            owner.release_operation(item)
+        else:
+            with pytest.raises(ConnectorError):
+                await asyncio.wait_for(owner.receive_operation(control=True), 2)
+        assert owner.pending_operations == 0
+    finally:
+        await owner.close()
 
 
 def granted(request):

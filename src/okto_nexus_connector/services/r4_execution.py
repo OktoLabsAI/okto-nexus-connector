@@ -871,6 +871,15 @@ class R4ExecutionOwner:
             raise CoreError('SESSION_UNKNOWN', 'r4_execution')
         runtime = session.runtime
         context = self._context(item, runtime)
+        if item.expected_pi_run_id is not None:
+            operation = ControlOperation(frame['operation_id'], frame['session_id'], action.split('.')[1],
+                text=payload.get('text'), reason=payload.get('reason'),
+                expected_pi_run_id=item.expected_pi_run_id)
+            context = await self._bind(item, runtime, context, applied_operation=operation)
+            receipt = await self._command_receipt(lambda: runtime.control(operation, context))
+            operation_key = OperationKey(frame['server_id'], frame['executor_id'], frame['operation_id'])
+            return project_r4_bound_receipt(self._capacity_bindings[item.token], receipt,
+                                          key=operation_key, receipt_revision=1)
         if action not in ('approval.decide', 'input.provide'):
             context = await self._bind(item, runtime, context)
         if action == 'turn.submit':
