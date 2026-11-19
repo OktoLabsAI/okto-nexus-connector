@@ -99,7 +99,8 @@ async def negotiate_r4_control(
         management_revision: str, snapshot_format: int, boot_id: str,
         report_reconciliation: ReconcileReporter,
         max_reconcile_attempts: int = 3, recover_before_report=None, recovery_lanes=None,
-        capacity_enabled: bool = False, reconciliation_accepted=None) -> R4ControlState:
+        capacity_enabled: bool = False, reconciliation_accepted=None,
+        presentation_enabled: bool = False) -> R4ControlState:
     """Negotiate one socket; a failed journal cannot become an empty report."""
     if not boot_id or max_reconcile_attempts < 1 or type(capacity_enabled) is not bool:
         raise ValueError("Invalid R4 control settings.")
@@ -118,6 +119,9 @@ async def negotiate_r4_control(
     }
     if capacity_enabled:
         hello['control_capabilities'].append(CAPACITY_CONTRACT_REVISION)
+    if presentation_enabled:
+        from nexus_connector_core.presentation_link import PRESENTATION_LINK_REVISION
+        hello['control_capabilities'].append(PRESENTATION_LINK_REVISION)
     await _send(websocket, hello)
     welcome = await _receive(websocket)
     if (welcome["type"] != "welcome" or
@@ -255,7 +259,7 @@ async def connect_r4_control(
         link_url: str, ticket: str, *, server_id: str, executor_id: str,
         management_revision: str, snapshot_format: int, boot_id: str,
         report_reconciliation: ReconcileReporter, recover_before_report=None, recovery_lanes=None,
-        capacity_enabled: bool = False, reconciliation_accepted=None):
+        capacity_enabled: bool = False, reconciliation_accepted=None, presentation_enabled: bool = False):
     """Open an authenticated R4 socket and return it with control state."""
     validate_link_url(link_url)
     if urlsplit(link_url).scheme not in ("wss", "ws"):
@@ -275,6 +279,7 @@ async def connect_r4_control(
             report_reconciliation=report_reconciliation, recover_before_report=recover_before_report,
             recovery_lanes=recovery_lanes, capacity_enabled=capacity_enabled,
             reconciliation_accepted=reconciliation_accepted,
+            presentation_enabled=presentation_enabled,
         )
         return websocket, state
     except BaseException:
@@ -285,7 +290,7 @@ async def connect_r4_control(
 async def connect_r4_connection(link_url: str, ticket: str, *, server_id: str,
         executor_id: str, management_revision: str, snapshot_format: int,
         boot_id: str, report_reconciliation: ReconcileReporter, recover_before_report=None,
-        capacity_handler=None, reconciliation_accepted=None):
+        capacity_handler=None, reconciliation_accepted=None, presentation_handler=None):
     """Negotiate a real socket and transfer its reader to one connection owner."""
     from .r4_connection import R4Connection
     lanes = {}
@@ -293,7 +298,8 @@ async def connect_r4_connection(link_url: str, ticket: str, *, server_id: str,
         server_id=server_id, executor_id=executor_id, management_revision=management_revision,
         snapshot_format=snapshot_format, boot_id=boot_id, report_reconciliation=report_reconciliation,
         recover_before_report=recover_before_report,recovery_lanes=lanes,
-        capacity_enabled=callable(capacity_handler), reconciliation_accepted=reconciliation_accepted)
+        capacity_enabled=callable(capacity_handler), reconciliation_accepted=reconciliation_accepted,
+        presentation_enabled=callable(presentation_handler))
     async def resume(current):
         from .proxy import resolve_proxy
         for attempt in range(4):
@@ -327,7 +333,7 @@ async def connect_r4_connection(link_url: str, ticket: str, *, server_id: str,
     try:
         connection = R4Connection(websocket, state, boot_id=boot_id, initial_lanes=lanes,
             resume=resume if 'connection_resume_v1' in state.control_capabilities else None,
-            capacity_handler=capacity_handler)
+            capacity_handler=capacity_handler, presentation_handler=presentation_handler)
         connection.start()
         return connection
     except BaseException:

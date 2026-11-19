@@ -29,6 +29,9 @@ from nexus_connector_core.session_release import (
 from nexus_connector_core.startup_refusal_link import (
     STARTUP_REFUSAL_REVISION, encode_startup_refusal, decode_startup_refusal,
 )
+from nexus_connector_core.presentation_link import (
+    PRESENTATION_LINK_REVISION, PRESENTATION_READ, encode_presentation_frame, presentation_result,
+)
 
 
 _CONTROL = frozenset({'turn.steer', 'turn.interrupt', 'runtime.close',
@@ -54,7 +57,8 @@ class R4Connection:
                  regular_items=32, control_items=8, regular_bytes=256 * 1024,
                  control_bytes=128 * 1024, max_requests=16, max_lanes=256,
                  request_timeout=15.0, send_timeout=5.0, heartbeat_seconds=15.0, initial_lanes=None, resume=None,
-                 capacity_handler=None, max_capacity_requests=8, max_capacity_recovery=4, max_capacity_replies=64):
+                 capacity_handler=None, max_capacity_requests=8, max_capacity_recovery=4, max_capacity_replies=64,
+                 presentation_handler=None):
         limits = (regular_items, control_items, regular_bytes, control_bytes, max_requests, max_lanes,
                   max_capacity_requests, max_capacity_recovery, max_capacity_replies)
         if (not state.control_ready or not boot_id or
@@ -64,6 +68,11 @@ class R4Connection:
         capacity_negotiated = CAPACITY_CONTRACT_REVISION in state.control_capabilities
         if capacity_negotiated and not callable(capacity_handler):
             raise ValueError('Negotiated capacity requires an installed handler.')
+        presentation_negotiated = PRESENTATION_LINK_REVISION in state.control_capabilities
+        if presentation_negotiated and not callable(presentation_handler):
+            raise ValueError('Negotiated presentation reads require an installed handler.')
+        self._presentation_handler = presentation_handler if presentation_negotiated else None
+        self._presentation_tasks = {}
         self.websocket, self.state, self.boot_id = websocket, state, boot_id
         self._capacity_handler = capacity_handler if capacity_negotiated else None
         self._capacity_limits = {False: max_capacity_requests, True: max_capacity_recovery}
@@ -131,11 +140,13 @@ class R4Connection:
                     server_id=s.server_id, executor_id=s.executor_id,
                     connection_id=s.connection_id, connection_generation=s.connection_generation)
 
-    async def send(self, raw):
+    async def send(self, raw, *, expected_socket=None):
         """Serialized writer compatible with the existing lease helper."""
         self._require_online()
         async with self._write_lock:
             self._require_online()
+            if expected_socket is not None and self.websocket is not expected_socket:
+                return
             try:
                 await asyncio.wait_for(self.websocket.send(raw), self.send_timeout)
             except Exception as error:
@@ -221,6 +232,9 @@ class R4Connection:
         tasks = [t for t in (self._reader, self._heartbeat, self._closer, self._capacity_writer) if t is not None]
         tasks.extend(self._producers)
         tasks.extend(item[0] for item in self._capacity_tasks.values())
+        for task in self._presentation_tasks.values():
+            task.cancel()
+        tasks.extend(self._presentation_tasks.values())
         if tasks:
             await asyncio.shield(asyncio.gather(*tasks, return_exceptions=True))
 
@@ -267,6 +281,8 @@ class R4Connection:
                 self._last_received_monotonic = time.monotonic()
                 if kind in CAPACITY_REQUEST_TYPES:
                     self._admit_capacity(frame, encoded)
+                elif kind == PRESENTATION_READ:
+                    self._admit_presentation(frame)
                 elif kind == 'operation.submit':
                     self._admit(frame, encoded)
                 elif release_reply or startup_reply:
@@ -332,6 +348,33 @@ class R4Connection:
             raise
         except Exception as error:
             self._fence(error)
+
+    def _admit_presentation(self, frame):
+        request_id = frame['request_id']
+        if request_id in self._presentation_tasks or len(self._presentation_tasks) >= 4:
+            return
+        task = asyncio.create_task(self._serve_presentation(frame), name='r4-presentation-read')
+        self._presentation_tasks[request_id] = task
+
+        def finished(done):
+            self._presentation_tasks.pop(request_id, None)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(finished)
+
+    async def _serve_presentation(self, frame):
+        socket = self.websocket
+        try:
+            self._lane(frame['scope'])
+            async with asyncio.timeout(4):
+                context = await self._presentation_handler(frame)
+            self._lane(frame['scope'])
+            response = encode_presentation_frame(presentation_result(frame, context))
+        except (CoreError, TimeoutError, ValueError):
+            response = encode_presentation_frame(presentation_result(frame, None))
+        if self.online and self.websocket is socket:
+            await self.send(response.decode('utf-8'), expected_socket=socket)
 
     async def _try_resume(self, socket):
         # An uncertain request must use durable reconciliation. A quiet wire

@@ -409,6 +409,25 @@ class R4DaemonControl:
             return capacity_denial_frame(frame, 'NOT_AUTHORIZED')
         return await execution.capacity_control(frame)
 
+    async def _presentation_read(self, frame):
+        from nexus_connector_core import CoreError, NativeSessionTarget
+
+        connection, execution = self.connection, self.execution
+        if (connection is None or execution is None or not connection.online
+                or execution.connection is not connection or any(
+                    frame[name] != getattr(connection.state, name) for name in (
+                        'server_id', 'executor_id', 'connection_id', 'connection_generation'))):
+            return None
+        try:
+            metadata = await self.host.read_r4_codex_thread(frame['scope'], NativeSessionTarget(**frame['target']),
+                frame['thread_id'], connection_id=frame['connection_id'],
+                connection_generation=frame['connection_generation'])
+        except CoreError:
+            return None
+        if self.connection is connection and self.execution is execution and connection.online:
+            return metadata.get('viewer_context')
+        return None
+
     async def _attempt(self):
         self._recovery_error = None
         self._reporter = None
@@ -524,6 +543,7 @@ class R4DaemonControl:
                     report_reconciliation=report_reconciliation,
                     reconciliation_accepted=self._reconciliation_accepted,
                     recover_before_report=recover_events,
+                    presentation_handler=self._presentation_read,
                     **({'capacity_handler': self._capacity_control} if self.host.capacity_enabled else {})), min(30, remaining))
             finally:
                 recovery_active.clear()
