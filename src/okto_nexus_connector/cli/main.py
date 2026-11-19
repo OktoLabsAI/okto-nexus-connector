@@ -135,6 +135,12 @@ def build_parser() -> argparse.ArgumentParser:
     connect.add_argument('--customize', action='store_true', help='edit advanced preferences before reviewing a new project connection')
     connect.add_argument('--operator-identity', help='imported operator identity for Nexus configuration')
     connect.add_argument('--operator-proof-ref', help='operator approval reference from Nexus')
+    terminal = connect.add_mutually_exclusive_group()
+    terminal.add_argument('-i', '--interactive', dest='terminal', const=True, action='store_const',
+                          help='open an available native session after connection')
+    terminal.add_argument('--no-interactive', dest='terminal', const=False, action='store_const',
+                          help='skip the terminal after setup')
+    connect.add_argument('--operator-profile', help='saved Nexus human operator login for opening the terminal')
 
     for wizard in (configure, connect):
         startup = wizard.add_mutually_exclusive_group()

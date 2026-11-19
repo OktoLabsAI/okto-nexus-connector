@@ -45,7 +45,10 @@ async def _dispatch(args, output: Output):
         return await run_harness_config(args, output, root)
     if command == "connect":
         from .connect import run_connect
-        return await run_connect(args, output, root)
+        from .connect_terminal import offer_terminal, validate_terminal_request
+        validate_terminal_request(args, output)
+        result = await run_connect(args, output, root)
+        return offer_terminal(args, output, result)
     if command == "identity":
         from .identity import run_identity
         return await run_identity(args, output, root)

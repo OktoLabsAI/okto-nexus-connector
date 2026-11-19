@@ -43,6 +43,29 @@ host registration, probes and daemon startup untouched; an identity explicitly
 imported beforehand remains stored. Reconnect retains the original choices and
 does not accept `--customize` as an implicit edit of an already reviewed request.
 
+### Open the session after connect
+
+After a Codex connection is confirmed, an interactive terminal offers to open a
+live session, with No as the default. To request the viewer directly or skip the
+offer, use these options on `connect`.
+
+```sh
+okto-nexus-connector connect -i --operator-profile OPERATOR_PROFILE
+okto-nexus-connector connect --no-interactive
+```
+
+`--no-interactive` after `connect` only skips the final offer. Setup reviews
+still apply. `-i` requires a terminal. Use the Nexus CLI installed on a computer
+where you already have a saved human operator login for the same server.
+The Connector's agent credential cannot open a terminal viewer.
+
+The read-only viewer opens the confirmed binding and can ask which live session
+to use. It uses the reviewed Windows Codex frontend and Connector-hosted app-server.
+If the viewer is unavailable, the confirmed connection stays saved. The
+interaction result reports the viewer outcome and includes the command for
+opening the same binding later. Press Ctrl+] to leave the viewer while the
+session continues on the host.
+
 ## Remote bootstrap without an agent key
 
 On the Connector host, prepare a reviewed draft with passive installation selection:
