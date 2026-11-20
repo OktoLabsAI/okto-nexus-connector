@@ -215,7 +215,7 @@ class R4ExecutionOwner:
             logging.getLogger(__name__).warning(
                 'Harness operation failed: binding=%s action=%s code=%s; control connection retained',
                 binding_id, receipt.get('action'), code)
-        elif receipt['stage'] in ('SUBMITTED', 'SUCCEEDED'):
+        elif receipt['stage'] in ('SUBMITTED', 'ACCEPTED', 'SUCCEEDED'):
             self.execution_errors.pop(binding_id, None)
 
     def start(self):
