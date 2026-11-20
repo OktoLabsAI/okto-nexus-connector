@@ -193,6 +193,16 @@ async def test_pi_presentation_control_pulls_exact_editor_and_retires_on_disconn
             1, 'Draft accepted by the editor')
         assert calls == ['prove', 'prove', ('enter', None)]
 
+        readers = ['piv_' + char * 32 for char in 'cde']
+        reader_options = options | {'editor': False}
+        for reader in readers[:2]:
+            assert (await request(PI_PRESENTATION_OPEN, stream_id=reader, **scope, **reader_options))['state'] == 'opened'
+        assert (await request(PI_PRESENTATION_OPEN, stream_id=readers[2], **scope, **reader_options))['state'] == 'refused'
+        for reader in readers[:2]:
+            assert (await request(PI_PRESENTATION_EDIT, stream_id=reader, key='enter', text=None, sequence=1))['state'] == 'refused'
+            assert (await request(PI_PRESENTATION_CLOSE, stream_id=reader))['state'] == 'closed'
+        retired.clear()
+
         assert (await request(PI_PRESENTATION_NEXT))['state'] == 'idle'
         owner._lanes.clear()
         assert (await request(PI_PRESENTATION_EDIT, key='enter', text=None, sequence=2))['state'] == 'refused'

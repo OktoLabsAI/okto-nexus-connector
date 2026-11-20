@@ -14,10 +14,14 @@ from nexus_connector_core.presentation_link import (
     encode_pi_presentation_output,
 )
 
+_MAX_SESSIONS = 2
+_MAX_READERS_PER_SESSION = 2
+
 
 @dataclass(slots=True)
 class _Viewer:
     scope: dict
+    editor: bool
     touched: float
     stack: AsyncExitStack = field(default_factory=AsyncExitStack)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -79,10 +83,18 @@ class PiPresentationStreams:
             return {'state': 'available'}
 
         identity = frame['stream_id']
-        if (identity in self._viewers or len(self._viewers) >= 2
-                or any(other.scope == scope for other in self._viewers.values())):
+        if identity in self._viewers:
             return {'state': 'refused'}
-        viewer = _Viewer(scope, asyncio.get_running_loop().time())
+        active_sessions = {other.scope['session_id'] for other in self._viewers.values()}
+        session_id = scope['session_id']
+        if session_id not in active_sessions and len(active_sessions) >= _MAX_SESSIONS:
+            return {'state': 'refused'}
+        editor = frame['editor']
+        same_mode_count = sum(other.scope['session_id'] == session_id and other.editor == editor
+                              for other in self._viewers.values())
+        if same_mode_count >= (1 if editor else _MAX_READERS_PER_SESSION):
+            return {'state': 'refused'}
+        viewer = _Viewer(scope, editor, asyncio.get_running_loop().time())
         self._viewers[identity] = viewer
         async with viewer.lock:
             try:
