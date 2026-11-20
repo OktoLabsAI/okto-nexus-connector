@@ -127,6 +127,9 @@ async def negotiate_r4_control(
         from nexus_connector_core.pi_control_link import PI_RUN_CONTROL_REVISION
         from nexus_connector_core.presentation_link import PI_PRESENTATION_LINK_REVISION
         hello['control_capabilities'].extend((PI_PRESENTATION_LINK_REVISION, PI_RUN_CONTROL_REVISION))
+        if capacity_enabled:
+            from nexus_connector_core.turn_operation import PI_LITERAL_INPUT_REVISION
+            hello['control_capabilities'].append(PI_LITERAL_INPUT_REVISION)
     await _send(websocket, hello)
     welcome = await _receive(websocket)
     if (welcome["type"] != "welcome" or

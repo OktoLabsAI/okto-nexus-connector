@@ -13,7 +13,7 @@ import secrets
 import time
 
 from nexus_connector_core import (
-    CoreError, LaunchIntent, OpenOperation, TurnOperation, ControlOperation, validate_harness_settings,
+    CoreError, LaunchIntent, OpenOperation, ControlOperation, validate_harness_settings,
     project_r4_open_receipt, project_r4_turn_receipt, project_r4_steer_receipt,
     project_r4_interrupt_receipt, project_r4_close_receipt,
     project_r4_decision_receipt, r4_close_operation, r4_native_decision_operation,
@@ -26,6 +26,7 @@ from nexus_connector_core import (
 )
 from nexus_connector_core.native.adapter_types import NativeAdapterError
 from nexus_connector_core.startup_refusal_link import STARTUP_REFUSAL_REVISION
+from nexus_connector_core.turn_operation import r4_turn_operation
 
 from ..errors import ConnectorError
 from ..transport.lease_denial import LeaseRequestDenied
@@ -883,8 +884,8 @@ class R4ExecutionOwner:
         if action not in ('approval.decide', 'input.provide'):
             context = await self._bind(item, runtime, context)
         if action == 'turn.submit':
-            receipt = await self._command_receipt(lambda: runtime.submit(TurnOperation(frame['operation_id'], frame['session_id'],
-                payload['text'], frame.get('expected_turn_id')), context))
+            operation = r4_turn_operation(frame)
+            receipt = await self._command_receipt(lambda: runtime.submit(operation, context))
             project = project_r4_turn_receipt
         elif action in ('turn.steer', 'turn.interrupt'):
             receipt = await self._command_receipt(lambda: runtime.control(ControlOperation(frame['operation_id'], frame['session_id'],

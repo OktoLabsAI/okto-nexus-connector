@@ -143,6 +143,22 @@ def operation(opening, action, payload, **extra):
             'expected_turn_id': None, **extra}
 
 
+async def test_literal_turn_on_unqualified_owner_is_refused_without_fallback(execution):
+    owner, connection, factory, receipts, opening = execution
+    await connection.emit(opening)
+    assert (await observed(receipts, owner))['stage'] == 'SUBMITTED'
+    literal = operation(opening, 'turn.submit', {'text': '/fixture café  ', 'literal': True},
+                        operation_id='literal-turn')
+    await connection.emit(literal)
+    refusal = await observed(receipts, owner)
+    assert refusal['operation_id'] == 'literal-turn'
+    assert refusal['stage'] == 'FAILED' and refusal['error_code'] == 'CAPABILITY_UNSUPPORTED'
+    assert not refusal['possible_effect'] and factory.native.sent == []
+    await connection.emit(operation(opening, 'turn.submit', {'text': 'Next ordinary turn'}))
+    assert (await observed(receipts, owner))['stage'] == 'SUBMITTED'
+    assert factory.native.sent == [('send_turn', {'text': 'Next ordinary turn'}, 'turn.submit', None)]
+
+
 async def observed(queue, owner):
     # This is a deadlock watchdog, not a receipt-latency requirement. The
     # installed Core opens durable journals in worker threads; hosted Windows
