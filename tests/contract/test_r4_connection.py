@@ -12,7 +12,9 @@ from nexus_connector_core import (
 from nexus_connector_core.discovery import fingerprint
 from nexus_connector_core.journal import open_journal
 from nexus_connector_core.native.pi_renderer import PiEditorUpdate
-from nexus_connector_core.targeted_control_link import CLAUDE_OPERATION_STEER_CODEC, PI_RUN_CONTROL_CODEC
+from nexus_connector_core.targeted_control_link import (
+    CLAUDE_OPERATION_INTERRUPT_CODEC, CLAUDE_OPERATION_STEER_CODEC, PI_RUN_CONTROL_CODEC,
+)
 from nexus_connector_core.presentation_link import (
     PI_PRESENTATION_CLOSE, PI_PRESENTATION_EDIT, PI_PRESENTATION_LINK_REVISION, PI_PRESENTATION_NEXT,
     PI_PRESENTATION_OPEN, PI_PRESENTATION_PROBE, decode_pi_presentation_frame, decode_pi_presentation_output,
@@ -309,6 +311,7 @@ def operation(operation_id='op', action='turn.submit'):
 @pytest.mark.parametrize('codec,target,action', [
     (PI_RUN_CONTROL_CODEC, 'prun_' + '1' * 32, 'turn.interrupt'),
     (CLAUDE_OPERATION_STEER_CODEC, 'op_reviewed_target', 'turn.steer'),
+    (CLAUDE_OPERATION_INTERRUPT_CODEC, 'op_reviewed_target', 'turn.interrupt'),
 ])
 async def test_control_reserves_only_a_negotiated_current_exact_target(mode, codec, target, action):
     socket = Socket()
