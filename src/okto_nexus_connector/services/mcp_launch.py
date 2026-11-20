@@ -11,7 +11,7 @@ from nexus_connector_core.harness_config import harness_http_template, render_co
 from nexus_connector_core.protocol import canonical_json
 
 from ..errors import ConnectorError
-from ..transport.https_client import R4SessionCapability, origin_of
+from ..transport.https_client import R4SessionCapability, is_loopback_origin, origin_of
 
 
 MCP_SESSION_ACTIONS = (
@@ -129,11 +129,10 @@ def mcp_template(capability, *, adapter_id, approved_origin, process_http=False)
                              "The session MCP URL differs from the approved Server origin.")
     # Native build qualification remains a Core launch gate. This selects
     # the existing public config format; it does not qualify a provider build.
-    from urllib.parse import urlsplit
-    loopback = urlsplit(cap.mcp_url).hostname in ("localhost", "127.0.0.1", "::1")
+    loopback = is_loopback_origin(approved_origin)
     return harness_http_template(adapter_id, cap.mcp_url, cap.capability_ref,
         entry_name="nexus_"+hashlib.sha256(capability.capability_ref.encode()).hexdigest()[:16] if process_http else "nexus",
         approved_origins={approved_origin},
-        # The host has already approved and authenticated this exact origin.
-        allow_remote_http=approved_origin.startswith("http://"),
+        # An approved loopback origin needs no exception for remote plaintext HTTP.
+        allow_remote_http=not loopback and approved_origin.startswith("http://"),
         harness_is_local=loopback, loopback_reachable=loopback, format_qualified=True)

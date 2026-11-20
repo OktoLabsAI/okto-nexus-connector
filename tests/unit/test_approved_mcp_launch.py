@@ -111,11 +111,17 @@ async def test_default_owner_mcp_configuration_and_secret_environment(execution,
         await cap_owner.close()
 
 
-def test_session_home_owner_reuse_is_exact_and_foreign_content_is_not_overwritten(tmp_path):
+@pytest.mark.parametrize(("origin", "remote_http"), [
+    ("https://nexus.test", False),
+    ("http://127.0.0.1:8202", False),
+    ("http://192.168.0.146:8202", True),
+])
+def test_session_home_owner_reuse_is_exact_and_foreign_content_is_not_overwritten(tmp_path, origin, remote_http):
     cap = R4SessionCapability("one", "mcp-cap:one", "nxc4_" + "s" * 40,
         {}, "nexus-mcp-session", MCP_SESSION_ACTIONS,
-        60, time.monotonic() + 60, "https://nexus.test/mcp")
-    template = mcp_template(cap, adapter_id="codex_app_server", approved_origin="https://nexus.test")
+        60, time.monotonic() + 60, origin + "/mcp")
+    template = mcp_template(cap, adapter_id="codex_app_server", approved_origin=origin)
+    assert template.allow_remote_http is remote_http
     frame = dict(server_id="srv", executor_id="exe", binding_id="binding", session_id="session",
                  session_owner_generation=1)
     kwargs = dict(frame=frame, configuration_digest="sha256:" + "a" * 64, template=template)

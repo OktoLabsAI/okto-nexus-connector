@@ -15,6 +15,7 @@ from nexus_connector_core.protocol import canonical_json
 
 from ..errors import ConnectorError
 from ..storage.state_store import LaunchConfigurationRecord
+from ..transport.https_client import is_loopback_origin
 from .execution_selection import (resolve_execution_selection,
                                   revalidate_opening_selection,
                                   revalidate_running_selection)
@@ -145,6 +146,7 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
     claude_profile = None
     if (claude_presentation_enabled and record.adapter_id == 'claude_stream' and home is not None
             and {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'}.intersection(record.secret_bindings)
+            and (http is None or not http.origin.startswith('http://') or is_loopback_origin(http.origin))
             and not inherit_mcps and not frame['payload'].get('mcp_preset')
             and frame['payload'].get('harness_settings', {}).get('permission_mode') == 'plan'):
         from nexus_connector_core import reviewed_claude_terminal_candidate
