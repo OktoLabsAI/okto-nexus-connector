@@ -18,6 +18,7 @@ _SCOPE = ('server_id', 'executor_id', 'binding_id', 'workspace_id', 'workspace_b
 _VIEWERS = {
     'codex_app_server': ('Codex', 'codex_remote_read'),
     'pi_rpc': ('Pi', 'pi_remote_read'),
+    'claude_stream': ('Claude', 'claude_remote_read'),
 }
 
 
@@ -61,9 +62,9 @@ def _launch(executable, argv, scope, credential_env, *, expected_strategy):
         with TemporaryDirectory(prefix='nexus-connect-terminal-') as temporary:
             receipt = Path(temporary) / 'attachment.json'
             previous_interrupt = None
-            if expected_strategy == 'pi_remote_read':
-                # The shared console delivers Ctrl+C to both processes. Pi's
-                # viewer detaches on it and writes the receipt we must read.
+            if expected_strategy in ('pi_remote_read', 'claude_remote_read'):
+                # Ctrl+C reaches the launcher too. The viewer handles detach
+                # and writes the receipt before the launcher returns.
                 previous_interrupt = signal.signal(signal.SIGINT, lambda *_: None)
             try:
                 result = subprocess.run([str(executable), *argv[1:], '--attachment-receipt', str(receipt)],

@@ -73,7 +73,9 @@ async def test_explicit_open_rejects_incompatible_input_before_setup(wizard, mon
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('adapter,strategy', [('codex_app_server', 'codex_remote_read'), ('pi_rpc', 'pi_remote_read')])
+@pytest.mark.parametrize('adapter,strategy', [
+    ('codex_app_server', 'codex_remote_read'), ('pi_rpc', 'pi_remote_read'), ('claude_stream', 'claude_remote_read'),
+])
 @pytest.mark.parametrize('state', ['valid', 'wrong-scope', 'wrong-strategy', 'failed', 'missing'])
 async def test_connector_starts_saved_human_viewer_and_checks_receipt(wizard, monkeypatch, tmp_path, state, adapter, strategy):
     run, calls, saved = wizard
@@ -91,7 +93,7 @@ async def test_connector_starts_saved_human_viewer_and_checks_receipt(wizard, mo
                              '--binding-revision', '4', '--operator-profile', 'human']
         assert argv[-2] == '--attachment-receipt'
         assert not {'ANTHROPIC_API_KEY', 'TERM'} & env.keys()
-        if strategy == 'pi_remote_read':
+        if strategy in ('pi_remote_read', 'claude_remote_read'):
             assert signal.getsignal(signal.SIGINT) is not previous_interrupt
             signal.raise_signal(signal.SIGINT)
         else:
@@ -128,6 +130,6 @@ async def test_pending_and_unqualified_bindings_do_not_offer_viewer(wizard, monk
     monkeypatch.setattr(connect_terminal, '_nexus_executable', lambda: pytest.fail('No native viewer is eligible'))
     result.update(saved=False, status='awaiting_operator_approval')
     assert await run('-i') == result
-    result.update(saved=True, binding=BINDING | {'adapter_id': 'claude_stream'})
+    result.update(saved=True, binding=BINDING | {'adapter_id': 'unsupported'})
     assert (await run('-i'))['interaction']['status'] == 'unavailable'
     assert calls == ['setup', 'setup']

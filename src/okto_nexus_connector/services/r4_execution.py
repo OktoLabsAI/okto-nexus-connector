@@ -777,6 +777,8 @@ class R4ExecutionOwner:
                     raise
                 return await self._refuse_failed_preparation(item, None, prelease=True)
             self.connection.require_current(item)
+            claude_options = ({'claude_presentation_enabled': True}
+                              if getattr(self.connection, 'claude_presentation_enabled', False) else {})
             if self.launch_provider is not None:
                 setup = await self.launch_provider(item.frame)
             elif self.native_tools is not None:
@@ -788,9 +790,10 @@ class R4ExecutionOwner:
                 services = self.native_tools
                 setup = await ApprovedNativeLaunchProvider(services.owner, services.http,
                     services.key, self.host, self.store, candidate_provider=selected,
-                    require_current=current)(item.frame)
+                    require_current=current, **claude_options)(item.frame)
             else:
-                setup = await self.host.approved_launch(self.store, frame=item.frame, candidates=candidates)
+                setup = await self.host.approved_launch(self.store, frame=item.frame, candidates=candidates,
+                                                        **claude_options)
             self.connection.require_current(item)
             if (not isinstance(setup, R4LaunchSetup) or not callable(setup.environment) or
                     (setup.native_action_factory is not None and not callable(setup.native_action_factory)) or
@@ -802,7 +805,8 @@ class R4ExecutionOwner:
                 candidates=candidates, environment=setup.environment, factory=self.native_factory,
                 native_action_factory=setup.native_action_factory,
                 opening_selection=setup.opening_selection,
-                **({'pi_presentation_enabled': True} if getattr(self.connection, 'pi_presentation_enabled', False) else {}))
+                **({'pi_presentation_enabled': True} if getattr(self.connection, 'pi_presentation_enabled', False) else {}),
+                **claude_options)
             self.connection.require_current(item)
             session = _Session(runtime, frame['intent_hash'], 'stream_' + secrets.token_hex(16),
                 {k: frame[k] for k in _SCOPE}, frame['connection_id'], frame['connection_generation'])

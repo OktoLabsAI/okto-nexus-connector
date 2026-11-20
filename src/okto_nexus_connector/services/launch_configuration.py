@@ -118,7 +118,7 @@ def _resolve(store, frame, candidates, *, running=None, opening=None):
 
 
 async def approved_launch_setup(store, vault, *, frame, candidates, capability=None, http=None, tool_root=None,
-                               capability_metadata=None, opening=None):
+                               capability_metadata=None, opening=None, claude_presentation_enabled=False):
     """Compose the standard R4 launch port without raw wire environment or argv."""
     from .core_host import LaunchOverlay, LaunchSecretResolver, make_environment
     from .r4_execution import R4LaunchSetup
@@ -135,13 +135,27 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
         return await asyncio.to_thread(_resolve, store, decode_r4_frame(encoded),
                                        candidates, opening=opening)
     expected = await current(opening=opening)
-    _, record = expected
+    selection, record = expected
     native_factory = None
     templates, material = (), {}
     home = record.provider_home
     session_home = None
     process_http = False
     inherit_mcps = frame['payload'].get('harness_settings', {}).get('inherit_global_mcps') == 'enabled'
+    claude_profile = None
+    if (claude_presentation_enabled and record.adapter_id == 'claude_stream' and home is not None
+            and {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'}.intersection(record.secret_bindings)
+            and not inherit_mcps and not frame['payload'].get('mcp_preset')
+            and frame['payload'].get('harness_settings', {}).get('permission_mode') == 'plan'):
+        from nexus_connector_core import reviewed_claude_terminal_candidate
+        from nexus_connector_core.native.claude_terminal_profile import observe_claude_resume_profile
+
+        if reviewed_claude_terminal_candidate(selection.candidate):
+            native_home = Path(home)
+            if (native_home / '.claude').is_dir():
+                native_home /= '.claude'
+            claude_profile = await asyncio.to_thread(observe_claude_resume_profile, str(native_home),
+                                                     selection.workspace_root)
     if inherit_mcps and home is None:
         raise ConnectorError('WORKSPACE_UNAVAILABLE', 'mcp_client_configuration',
                              'Configure the harness directory on this host to include its global MCPs.')
@@ -163,7 +177,8 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
                 connection_generation=frame['connection_generation'], metadata_provider=capability_metadata)
         elif record.adapter_id in ('codex_app_server', 'claude_stream') and http is not None and tool_root is not None:
             from .mcp_launch import mcp_template, session_mcp_home
-            process_http = record.provider_home is not None and (not record.secret_bindings or inherit_mcps)
+            process_http = record.provider_home is not None and (
+                not record.secret_bindings or inherit_mcps or claude_profile is not None)
             template = mcp_template(capability, adapter_id=record.adapter_id, approved_origin=http.origin,
                                     process_http=process_http)
             if not process_http:
@@ -195,6 +210,18 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
                                  'The prepared adapter differs from the approved configuration.')
         await tools_current()
         result = await render(prepared)
+        if claude_profile is not None:
+            from nexus_connector_core import CoreError
+            from nexus_connector_core.environment import ProcessHTTPEnvironment
+            from nexus_connector_core.native.claude_terminal_profile import capture_claude_resume_profile
+
+            if await asyncio.to_thread(capture_claude_resume_profile, prepared, result) != claude_profile:
+                raise CoreError('PROFILE_DRIFT', 'claude_terminal_open', retry_safe=True)
+            if claude_profile.get('question_only') or claude_profile.get('read_approval'):
+                old = result if isinstance(result, ProcessHTTPEnvironment) else ProcessHTTPEnvironment(result, ())
+                result = ProcessHTTPEnvironment(old, old.http_templates, old.disabled_mcp_names, old.preset_entries,
+                    old.preset_strict, claude_question_only=claude_profile.get('question_only') is True,
+                    claude_read_approval=claude_profile.get('read_approval') is True)
         await tools_current()
         if await current() != expected:
             raise ConnectorError('PROFILE_DRIFT', 'launch_configuration',

@@ -20,7 +20,7 @@ from nexus_connector_core.presentation_link import (
 )
 
 from okto_nexus_connector.errors import ConnectorError
-from okto_nexus_connector.transport.pi_presentation import PiPresentationStreams
+from okto_nexus_connector.transport.terminal_presentation import TerminalPresentationStreams
 from okto_nexus_connector.transport.r4_connection import R4Connection
 from okto_nexus_connector.transport.wss_r4 import R4ControlState, apply_r4_lease
 
@@ -238,7 +238,7 @@ async def test_cancelled_pi_draft_edit_cannot_be_replayed_on_the_same_viewer():
             finally:
                 retired.set()
 
-    streams = PiPresentationStreams(Host())
+    streams = TerminalPresentationStreams(Host())
     identity = {'stream_id': 'piv_' + 'a' * 32, **CHANNEL}
     target = dict(adapter_id='pi_rpc', native_session_id='owned', opening_operation_id='opening', stream_epoch='epoch')
     assert await streams.request(identity | {'type': PI_PRESENTATION_OPEN, 'scope': SCOPE, 'target': target,

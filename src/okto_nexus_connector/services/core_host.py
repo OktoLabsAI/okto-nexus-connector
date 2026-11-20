@@ -23,6 +23,7 @@ from types import FunctionType
 from typing import Mapping
 
 from nexus_connector_core import (
+    ClaudeTerminalFreshGrant, reviewed_claude_terminal_candidate,
     InstallationCandidate, LocalRuntimeCore, NativeSessionOwnerProof, NativeSessionTarget, SQLiteOwnedSlotLedger,
     create_runtime, ExecutionCapacity, CoreError,
     require_audit_snapshot_not_rolled_back,
@@ -452,20 +453,22 @@ class CoreRuntimeHost:
     # -- runtime composition ------------------------------------------------
 
     async def approved_launch(self, store, *, frame, candidates, capability=None, http=None,
-                              capability_metadata=None, opening=None):
+                              capability_metadata=None, opening=None, claude_presentation_enabled=False):
         from .launch_configuration import approved_launch_setup
         from nexus_connector_core import encode_r4_frame
         candidates = tuple(candidates)
         setup = await approved_launch_setup(store, self._vault, frame=frame, candidates=candidates,
                                             capability=capability, http=http, capability_metadata=capability_metadata,
-                                            tool_root=self.root / 'runtime' / 'r4-mcp', opening=opening)
+                                            tool_root=self.root / 'runtime' / 'r4-mcp', opening=opening,
+                                            claude_presentation_enabled=claude_presentation_enabled)
         self._qualified_environments[setup.environment] = (
             store, encode_r4_frame(frame), candidates, setup.opening_selection)
         return setup
 
     @_owned_composition
     async def build_r4(self, store, *, frame, candidates, environment, factory=None,
-                       native_action_factory=None, opening_selection=None, pi_presentation_enabled=False):
+                       native_action_factory=None, opening_selection=None, pi_presentation_enabled=False,
+                       claude_presentation_enabled=False):
         """Compose an R4 runtime only from the approved host realization.
 
         Composition is effect-free and does not install execution authority.
@@ -532,6 +535,41 @@ class CoreRuntimeHost:
         hosted_pi = (pi_presentation_enabled and factory is None and candidate.adapter_id == 'pi_rpc'
             and candidate.launch_script and reviewed_pi_renderer_build(
                 candidate.version, sys.platform, candidate.architecture, candidate.build_identity))
+        hosted_claude = (claude_presentation_enabled and factory is None and qualified_environment
+                         and reviewed_claude_terminal_candidate(candidate))
+
+        async def claude_grant(prepared, session_id, context, child_environment):
+            from nexus_connector_core.native.claude_terminal_profile import (
+                capture_claude_resume_profile, observe_claude_resume_profile,
+            )
+            from .launch_configuration import _resolve
+
+            profile = await asyncio.to_thread(capture_claude_resume_profile, prepared, child_environment)
+            if profile is None:
+                return None
+            fields = ('server_id', 'executor_id', 'binding_id', 'agent_id', 'workspace_id',
+                      'session_owner_generation', 'authorization_revision', 'configuration_revision')
+            approved_frame = decode_r4_frame(encoded)
+            if session_id != selection.session_id or any(
+                    getattr(context, name) != approved_frame[name] for name in fields):
+                raise CoreError('STALE_GENERATION', 'claude_terminal_open', retry_safe=True)
+            _, approved = await asyncio.to_thread(_resolve, store, approved_frame,
+                                                   candidates, running=(selection,))
+            home = profile['state_home']
+
+            def require_current():
+                try:
+                    if _resolve(store, decode_r4_frame(encoded), candidates, running=(selection,)) != (selection, approved):
+                        raise CoreError('PROFILE_DRIFT', 'claude_terminal_open', retry_safe=True)
+                except ConnectorError:
+                    raise CoreError('PROFILE_DRIFT', 'claude_terminal_open', retry_safe=True) from None
+                if observe_claude_resume_profile(home, prepared.cwd) != profile:
+                    raise CoreError('PROFILE_DRIFT', 'claude_terminal_open', retry_safe=True)
+
+            return ClaudeTerminalFreshGrant(home, session_id, *(getattr(context, field) for field in fields),
+                prepared.profile_fingerprint, prepared.root_fingerprint, require_current,
+                question_only=profile.get('question_only') is True, read_approval=profile.get('read_approval') is True)
+
         runtime = create_runtime(journal=journal, environment=checked_environment,
             # The approved binding and local consent select this exact entry.
             # Preserve passive inventory evidence; only this scoped runtime
@@ -542,6 +580,7 @@ class CoreRuntimeHost:
             capacity_enabled=self.capacity_enabled,
             native_approvals_from_lease=True,
             pi_native_action=native_launch if native_action_factory is not None else None,
+            **({'claude_fresh': claude_grant} if hosted_claude else {}),
             **({'pi_hosted_rpc': True} if hosted_pi else {}))
         if native_action_factory is not None:
             native_owner = native_action_factory(runtime)
@@ -683,6 +722,31 @@ class CoreRuntimeHost:
                 verify()
 
             yield read, edit if editor else None
+
+    async def prove_r4_claude_presentation(self, scope, target, **channel):
+        async with self.open_r4_claude_presentation(scope, target, **channel):
+            pass
+
+    @asynccontextmanager
+    async def open_r4_claude_presentation(self, scope, target, *, connection_id, connection_generation):
+        stage = 'claude_presentation'
+        key, runtime = self._existing_presentation_runtime(scope, stage)
+
+        def verify():
+            if self._draining or self._runtimes.get(key) is not runtime:
+                raise CoreError('STALE_GENERATION', stage)
+
+        async with runtime.open_live_claude_terminal(scope, target, connection_id=connection_id,
+                                                     connection_generation=connection_generation) as frames:
+            verify()
+
+            async def read():
+                verify()
+                value = await anext(frames, None)
+                verify()
+                return value
+
+            yield read, None
 
     @property
     def _journals(self) -> list[SQLiteJournal]:

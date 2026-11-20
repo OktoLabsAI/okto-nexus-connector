@@ -62,10 +62,12 @@ class ApprovedToolLaunchProvider:
     runtime shutdown. No caller-supplied configuration renderer is required.
     """
 
-    def __init__(self, owner, http, key, host, store, *, candidate_provider, require_current):
+    def __init__(self, owner, http, key, host, store, *, candidate_provider, require_current,
+                 claude_presentation_enabled=False):
         self.owner, self.http, self.key = owner, http, key
         self.host, self.store = host, store
         self.candidate_provider, self.require_current = candidate_provider, require_current
+        self.claude_presentation_enabled = claude_presentation_enabled
 
     async def __call__(self, frame):
         frozen = decode_r4_frame(encode_r4_frame(frame))
@@ -119,7 +121,7 @@ class ApprovedToolLaunchProvider:
             return result
         result = await self.host.approved_launch(self.store, frame=frozen,
             candidates=candidates, capability=cap, http=self.http, capability_metadata=metadata,
-            opening=expected)
+            opening=expected, **({'claude_presentation_enabled': True} if self.claude_presentation_enabled else {}))
         guard()
         return result
 
