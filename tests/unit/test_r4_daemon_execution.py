@@ -97,8 +97,18 @@ async def lifecycle(selection, tmp_path):
 
 
 @pytest.mark.parametrize("selection", [True], indirect=True)
-async def test_automatic_lane_and_default_launch_publish_one_receipt(lifecycle):
+@pytest.mark.parametrize("claude_negotiated", [False, True])
+async def test_automatic_lane_and_default_launch_publish_one_receipt(lifecycle, claude_negotiated, monkeypatch):
     owner, _, store, frame, native, attached, published, keys = lifecycle
+    owner.connection.claude_presentation_enabled = claude_negotiated
+    host_approved_launch = owner.host.approved_launch
+    launch_modes = []
+
+    async def approved_launch(*args, **kwargs):
+        launch_modes.append(kwargs.get('claude_presentation_enabled', False))
+        return await host_approved_launch(*args, **kwargs)
+
+    monkeypatch.setattr(owner.host, 'approved_launch', approved_launch)
     await owner.sync()
     assert owner.ready and len(attached) == 1
     await owner.sync()
@@ -107,6 +117,7 @@ async def test_automatic_lane_and_default_launch_publish_one_receipt(lifecycle):
     receipt = await observed(published, owner.owner)
     assert receipt["operation_id"] == frame["operation_id"]
     assert len(native.opened) == 1
+    assert launch_modes == [claude_negotiated]
     assert keys == ["agent-key", "agent-key"]
     assert len(store.load().session_capabilities) == 1
     raw = store.path.read_text()

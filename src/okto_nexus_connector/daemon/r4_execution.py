@@ -185,7 +185,8 @@ class R4DaemonExecution:
         key = await asyncio.to_thread(self.vault.resolve, lane.identity.secret_handle)
         await self._current(frame)
         result = await ApprovedToolLaunchProvider(self.capabilities, self.http, key, self.host,
-            self.store, candidate_provider=self._candidates, require_current=self._guard)(frame)
+            self.store, candidate_provider=self._candidates, require_current=self._guard,
+            claude_presentation_enabled=getattr(self.connection, 'claude_presentation_enabled', False))(frame)
         await self._current(frame)
         return result
 
