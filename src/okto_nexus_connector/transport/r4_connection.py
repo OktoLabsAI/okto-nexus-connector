@@ -28,7 +28,8 @@ from nexus_connector_core.session_release import (
     SESSION_RELEASE_REVISION, encode_session_release, decode_session_release,
 )
 from nexus_connector_core.saved_context_link import (
-    SAVED_CODEX_LINK_REVISION, SAVED_CODEX_PROBE, encode_saved_codex_frame, saved_codex_result,
+    SAVED_CODEX_LINK_REVISION, SAVED_CODEX_OPEN, SAVED_CODEX_PROBE,
+    decode_saved_codex_open, encode_saved_codex_frame, saved_codex_result,
 )
 from nexus_connector_core.startup_refusal_link import (
     STARTUP_REFUSAL_REVISION, encode_startup_refusal, decode_startup_refusal,
@@ -56,12 +57,22 @@ class ReceivedOperation:
     control: bool
     lane_attempt_id: str
     target: tuple[TargetedControlCodec, str] | None = None
+    resumes_saved_codex: bool = False
 
     @property
     def frame(self) -> dict:
+        if self.resumes_saved_codex:
+            return decode_saved_codex_open(self.encoded)['operation']
         if self.target is not None:
             return self.target[0].decode(self.encoded)['operation']
         return decode_r4_frame(self.encoded)
+
+    @property
+    def codex_opening_source(self):
+        if not self.resumes_saved_codex:
+            return None
+        envelope = decode_saved_codex_open(self.encoded)
+        return envelope['source_scope'], envelope['source']
 
 
 class R4Connection:
@@ -315,6 +326,9 @@ class R4Connection:
                 if codec is not None:
                     target = (codec, frame[codec.target_field])
                     frame = frame['operation']
+                saved_codex = frame['type'] == SAVED_CODEX_OPEN
+                if saved_codex:
+                    frame = frame['operation']
                 kind = frame['type']
                 release_reply = kind in ('session.release.accepted', 'session.release.deferred')
                 startup_reply = kind in ('startup.refuse.accepted', 'startup.refuse.deferred')
@@ -332,7 +346,7 @@ class R4Connection:
                 elif kind in (PRESENTATION_READ, SAVED_CODEX_PROBE) or kind in PI_PRESENTATION_REQUESTS | CLAUDE_PRESENTATION_REQUESTS:
                     self._admit_presentation(frame)
                 elif kind == 'operation.submit':
-                    self._admit(frame, encoded, target=target)
+                    self._admit(frame, encoded, target=target, resumes_saved_codex=saved_codex)
                 elif release_reply or startup_reply:
                     reply_type = 'startup.refuse.accepted' if startup_reply else 'session.release.accepted'
                     reply_id = envelope['request_id'] if startup_reply else envelope['release_id']
@@ -810,13 +824,14 @@ class R4Connection:
         except CoreError:
             return False
 
-    def _admit(self, frame, encoded, *, target=None):
+    def _admit(self, frame, encoded, *, target=None, resumes_saved_codex=False):
         lane = self._lane(frame)
         control = frame['action'] in _CONTROL
         used, limit = self._used[control], self.limits[control]
         if used[0] >= limit[0] or used[1] + len(encoded) > limit[1]:
             raise ConnectorError('CAPACITY_EXCEEDED', 'r4_link', 'The operation inbox capacity is exhausted.')
-        item = ReceivedOperation(secrets.token_hex(16), encoded, control, lane.attach_request_id, target)
+        item = ReceivedOperation(secrets.token_hex(16), encoded, control, lane.attach_request_id,
+                                 target, resumes_saved_codex)
         used[0] += 1
         used[1] += len(encoded)
         self._reservations[item.token] = item

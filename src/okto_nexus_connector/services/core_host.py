@@ -468,7 +468,7 @@ class CoreRuntimeHost:
     @_owned_composition
     async def build_r4(self, store, *, frame, candidates, environment, factory=None,
                        native_action_factory=None, opening_selection=None, pi_presentation_enabled=False,
-                       claude_presentation_enabled=False):
+                       claude_presentation_enabled=False, saved_codex=None, codex_owned_home=None):
         """Compose an R4 runtime only from the approved host realization.
 
         Composition is effect-free and does not install execution authority.
@@ -511,7 +511,7 @@ class CoreRuntimeHost:
             raise CoreError('RUNTIME_DRAINING', 'runtime_composition', retry_safe=True)
         existing = self._runtimes.get(key)
         if existing is not None:
-            if (self._execution_selections.get(key) != selection
+            if (saved_codex is not None or self._execution_selections.get(key) != selection
                     or self._native_action_factories.get(key) is not native_action_factory):
                 raise ConnectorError('OPERATION_CONFLICT', 'runtime_composition', 'The runtime has a different opening selection.')
             return existing
@@ -526,6 +526,8 @@ class CoreRuntimeHost:
             if not qualified_environment and await resolve() != selection:
                 raise ConnectorError('PROFILE_DRIFT', 'runtime_environment', 'The approved execution selection changed.')
             return value
+        async def resumed_environment(prepared):
+            return await saved_codex.environment(checked_environment, prepared, codex_owned_home)
         native_owner = None
         async def native_launch(prepared, session_id, context):
             if native_owner is None:
@@ -570,7 +572,8 @@ class CoreRuntimeHost:
                 prepared.profile_fingerprint, prepared.root_fingerprint, require_current,
                 question_only=profile.get('question_only') is True, read_approval=profile.get('read_approval') is True)
 
-        runtime = create_runtime(journal=journal, environment=checked_environment,
+        runtime = create_runtime(journal=journal, environment=(checked_environment if saved_codex is None
+                                                               else resumed_environment),
             # The approved binding and local consent select this exact entry.
             # Preserve passive inventory evidence; only this scoped runtime
             # receives the selected candidate required by Core.prepare.
@@ -579,6 +582,7 @@ class CoreRuntimeHost:
             native_factory=factory, owned_slot_ledger=ledger,
             capacity_enabled=self.capacity_enabled,
             native_approvals_from_lease=True,
+            **({'codex_resume': saved_codex.grant} if saved_codex is not None else {}),
             pi_native_action=native_launch if native_action_factory is not None else None,
             **({'claude_fresh': claude_grant} if hosted_claude else {}),
             **({'pi_hosted_rpc': True} if hosted_pi else {}))

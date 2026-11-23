@@ -191,6 +191,35 @@ async def test_saved_codex_probe_checks_exact_closed_history_and_current_lane(tm
         await owner.close()
 
 
+async def test_saved_codex_open_retains_its_origin_on_the_canonical_operation_slot():
+    from nexus_connector_core.saved_context_link import (
+        SAVED_CODEX_OPEN_REVISION, encode_saved_codex_open, saved_codex_operation_id,
+    )
+
+    scope = SCOPE | {'session_id': 'successor'}
+    frame = dict(BASE | CHANNEL | scope, type='operation.submit', grant_id='grant', action='runtime.open',
+        payload=dict(adapter_id='codex_app_server', mode='managed', candidate_ref='nexus-install-v1:' + 'a' * 64,
+                     inventory_revision='sha256:' + 'a' * 64, realization_ref='realization',
+                     realization_revision=1, profile_revision=1))
+    source = dict(source_connection_id='prior', source_connection_generation=1, stream_epoch='stream',
+        opening_operation_id='source-open', close_operation_id='source-close', resource_release_digest='sha256:' + 'c' * 64)
+    frame['intent_hash'] = r4_submit_intent_hash(frame)
+    frame['operation_id'] = saved_codex_operation_id(scope, frame['intent_hash'], SCOPE, source)
+    socket = Socket()
+    owner = R4Connection(socket, replace(STATE, control_capabilities=(SAVED_CODEX_OPEN_REVISION,)), boot_id='boot')
+    owner.start()
+    try:
+        await attach(owner, socket)
+        await socket.incoming.put(encode_saved_codex_open(frame, source_scope=SCOPE, source=source).decode())
+        item = await asyncio.wait_for(owner.receive_operation(), 2)
+        assert item.resumes_saved_codex and item.codex_opening_source == (SCOPE, source)
+        assert owner.require_current(item) == frame
+        owner.release_operation(item)
+        assert owner.pending_operations == 0
+    finally:
+        await owner.close()
+
+
 async def test_pi_presentation_control_pulls_exact_editor_and_retires_on_disconnect():
     class PiSocket(Socket):
         async def send(self, raw):

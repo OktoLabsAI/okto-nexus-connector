@@ -25,6 +25,7 @@ from nexus_connector_core import (
     prepare_r4_startup_refusal, persist_r4_startup_refusal,
 )
 from nexus_connector_core.native.adapter_types import NativeAdapterError
+from nexus_connector_core.native.codex_rollout import saved_launch_configuration
 from nexus_connector_core.presentation_link import PRESENTATION_LINK_REVISION
 from nexus_connector_core.startup_refusal_link import STARTUP_REFUSAL_REVISION
 from nexus_connector_core.turn_operation import r4_turn_operation
@@ -33,7 +34,7 @@ from ..errors import ConnectorError
 from ..transport.lease_denial import LeaseRequestDenied
 from ..storage.r4_publications import R4PublicationStore
 from .core_host import ExecutionRuntimeKey
-from .r4_saved_codex import capture_saved_codex, record_retired_codex
+from .r4_saved_codex import SavedCodexOpening, capture_saved_codex, record_retired_codex
 
 
 _SCOPE = ('server_id', 'executor_id', 'binding_id', 'agent_id', 'workspace_id',
@@ -50,6 +51,7 @@ class R4LaunchSetup:
     auth_refs: tuple[str, ...] = ()
     native_action_factory: object | None = None
     opening_selection: object | None = None
+    codex_owned_home: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +116,8 @@ class _Session:
     denial: dict | None = None
     local_lease_failure: str | None = None
     opened: bool = False
+    codex_opening_profile: dict | None = None
+    resume_thread_id: str | None = None
 
 
 class R4ExecutionOwner:
@@ -770,6 +774,15 @@ class R4ExecutionOwner:
             if len(self._sessions) >= self.max_sessions:
                 raise ConnectorError('CAPACITY_EXCEEDED', 'r4_execution',
                                      'The execution session capacity is exhausted.')
+            saved_opening = None
+            if getattr(item, 'resumes_saved_codex', False):
+                source_scope, source = item.codex_opening_source
+                try:
+                    saved_opening = await asyncio.to_thread(SavedCodexOpening, self.session_releases.outbox,
+                        frame, source, source_scope, require_current=lambda: self.connection.require_current(item))
+                except (CoreError, ConnectorError):
+                    return await self._refuse_failed_preparation(item, None, prelease=True)
+                self.connection.require_current(item)
             try:
                 candidates = tuple(await self.candidate_provider(item.frame))
             except (NativeAdapterError, ConnectorError) as error:
@@ -807,11 +820,15 @@ class R4ExecutionOwner:
                 candidates=candidates, environment=setup.environment, factory=self.native_factory,
                 native_action_factory=setup.native_action_factory,
                 opening_selection=setup.opening_selection,
+                **({'saved_codex': saved_opening, 'codex_owned_home': setup.codex_owned_home}
+                   if saved_opening is not None else {}),
                 **({'pi_presentation_enabled': True} if getattr(self.connection, 'pi_presentation_enabled', False) else {}),
                 **claude_options)
             self.connection.require_current(item)
             session = _Session(runtime, frame['intent_hash'], 'stream_' + secrets.token_hex(16),
                 {k: frame[k] for k in _SCOPE}, frame['connection_id'], frame['connection_generation'])
+            if saved_opening is not None:
+                session.resume_thread_id = saved_opening.thread_id
             self._sessions[key] = session
             try:
                 applied = await self.connection.apply_lease(runtime, scope={k: frame[k] for k in _SCOPE},
@@ -847,6 +864,9 @@ class R4ExecutionOwner:
                     harness_settings=validate_harness_settings(payload['adapter_id'], payload.get('harness_settings', {}))), context)
             except NativeAdapterError:
                 return await self._refuse_failed_preparation(item, session)
+            if (PRESENTATION_LINK_REVISION in self.connection.state.control_capabilities
+                    and self.host.saved_codex_workspace(key, runtime) is not None):
+                session.codex_opening_profile = saved_launch_configuration(prepared)
             self._prepared_openings[item.token] = (session, prepared)
         if action == 'runtime.open':
             retained_session, prepared = self._prepared_openings[item.token]
@@ -856,11 +876,12 @@ class R4ExecutionOwner:
             # prepare and environment discovery may yield. The current lane
             # and installed authority are checked again before open.
             context = self._context(item, runtime)
+            resume = ({'resume_thread_id': session.resume_thread_id} if session.resume_thread_id is not None else {})
             context = await self._bind(item, runtime, context, prepared=prepared,
-                                       stream_epoch=session.stream_epoch)
+                                       stream_epoch=session.stream_epoch, **resume)
             try:
                 receipt = await runtime.open(OpenOperation(frame['operation_id'], frame['session_id'],
-                                                           session.stream_epoch, prepared), context)
+                                                           session.stream_epoch, prepared, **resume), context)
             except OperationCapacityDeferred:
                 raise
             except CoreError:
@@ -873,7 +894,7 @@ class R4ExecutionOwner:
                     raise
             session.opened = receipt.stage in ('SUBMITTED', 'SUCCEEDED')
             return project_r4_open_receipt(frame, receipt, context, prepared,
-                stream_epoch=session.stream_epoch, receipt_revision=1)
+                stream_epoch=session.stream_epoch, receipt_revision=1, **resume)
         if session is None:
             raise CoreError('SESSION_UNKNOWN', 'r4_execution')
         runtime = session.runtime
@@ -915,7 +936,8 @@ class R4ExecutionOwner:
             projected = project_r4_close_receipt(frame, receipt, context, receipt_revision=1)
             if receipt.stage == 'SUCCEEDED' and observation is not None:
                 await record_retired_codex(self.host, self.publications, self.session_releases.outbox,
-                    frame, receipt, observation, scope=saved_scope, workspace=workspace)
+                    frame, receipt, observation, scope=saved_scope, workspace=workspace,
+                    opening_profile=session.codex_opening_profile)
             return projected
         elif action in ('approval.decide', 'input.provide'):
             response = None

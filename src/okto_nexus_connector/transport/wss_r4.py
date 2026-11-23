@@ -129,8 +129,8 @@ async def negotiate_r4_control(
         from nexus_connector_core.presentation_link import CLAUDE_PRESENTATION_LINK_REVISION
         hello['control_capabilities'].append(CLAUDE_PRESENTATION_LINK_REVISION)
     if saved_codex_enabled:
-        from nexus_connector_core.saved_context_link import SAVED_CODEX_LINK_REVISION
-        hello['control_capabilities'].append(SAVED_CODEX_LINK_REVISION)
+        from nexus_connector_core.saved_context_link import SAVED_CODEX_LINK_REVISION, SAVED_CODEX_OPEN_REVISION
+        hello['control_capabilities'].extend((SAVED_CODEX_LINK_REVISION, SAVED_CODEX_OPEN_REVISION))
     if pi_presentation_enabled:
         from nexus_connector_core.pi_control_link import PI_RUN_CONTROL_REVISION
         from nexus_connector_core.presentation_link import PI_PRESENTATION_LINK_REVISION

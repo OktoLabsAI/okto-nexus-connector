@@ -429,6 +429,7 @@ class R4DaemonControl:
         return None
 
     async def _saved_codex_probe(self, frame):
+        from nexus_connector_core.saved_context_link import SAVED_CODEX_OPEN_REVISION
         from ..services.r4_saved_codex import probe_saved_codex
         from ..storage.r4_session_releases import R4SessionReleaseStore
 
@@ -439,7 +440,8 @@ class R4DaemonControl:
                         'server_id', 'executor_id', 'connection_id', 'connection_generation'))):
             return False
         releases = R4SessionReleaseStore.for_state(self.store)
-        available = await asyncio.to_thread(probe_saved_codex, releases, frame)
+        available = await asyncio.to_thread(probe_saved_codex, releases, frame,
+            require_opening_profile=SAVED_CODEX_OPEN_REVISION in connection.state.control_capabilities)
         return available and self.connection is connection and self.execution is execution and connection.online
 
     async def _attempt(self):

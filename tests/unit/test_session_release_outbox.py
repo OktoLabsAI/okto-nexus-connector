@@ -33,6 +33,74 @@ def test_private_codex_witness_stays_separate_from_the_release_report(tmp_path):
         assert conn.execute('PRAGMA user_version').fetchone() == (6,)
 
 
+async def test_saved_codex_grant_fences_two_successors_and_stages_only_the_owned_file(tmp_path, monkeypatch):
+    from dataclasses import asdict, replace
+    import json
+    import sys
+    from types import SimpleNamespace
+    from nexus_connector_core import InstallationCandidate, LaunchIntent, PreparedLaunch
+    from nexus_connector_core.native.codex_rollout import observe_rollout, saved_launch_configuration
+    from okto_nexus_connector.services import r4_saved_codex
+
+    home = tmp_path / 'source-profile'
+    path = home / 'sessions' / 'rollout-saved.jsonl'
+    path.parent.mkdir(parents=True)
+    thread = 'bdfe5b81-54cf-43cf-8001-5de670d3dd69'
+    header = dict(type='session_meta', payload=dict(id=thread, cwd=str(tmp_path)))
+    path.write_text(json.dumps(header) + '\n{"type":"response_item"}\n', encoding='utf-8')
+    (home / 'auth.json').write_text('fixture-only', encoding='utf-8')
+    rollout = observe_rollout(str(home), str(path), thread, str(tmp_path))
+    assert rollout is not None
+    original = request()
+    scope = original['scope']
+    candidate = InstallationCandidate('codex_app_server', 'test-bin', 'fingerprint', 'explicit', 'selected',
+                                      version='fixture', architecture='fixture')
+    monkeypatch.setattr(r4_saved_codex, 'CODEX_SAVED_HISTORY_BUILD',
+                        ('fixture', sys.platform, 'fixture', 'fingerprint'))
+    prepared = PreparedLaunch(LaunchIntent(scope['agent_id'], scope['workspace_id'], 'codex_app_server'),
+        candidate, ('test-bin',), str(tmp_path), str(tmp_path), 'workspace', 'old-profile', ('mcp-cap:old',))
+    changed_capability = replace(prepared, profile_fingerprint='new-profile', secret_refs=('mcp-cap:new',))
+    source = dict(close_operation_id='close', resource_release_digest=original['proof_digest'])
+    witness = dict(source, scope=scope, rollout=asdict(rollout), workspace_root=str(tmp_path),
+                   opening_profile=saved_launch_configuration(prepared))
+    store = R4SessionReleaseStore(tmp_path / 'releases.sqlite3')
+    store.record_saved_codex_context(witness)
+
+    def opening(session):
+        frame = dict(scope, session_id=session, operation_id='open-' + session)
+        return r4_saved_codex.SavedCodexOpening(R4SessionReleaseStore(store.path), frame, source, scope,
+                                               require_current=lambda: None)
+
+    left, right = opening('first'), opening('second')
+    context = SimpleNamespace(**scope)
+    outcomes = await asyncio.gather(left.grant(changed_capability, 'first', context),
+        right.grant(changed_capability, 'second', context), return_exceptions=True)
+    winners = [(candidate, grant) for candidate, grant in zip((left, right), outcomes)
+               if not isinstance(grant, BaseException)]
+    assert len(winners) == 1
+    assert [value.code for value in outcomes if isinstance(value, CoreError)] == ['OPERATION_CONFLICT']
+    winner, grant = winners[0]
+    restored = opening(grant.session_id)
+    assert await restored.grant(changed_capability, grant.session_id, context) == grant
+
+    target = tmp_path / 'owned-successor'
+    target.mkdir()
+    owned = SimpleNamespace(home=target, require_current=lambda: None)
+
+    async def environment(_):
+        return {'CODEX_HOME': str(target)}
+
+    with pytest.raises(CoreError, match='PROFILE_DRIFT'):
+        await winner.environment(environment, changed_capability, None)
+    await winner.environment(environment, changed_capability, owned)
+    assert (target / 'sessions' / path.name).read_bytes() == path.read_bytes()
+    assert not (target / 'auth.json').exists()
+    with path.open('ab') as changed:
+        changed.write(b'{"type":"file_changed"}\n')
+    with pytest.raises(CoreError, match='PROFILE_DRIFT'):
+        await restored.grant(changed_capability, grant.session_id, context)
+
+
 def test_reconstruction_preserves_unknown_attempt_until_correlated_deferral(tmp_path):
     path = tmp_path / 'releases.sqlite3'
     original = request()

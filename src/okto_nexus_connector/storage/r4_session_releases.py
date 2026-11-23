@@ -73,6 +73,10 @@ class R4SessionReleaseStore:
                          'server_id TEXT NOT NULL,executor_id TEXT NOT NULL,session_id TEXT NOT NULL,'
                          'owner_generation INTEGER NOT NULL,witness BLOB NOT NULL,digest TEXT NOT NULL,'
                          'PRIMARY KEY(server_id,executor_id,session_id,owner_generation))')
+            conn.execute('CREATE TABLE IF NOT EXISTS saved_codex_successors ('
+                         'server_id TEXT NOT NULL,executor_id TEXT NOT NULL,session_id TEXT NOT NULL,'
+                         'owner_generation INTEGER NOT NULL,successor_id TEXT NOT NULL,operation_id TEXT NOT NULL,'
+                         'PRIMARY KEY(server_id,executor_id,session_id,owner_generation))')
             conn.execute('PRAGMA user_version=6')
             yield conn
             conn.commit()
@@ -117,6 +121,24 @@ class R4SessionReleaseStore:
             if witness['scope'] != scope or any(witness[field] != value for field, value in source.items()):
                 return None
             return witness
+
+    def claim_saved_codex_successor(self, witness, *, session_id, operation_id):
+        """Reserve the retired source durably before authorizing a native owner."""
+        scope = witness['scope']
+        key = tuple(scope[field] for field in ('server_id', 'executor_id', 'session_id', 'session_owner_generation'))
+        raw = json.dumps(witness, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+        with self._transaction() as conn:
+            current = conn.execute('SELECT witness,digest FROM saved_codex_contexts WHERE server_id=? '
+                'AND executor_id=? AND session_id=? AND owner_generation=?', key).fetchone()
+            if current is None or (current['witness'], current['digest']) != (raw, sha256(raw).hexdigest()):
+                raise ConnectorError('PROFILE_DRIFT', 'saved_codex_context', 'The saved source evidence changed.')
+            conn.execute('INSERT OR IGNORE INTO saved_codex_successors VALUES (?,?,?,?,?,?)',
+                         (*key, session_id, operation_id))
+            claim = conn.execute('SELECT successor_id,operation_id FROM saved_codex_successors WHERE server_id=? '
+                'AND executor_id=? AND session_id=? AND owner_generation=?', key).fetchone()
+            if tuple(claim) != (session_id, operation_id):
+                raise ConnectorError('OPERATION_CONFLICT', 'saved_codex_context',
+                                     'The saved source already has an exclusive successor.')
 
     @staticmethod
     def _identity(*, scope, connection_id, connection_generation):
