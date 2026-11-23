@@ -232,4 +232,5 @@ async def approved_launch_setup(store, vault, *, frame, candidates, capability=N
     await tools_current()
     return R4LaunchSetup(environment, auth_refs=tuple(sorted(auth_refs)),
                          native_action_factory=native_factory, opening_selection=expected[0],
-                         codex_owned_home=session_home if record.adapter_id == 'codex_app_server' else None)
+                         codex_owned_home=session_home if record.adapter_id == 'codex_app_server' else None,
+                         claude_resume_profile=claude_profile)

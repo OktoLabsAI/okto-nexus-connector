@@ -11,6 +11,8 @@ from nexus_connector_core.session_release import decode_session_release, encode_
 
 from ..errors import ConnectorError
 
+_SAVED_CONTEXT_TABLES = {'codex_app_server': 'saved_codex_contexts', 'claude_stream': 'saved_claude_contexts'}
+
 
 class R4SessionReleaseStore:
     def __init__(self, path):
@@ -69,10 +71,11 @@ class R4SessionReleaseStore:
                          'CHECK(retired IN (0,1)))')
             conn.execute('CREATE INDEX IF NOT EXISTS reconciliation_checkpoint_pending '
                          'ON reconciliation_checkpoints(server_id,executor_id) WHERE retired=0')
-            conn.execute('CREATE TABLE IF NOT EXISTS saved_codex_contexts ('
-                         'server_id TEXT NOT NULL,executor_id TEXT NOT NULL,session_id TEXT NOT NULL,'
-                         'owner_generation INTEGER NOT NULL,witness BLOB NOT NULL,digest TEXT NOT NULL,'
-                         'PRIMARY KEY(server_id,executor_id,session_id,owner_generation))')
+            for table in _SAVED_CONTEXT_TABLES.values():
+                conn.execute(f'CREATE TABLE IF NOT EXISTS {table} ('
+                             'server_id TEXT NOT NULL,executor_id TEXT NOT NULL,session_id TEXT NOT NULL,'
+                             'owner_generation INTEGER NOT NULL,witness BLOB NOT NULL,digest TEXT NOT NULL,'
+                             'PRIMARY KEY(server_id,executor_id,session_id,owner_generation))')
             conn.execute('CREATE TABLE IF NOT EXISTS saved_codex_successors ('
                          'server_id TEXT NOT NULL,executor_id TEXT NOT NULL,session_id TEXT NOT NULL,'
                          'owner_generation INTEGER NOT NULL,successor_id TEXT NOT NULL,operation_id TEXT NOT NULL,'
@@ -88,24 +91,28 @@ class R4SessionReleaseStore:
                 conn.close()
 
     def record_saved_codex_context(self, witness):
+        self.record_saved_context('codex_app_server', witness)
+
+    def record_saved_context(self, adapter_id, witness):
         """Keep a private host observation without adding it to the release wire document."""
+        table = _SAVED_CONTEXT_TABLES[adapter_id]
         scope = witness['scope']
         key = tuple(scope[field] for field in ('server_id', 'executor_id', 'session_id', 'session_owner_generation'))
         raw = json.dumps(witness, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
         if len(raw) > 16384:
-            raise ConnectorError('CAPACITY_EXCEEDED', 'saved_codex_context', 'Saved context evidence is too large.')
+            raise ConnectorError('CAPACITY_EXCEEDED', 'saved_context', 'Saved context evidence is too large.')
         digest = sha256(raw).hexdigest()
         with self._transaction() as conn:
-            existing = conn.execute('SELECT digest,witness FROM saved_codex_contexts WHERE server_id=? '
+            existing = conn.execute(f'SELECT digest,witness FROM {table} WHERE server_id=? '
                 'AND executor_id=? AND session_id=? AND owner_generation=?', key).fetchone()
             if existing is not None:
                 if (existing['digest'], existing['witness']) != (digest, raw):
-                    raise ConnectorError('OPERATION_CONFLICT', 'saved_codex_context',
+                    raise ConnectorError('OPERATION_CONFLICT', 'saved_context',
                                          'Different evidence was already recorded for this source.')
                 return
-            if conn.execute('SELECT count(*) FROM saved_codex_contexts').fetchone()[0] >= 4096:
-                raise ConnectorError('CAPACITY_EXCEEDED', 'saved_codex_context', 'The saved context store is full.')
-            conn.execute('INSERT INTO saved_codex_contexts VALUES (?,?,?,?,?,?)', (*key, raw, digest))
+            if conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0] >= 4096:
+                raise ConnectorError('CAPACITY_EXCEEDED', 'saved_context', 'The saved context store is full.')
+            conn.execute(f'INSERT INTO {table} VALUES (?,?,?,?,?,?)', (*key, raw, digest))
 
     def saved_codex_context(self, scope, source):
         key = tuple(scope[field] for field in ('server_id', 'executor_id', 'session_id', 'session_owner_generation'))
