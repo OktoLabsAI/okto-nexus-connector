@@ -103,6 +103,21 @@ class R4SessionReleaseStore:
                 raise ConnectorError('CAPACITY_EXCEEDED', 'saved_codex_context', 'The saved context store is full.')
             conn.execute('INSERT INTO saved_codex_contexts VALUES (?,?,?,?,?,?)', (*key, raw, digest))
 
+    def saved_codex_context(self, scope, source):
+        key = tuple(scope[field] for field in ('server_id', 'executor_id', 'session_id', 'session_owner_generation'))
+        with self._transaction() as conn:
+            row = conn.execute('SELECT digest,witness FROM saved_codex_contexts WHERE server_id=? '
+                'AND executor_id=? AND session_id=? AND owner_generation=?', key).fetchone()
+            if row is None:
+                return None
+            if sha256(row['witness']).hexdigest() != row['digest']:
+                raise ConnectorError('JOURNAL_UNAVAILABLE', 'saved_codex_context',
+                                     'The saved context record failed its integrity check.')
+            witness = json.loads(row['witness'])
+            if witness['scope'] != scope or any(witness[field] != value for field, value in source.items()):
+                return None
+            return witness
+
     @staticmethod
     def _identity(*, scope, connection_id, connection_generation):
         return canonical_json(dict(scope=scope, connection_id=connection_id,

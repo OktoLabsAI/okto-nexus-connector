@@ -428,6 +428,20 @@ class R4DaemonControl:
             return metadata.get('viewer_context')
         return None
 
+    async def _saved_codex_probe(self, frame):
+        from ..services.r4_saved_codex import probe_saved_codex
+        from ..storage.r4_session_releases import R4SessionReleaseStore
+
+        connection, execution = self.connection, self.execution
+        if (connection is None or execution is None or not connection.online
+                or execution.connection is not connection or any(
+                    frame[name] != getattr(connection.state, name) for name in (
+                        'server_id', 'executor_id', 'connection_id', 'connection_generation'))):
+            return False
+        releases = R4SessionReleaseStore.for_state(self.store)
+        available = await asyncio.to_thread(probe_saved_codex, releases, frame)
+        return available and self.connection is connection and self.execution is execution and connection.online
+
     async def _attempt(self):
         self._recovery_error = None
         self._reporter = None
@@ -544,6 +558,7 @@ class R4DaemonControl:
                     reconciliation_accepted=self._reconciliation_accepted,
                     recover_before_report=recover_events,
                     presentation_handler=self._presentation_read,
+                    saved_codex_handler=self._saved_codex_probe,
                     pi_presentation_host=self.host,
                     **({'capacity_handler': self._capacity_control} if self.host.capacity_enabled else {})), min(30, remaining))
             finally:

@@ -27,6 +27,9 @@ from .wss_r4 import R4ControlState
 from nexus_connector_core.session_release import (
     SESSION_RELEASE_REVISION, encode_session_release, decode_session_release,
 )
+from nexus_connector_core.saved_context_link import (
+    SAVED_CODEX_LINK_REVISION, SAVED_CODEX_PROBE, encode_saved_codex_frame, saved_codex_result,
+)
 from nexus_connector_core.startup_refusal_link import (
     STARTUP_REFUSAL_REVISION, encode_startup_refusal, decode_startup_refusal,
 )
@@ -67,7 +70,7 @@ class R4Connection:
                  control_bytes=128 * 1024, max_requests=16, max_lanes=256,
                  request_timeout=15.0, send_timeout=5.0, heartbeat_seconds=15.0, initial_lanes=None, resume=None,
                  capacity_handler=None, max_capacity_requests=8, max_capacity_recovery=4, max_capacity_replies=64,
-                 presentation_handler=None, pi_presentation_host=None):
+                 presentation_handler=None, pi_presentation_host=None, saved_codex_handler=None):
         limits = (regular_items, control_items, regular_bytes, control_bytes, max_requests, max_lanes,
                   max_capacity_requests, max_capacity_recovery, max_capacity_replies)
         if (not state.control_ready or not boot_id or
@@ -81,6 +84,10 @@ class R4Connection:
         if presentation_negotiated and not callable(presentation_handler):
             raise ValueError('Negotiated presentation reads require an installed handler.')
         self._presentation_handler = presentation_handler if presentation_negotiated else None
+        saved_codex_negotiated = SAVED_CODEX_LINK_REVISION in state.control_capabilities
+        if saved_codex_negotiated and not callable(saved_codex_handler):
+            raise ValueError('Negotiated saved context probes require an installed handler.')
+        self._saved_codex_handler = saved_codex_handler if saved_codex_negotiated else None
         self._presentation_tasks = {}
         pi_negotiated = PI_PRESENTATION_LINK_REVISION in state.control_capabilities
         if pi_negotiated and pi_presentation_host is None:
@@ -322,7 +329,7 @@ class R4Connection:
                 self._last_received_monotonic = time.monotonic()
                 if kind in CAPACITY_REQUEST_TYPES:
                     self._admit_capacity(frame, encoded)
-                elif kind == PRESENTATION_READ or kind in PI_PRESENTATION_REQUESTS | CLAUDE_PRESENTATION_REQUESTS:
+                elif kind in (PRESENTATION_READ, SAVED_CODEX_PROBE) or kind in PI_PRESENTATION_REQUESTS | CLAUDE_PRESENTATION_REQUESTS:
                     self._admit_presentation(frame)
                 elif kind == 'operation.submit':
                     self._admit(frame, encoded, target=target)
@@ -398,6 +405,9 @@ class R4Connection:
         elif frame['type'] in PI_PRESENTATION_REQUESTS:
             presentation_tasks = self._pi_presentation_tasks
             serve = self._serve_terminal_presentation(frame, claude=False)
+        elif frame['type'] == SAVED_CODEX_PROBE:
+            presentation_tasks = self._presentation_tasks
+            serve = self._serve_saved_codex(frame)
         else:
             presentation_tasks = self._presentation_tasks
             serve = self._serve_presentation(frame)
@@ -426,6 +436,19 @@ class R4Connection:
         except (CoreError, TimeoutError, ValueError):
             response = encode_presentation_frame(presentation_result(frame, None))
         if self.online and self.websocket is socket:
+            await self.send(response.decode('utf-8'), expected_socket=socket)
+
+    async def _serve_saved_codex(self, frame):
+        socket = self.websocket
+        try:
+            lane = self._lane(frame['scope'])
+            async with asyncio.timeout(4):
+                available = await self._saved_codex_handler(frame)
+            available = available is True and self._lane(frame['scope']) == lane
+        except (CoreError, ConnectorError, OSError, TimeoutError, ValueError, KeyError, TypeError):
+            available = False
+        if self.online and self.websocket is socket:
+            response = encode_saved_codex_frame(saved_codex_result(frame, available=available))
             await self.send(response.decode('utf-8'), expected_socket=socket)
 
     async def _serve_terminal_presentation(self, frame, *, claude):

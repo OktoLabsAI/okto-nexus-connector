@@ -6,13 +6,29 @@ import logging
 from pathlib import Path
 
 from nexus_connector_core import (
-    CoreError, NativeSessionTarget, OperationKey, SessionKey, project_r4_resource_release,
+    CodexRolloutEvidence, CoreError, NativeSessionTarget, OperationKey, SessionKey, project_r4_resource_release,
 )
 from nexus_connector_core.native.codex_rollout import observe_rollout
 
 from ..errors import ConnectorError
 
 _LOG = logging.getLogger(__name__)
+
+
+def _unchanged(rollout, workspace):
+    path = Path(rollout.state_home).joinpath(*rollout.relative_path)
+    return observe_rollout(rollout.state_home, str(path), rollout.thread_id, workspace) == rollout
+
+
+def probe_saved_codex(releases, frame):
+    """Re-read the exact host record and return only whether its rollout is still intact."""
+    witness = releases.saved_codex_context(frame['scope'], frame['source'])
+    if witness is None:
+        return False
+    saved = witness['rollout']
+    rollout = CodexRolloutEvidence(**(saved | {key: tuple(saved[key]) for key in (
+        'relative_path', 'home_identity', 'file_identity')}))
+    return _unchanged(rollout, witness['workspace_root'])
 
 
 async def capture_saved_codex(host, runtime, frame, *, scope, epoch, budget):
@@ -68,9 +84,7 @@ async def record_retired_codex(host, publications, releases, frame, close_receip
             slot = await ledger.owned_slot_state(key)
             # The exact released slot is Core's stop proof for a managed close.
             release = project_r4_resource_release(open_binding, claim, slot, opening)
-            path = Path(rollout.state_home).joinpath(*rollout.relative_path)
-            current = await asyncio.to_thread(observe_rollout, rollout.state_home, str(path), rollout.thread_id, workspace)
-            if current != rollout:
+            if not await asyncio.to_thread(_unchanged, rollout, workspace):
                 return
             await asyncio.to_thread(releases.record_saved_codex_context, {
                 'scope': scope, 'source_connection_id': proof.connection_id,

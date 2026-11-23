@@ -2,7 +2,8 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import asdict, replace
+import json
 
 import pytest
 from nexus_connector_core import (
@@ -126,6 +127,69 @@ async def attach(owner, socket, **changes):
     request = await asyncio.wait_for(socket.outgoing.get(), 2)
     await socket.emit(attached(request))
     await asyncio.wait_for(task, 2)
+
+
+async def test_saved_codex_probe_checks_exact_closed_history_and_current_lane(tmp_path):
+    from nexus_connector_core.native.codex_rollout import observe_rollout
+    from nexus_connector_core.saved_context_link import (
+        SAVED_CODEX_LINK_REVISION, SAVED_CODEX_PROBE,
+        decode_saved_codex_frame, encode_saved_codex_frame, saved_codex_result,
+    )
+    from okto_nexus_connector.services.r4_saved_codex import probe_saved_codex
+    from okto_nexus_connector.storage.r4_session_releases import R4SessionReleaseStore
+
+    class ProbeSocket(Socket):
+        async def send(self, raw):
+            if SAVED_CODEX_LINK_REVISION in raw:
+                await self.outgoing.put(decode_saved_codex_frame(raw.encode()))
+            else:
+                await super().send(raw)
+
+    home = tmp_path / 'profile'
+    rollout = home / 'sessions' / 'rollout-test.jsonl'
+    rollout.parent.mkdir(parents=True)
+    thread = 'bdfe5b81-54cf-43cf-8001-5de670d3dd69'
+    header = json.dumps({'type': 'session_meta', 'payload': {'id': thread, 'cwd': str(tmp_path)}})
+    rollout.write_text(header + '\n{"type":"response_item"}\n', encoding='utf-8')
+    evidence = observe_rollout(str(home), str(rollout), thread, str(tmp_path))
+    assert evidence is not None
+    source = dict(source_connection_id='prior', source_connection_generation=1,
+        opening_operation_id='open', close_operation_id='close', stream_epoch='old-stream',
+        opening_binding_digest='sha256:' + 'a' * 64, close_binding_digest='sha256:' + 'b' * 64,
+        resource_release_digest='sha256:' + 'c' * 64)
+    store = R4SessionReleaseStore(tmp_path / 'releases.sqlite3')
+    store.record_saved_codex_context(dict(source, scope=SCOPE, workspace_root=str(tmp_path), rollout=asdict(evidence)))
+    calls = []
+
+    async def observe(frame):
+        calls.append(frame['request_id'])
+        return await asyncio.to_thread(probe_saved_codex, store, frame)
+
+    socket = ProbeSocket()
+    state = replace(STATE, control_capabilities=(SAVED_CODEX_LINK_REVISION,))
+    owner = R4Connection(socket, state, boot_id='boot', saved_codex_handler=observe)
+    probe = dict(CHANNEL, server_id='srv', executor_id='exe', contract_revision=SAVED_CODEX_LINK_REVISION,
+                 type=SAVED_CODEX_PROBE, request_id='before-attach', scope=SCOPE, source=source)
+
+    async def check(frame, *, available):
+        await socket.incoming.put(encode_saved_codex_frame(frame).decode())
+        reply = await asyncio.wait_for(socket.outgoing.get(), 2)
+        assert reply == saved_codex_result(frame, available=available)
+
+    owner.start()
+    try:
+        await check(probe, available=False)
+        assert calls == []
+        await attach(owner, socket)
+        await check(probe | {'request_id': 'intact'}, available=True)
+        await check(probe | {'request_id': 'wrong-close', 'source': source | {'close_operation_id': 'other'}},
+                    available=False)
+        with rollout.open('ab') as stream:
+            stream.write(b'{"type":"changed"}\n')
+        await check(probe | {'request_id': 'drifted'}, available=False)
+        assert calls == ['intact', 'wrong-close', 'drifted']
+    finally:
+        await owner.close()
 
 
 async def test_pi_presentation_control_pulls_exact_editor_and_retires_on_disconnect():
