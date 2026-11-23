@@ -160,6 +160,56 @@ async def test_saved_claude_grant_rechecks_private_proof_and_fences_one_successo
         await grant(winner)
 
 
+async def test_saved_pi_claim_checks_original_binding_home_and_exclusive_successor(tmp_path, monkeypatch):
+    from dataclasses import asdict, replace
+    from types import SimpleNamespace
+    from nexus_connector_core import InstallationCandidate, LaunchIntent, PreparedLaunch
+    from nexus_connector_core.native.codex_rollout import saved_launch_configuration
+    from nexus_connector_core.native.pi_saved_history import PiSavedHistory
+    from nexus_connector_core.saved_context_link import saved_native_session_digest
+    from okto_nexus_connector.services import r4_saved_pi
+
+    scope = request()['scope']
+    session_id = 'hsess_' + 'a' * 32
+    home, cwd = str(tmp_path/'approved'), str(tmp_path/'workspace')
+    history = PiSavedHistory(session_id, home, cwd, str(tmp_path/'session.jsonl'), 'a'*8,
+                             2, (1, 1), (1, 2), (1, 3), 100, 'a'*64)
+    witness = dict(scope=scope, close_operation_id='close', history=asdict(history))
+    candidate = InstallationCandidate('pi_rpc', 'test-node', 'fingerprint', 'explicit', 'selected',
+                                      version='fixture', architecture='fixture')
+    prepared = PreparedLaunch(LaunchIntent(scope['agent_id'], scope['workspace_id'], 'pi_rpc'),
+        candidate, ('test-node',), cwd, cwd, 'root', 'old-profile', ('native-cap:old',))
+    witness['opening_profile'] = saved_launch_configuration(prepared)
+    store = R4SessionReleaseStore(tmp_path/'release.sqlite3')
+    store.record_saved_context('pi_rpc', witness)
+    monkeypatch.setattr(r4_saved_pi, 'pi_saved_history_current', lambda proof: proof == history)
+    source = {'close_operation_id':'close', 'native_session_digest':saved_native_session_digest(session_id)}
+    assert r4_saved_pi.probe_saved_pi(store, dict(scope=scope, source=source))
+    assert not r4_saved_pi.probe_saved_pi(store,
+        dict(scope=scope, source=source | {'native_session_digest':'sha256:'+'b'*64}))
+
+    def current():
+        pass
+
+    async def claim(successor, profile=home, context=scope):
+        frame = dict(scope, session_id=successor, operation_id='open-'+successor)
+        opening = r4_saved_pi.SavedPiOpening(store, frame, source, scope, require_current=current)
+        next_launch = replace(prepared, profile_fingerprint='new-profile', secret_refs=('native-cap:new',))
+        return await opening.grant(next_launch, successor, SimpleNamespace(**context),
+            {'PI_CODING_AGENT_DIR':profile}, require_profile_current=current)
+
+    with pytest.raises(CoreError, match='PROFILE_DRIFT'):
+        await claim('first', str(tmp_path/'foreign'))
+    with pytest.raises(CoreError, match='STALE_GENERATION'):
+        await claim('first', context=scope | {'configuration_revision': scope['configuration_revision'] + 1})
+    outcomes = await asyncio.gather(claim('first'), claim('second'), return_exceptions=True)
+    winner, = [item for item in outcomes if not isinstance(item, BaseException)]
+    assert winner.history == history
+    assert [item.code for item in outcomes if isinstance(item, CoreError)] == ['OPERATION_CONFLICT']
+    repeated = await claim(winner.session_id)
+    assert (repeated.session_id, repeated.history) == (winner.session_id, history)
+
+
 def test_reconstruction_preserves_unknown_attempt_until_correlated_deferral(tmp_path):
     path = tmp_path / 'releases.sqlite3'
     original = request()

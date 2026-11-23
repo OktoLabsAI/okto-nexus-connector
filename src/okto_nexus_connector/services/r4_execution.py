@@ -36,7 +36,7 @@ from ..storage.r4_publications import R4PublicationStore
 from .core_host import ExecutionRuntimeKey
 from .r4_saved_claude import SavedClaudeOpening, capture_saved_claude, record_retired_claude
 from .r4_saved_codex import SavedCodexOpening, capture_saved_codex, record_retired_codex
-from .r4_saved_pi import capture_saved_pi, record_retired_pi
+from .r4_saved_pi import SavedPiOpening, capture_saved_pi, record_retired_pi
 
 
 _SCOPE = ('server_id', 'executor_id', 'binding_id', 'agent_id', 'workspace_id',
@@ -124,6 +124,7 @@ class _Session:
     pi_opening_profile: dict | None = None
     resume_thread_id: str | None = None
     resume_claude_session_id: str | None = None
+    resume_pi_session_id: str | None = None
 
 
 class R4ExecutionOwner:
@@ -780,12 +781,13 @@ class R4ExecutionOwner:
             if len(self._sessions) >= self.max_sessions:
                 raise ConnectorError('CAPACITY_EXCEEDED', 'r4_execution',
                                      'The execution session capacity is exhausted.')
-            saved_codex = saved_claude = None
+            saved_codex = saved_claude = saved_pi = None
             saved_context = getattr(item, 'saved_context', None)
             if saved_context is not None:
                 source_scope, source = item.saved_opening_source
                 opening_class = {'codex_app_server': SavedCodexOpening,
-                                 'claude_stream': SavedClaudeOpening}[saved_context.adapter_id]
+                                 'claude_stream': SavedClaudeOpening,
+                                 'pi_rpc': SavedPiOpening}[saved_context.adapter_id]
                 try:
                     saved_opening = await asyncio.to_thread(opening_class, self.session_releases.outbox,
                         frame, source, source_scope, require_current=lambda: self.connection.require_current(item))
@@ -793,6 +795,8 @@ class R4ExecutionOwner:
                     return await self._refuse_failed_preparation(item, None, prelease=True)
                 if isinstance(saved_opening, SavedClaudeOpening):
                     saved_claude = saved_opening
+                elif isinstance(saved_opening, SavedPiOpening):
+                    saved_pi = saved_opening
                 else:
                     saved_codex = saved_opening
                 self.connection.require_current(item)
@@ -832,6 +836,9 @@ class R4ExecutionOwner:
             if saved_claude is not None and (setup.claude_resume_profile != saved_claude.profile
                     or not claude_options or self.native_factory is not None):
                 return await self._refuse_failed_preparation(item, None, prelease=True)
+            if saved_pi is not None and (not getattr(self.connection, 'pi_presentation_enabled', False)
+                    or self.native_factory is not None):
+                return await self._refuse_failed_preparation(item, None, prelease=True)
             runtime = await self.host.build_r4(self.store, frame=item.frame,
                 candidates=candidates, environment=setup.environment, factory=self.native_factory,
                 native_action_factory=setup.native_action_factory,
@@ -840,6 +847,7 @@ class R4ExecutionOwner:
                    if saved_codex is not None else {}),
                 **({'saved_claude': saved_claude, 'claude_resume_profile': setup.claude_resume_profile}
                    if saved_claude is not None else {}),
+                **({'saved_pi': saved_pi} if saved_pi is not None else {}),
                 **({'pi_presentation_enabled': True} if getattr(self.connection, 'pi_presentation_enabled', False) else {}),
                 **claude_options)
             self.connection.require_current(item)
@@ -849,6 +857,8 @@ class R4ExecutionOwner:
                 session.resume_thread_id = saved_codex.thread_id
             if saved_claude is not None:
                 session.resume_claude_session_id = saved_claude.history.session_uuid
+            if saved_pi is not None:
+                session.resume_pi_session_id = saved_pi.history.session_id
             self._sessions[key] = session
             try:
                 applied = await self.connection.apply_lease(runtime, scope={k: frame[k] for k in _SCOPE},
@@ -908,6 +918,8 @@ class R4ExecutionOwner:
                 resume['resume_thread_id'] = session.resume_thread_id
             if session.resume_claude_session_id is not None:
                 resume['resume_claude_session_id'] = session.resume_claude_session_id
+            if session.resume_pi_session_id is not None:
+                resume['resume_pi_session_id'] = session.resume_pi_session_id
             context = await self._bind(item, runtime, context, prepared=prepared,
                                        stream_epoch=session.stream_epoch, **resume)
             try:

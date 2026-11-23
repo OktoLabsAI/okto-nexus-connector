@@ -469,7 +469,7 @@ class CoreRuntimeHost:
     async def build_r4(self, store, *, frame, candidates, environment, factory=None,
                        native_action_factory=None, opening_selection=None, pi_presentation_enabled=False,
                        claude_presentation_enabled=False, saved_codex=None, codex_owned_home=None,
-                       saved_claude=None, claude_resume_profile=None):
+                       saved_claude=None, claude_resume_profile=None, saved_pi=None):
         """Compose an R4 runtime only from the approved host realization.
 
         Composition is effect-free and does not install execution authority.
@@ -512,7 +512,8 @@ class CoreRuntimeHost:
             raise CoreError('RUNTIME_DRAINING', 'runtime_composition', retry_safe=True)
         existing = self._runtimes.get(key)
         if existing is not None:
-            if (saved_codex is not None or saved_claude is not None or self._execution_selections.get(key) != selection
+            if (saved_codex is not None or saved_claude is not None or saved_pi is not None
+                    or self._execution_selections.get(key) != selection
                     or self._native_action_factories.get(key) is not native_action_factory):
                 raise ConnectorError('OPERATION_CONFLICT', 'runtime_composition', 'The runtime has a different opening selection.')
             return existing
@@ -582,6 +583,28 @@ class CoreRuntimeHost:
             return await saved_claude.grant(prepared, session_id, context, profile=claude_resume_profile,
                                             require_profile_current=guard)
 
+        async def resumed_pi_grant(prepared, session_id, context, child_environment):
+            from .launch_configuration import _resolve
+
+            approved_frame = decode_r4_frame(encoded)
+            try:
+                _, approved = await asyncio.to_thread(_resolve, store, approved_frame, candidates, running=(selection,))
+            except ConnectorError:
+                raise CoreError('PROFILE_DRIFT', 'saved_pi_resume', retry_safe=True) from None
+
+            def require_profile_current():
+                try:
+                    if _resolve(store, approved_frame, candidates, running=(selection,)) == (selection, approved):
+                        return
+                except ConnectorError:
+                    pass
+                raise CoreError('PROFILE_DRIFT', 'saved_pi_resume', retry_safe=True)
+
+            return await saved_pi.grant(prepared, session_id, context, child_environment,
+                                        require_profile_current=require_profile_current)
+
+        if saved_pi is not None and not hosted_pi:
+            raise CoreError('CAPABILITY_UNSUPPORTED', 'saved_pi_resume', retry_safe=True)
         if saved_claude is not None and (not hosted_claude or claude_resume_profile is None):
             raise CoreError('CAPABILITY_UNSUPPORTED', 'saved_claude_resume', retry_safe=True)
 
@@ -599,7 +622,8 @@ class CoreRuntimeHost:
             pi_native_action=native_launch if native_action_factory is not None else None,
             **({'claude_fresh': claude_grant} if hosted_claude else {}),
             **({'claude_resume': resumed_claude_grant} if saved_claude is not None else {}),
-            **({'pi_hosted_rpc': True} if hosted_pi else {}))
+            **({'pi_hosted_rpc': True} if hosted_pi else {}),
+            **({'pi_saved_resume': resumed_pi_grant} if saved_pi is not None else {}))
         if native_action_factory is not None:
             native_owner = native_action_factory(runtime)
             if not isinstance(native_owner, PiNativeActionOwner):

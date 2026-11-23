@@ -429,9 +429,10 @@ class R4DaemonControl:
         return None
 
     async def _saved_context_probe(self, frame):
-        from nexus_connector_core.saved_context_link import CLAUDE_SAVED_CONTEXT, SAVED_CODEX_OPEN_REVISION
+        from nexus_connector_core.saved_context_link import CLAUDE_SAVED_CONTEXT, PI_SAVED_CONTEXT, SAVED_CODEX_OPEN_REVISION
         from ..services.r4_saved_claude import probe_saved_claude
         from ..services.r4_saved_codex import probe_saved_codex
+        from ..services.r4_saved_pi import probe_saved_pi
         from ..storage.r4_session_releases import R4SessionReleaseStore
 
         connection, execution = self.connection, self.execution
@@ -443,6 +444,8 @@ class R4DaemonControl:
         releases = R4SessionReleaseStore.for_state(self.store)
         if frame['type'] == CLAUDE_SAVED_CONTEXT.probe_type:
             available = await asyncio.to_thread(probe_saved_claude, releases, frame)
+        elif frame['type'] == PI_SAVED_CONTEXT.probe_type:
+            available = await asyncio.to_thread(probe_saved_pi, releases, frame)
         else:
             available = await asyncio.to_thread(probe_saved_codex, releases, frame,
                 require_opening_profile=SAVED_CODEX_OPEN_REVISION in connection.state.control_capabilities)
@@ -566,6 +569,7 @@ class R4DaemonControl:
                     presentation_handler=self._presentation_read,
                     saved_codex_handler=self._saved_context_probe,
                     saved_claude_handler=self._saved_context_probe,
+                    saved_pi_handler=self._saved_context_probe,
                     pi_presentation_host=self.host,
                     **({'capacity_handler': self._capacity_control} if self.host.capacity_enabled else {})), min(30, remaining))
             finally:

@@ -102,7 +102,7 @@ async def negotiate_r4_control(
         capacity_enabled: bool = False, reconciliation_accepted=None,
         presentation_enabled: bool = False, pi_presentation_enabled: bool = False,
         claude_presentation_enabled: bool = False, saved_codex_enabled: bool = False,
-        saved_claude_enabled: bool = False) -> R4ControlState:
+        saved_claude_enabled: bool = False, saved_pi_enabled: bool = False) -> R4ControlState:
     """Negotiate one socket; a failed journal cannot become an empty report."""
     if not boot_id or max_reconcile_attempts < 1 or type(capacity_enabled) is not bool:
         raise ValueError("Invalid R4 control settings.")
@@ -139,6 +139,9 @@ async def negotiate_r4_control(
         from nexus_connector_core.pi_control_link import PI_RUN_CONTROL_REVISION
         from nexus_connector_core.presentation_link import PI_PRESENTATION_LINK_REVISION
         hello['control_capabilities'].extend((PI_PRESENTATION_LINK_REVISION, PI_RUN_CONTROL_REVISION))
+        if saved_pi_enabled:
+            from nexus_connector_core.saved_context_link import PI_SAVED_CONTEXT
+            hello['control_capabilities'].extend((PI_SAVED_CONTEXT.link_revision, PI_SAVED_CONTEXT.open_revision))
         if capacity_enabled:
             from nexus_connector_core.turn_operation import PI_LITERAL_INPUT_REVISION
             hello['control_capabilities'].append(PI_LITERAL_INPUT_REVISION)
@@ -281,7 +284,7 @@ async def connect_r4_control(
         report_reconciliation: ReconcileReporter, recover_before_report=None, recovery_lanes=None,
         capacity_enabled: bool = False, reconciliation_accepted=None, presentation_enabled: bool = False,
         pi_presentation_enabled: bool = False, claude_presentation_enabled: bool = False,
-        saved_codex_enabled: bool = False, saved_claude_enabled: bool = False):
+        saved_codex_enabled: bool = False, saved_claude_enabled: bool = False, saved_pi_enabled: bool = False):
     """Open an authenticated R4 socket and return it with control state."""
     validate_link_url(link_url)
     if urlsplit(link_url).scheme not in ("wss", "ws"):
@@ -303,7 +306,7 @@ async def connect_r4_control(
             reconciliation_accepted=reconciliation_accepted,
             presentation_enabled=presentation_enabled, pi_presentation_enabled=pi_presentation_enabled,
             claude_presentation_enabled=claude_presentation_enabled, saved_codex_enabled=saved_codex_enabled,
-            saved_claude_enabled=saved_claude_enabled,
+            saved_claude_enabled=saved_claude_enabled, saved_pi_enabled=saved_pi_enabled,
         )
         return websocket, state
     except BaseException:
@@ -315,7 +318,7 @@ async def connect_r4_connection(link_url: str, ticket: str, *, server_id: str,
         executor_id: str, management_revision: str, snapshot_format: int,
         boot_id: str, report_reconciliation: ReconcileReporter, recover_before_report=None,
         capacity_handler=None, reconciliation_accepted=None, presentation_handler=None, pi_presentation_host=None,
-        saved_codex_handler=None, saved_claude_handler=None):
+        saved_codex_handler=None, saved_claude_handler=None, saved_pi_handler=None):
     """Negotiate a real socket and transfer its reader to one connection owner."""
     from .r4_connection import R4Connection
     lanes = {}
@@ -326,7 +329,8 @@ async def connect_r4_connection(link_url: str, ticket: str, *, server_id: str,
         capacity_enabled=callable(capacity_handler), reconciliation_accepted=reconciliation_accepted,
         presentation_enabled=callable(presentation_handler), pi_presentation_enabled=pi_presentation_host is not None,
         claude_presentation_enabled=callable(getattr(pi_presentation_host, 'open_r4_claude_presentation', None)),
-        saved_codex_enabled=callable(saved_codex_handler), saved_claude_enabled=callable(saved_claude_handler))
+        saved_codex_enabled=callable(saved_codex_handler), saved_claude_enabled=callable(saved_claude_handler),
+        saved_pi_enabled=callable(saved_pi_handler))
     async def resume(current):
         from .proxy import resolve_proxy
         for attempt in range(4):
@@ -362,7 +366,7 @@ async def connect_r4_connection(link_url: str, ticket: str, *, server_id: str,
             resume=resume if 'connection_resume_v1' in state.control_capabilities else None,
             capacity_handler=capacity_handler, presentation_handler=presentation_handler,
             pi_presentation_host=pi_presentation_host, saved_codex_handler=saved_codex_handler,
-            saved_claude_handler=saved_claude_handler)
+            saved_claude_handler=saved_claude_handler, saved_pi_handler=saved_pi_handler)
         connection.start()
         return connection
     except BaseException:

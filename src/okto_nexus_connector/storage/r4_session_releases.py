@@ -15,7 +15,7 @@ from ..errors import ConnectorError
 _SAVED_CONTEXT_TABLES = {
     'codex_app_server': ('saved_codex_contexts', 'saved_codex_successors'),
     'claude_stream': ('saved_claude_contexts', 'saved_claude_successors'),
-    'pi_rpc': ('saved_pi_contexts', None),
+    'pi_rpc': ('saved_pi_contexts', 'saved_pi_successors'),
 }
 
 
@@ -81,11 +81,10 @@ class R4SessionReleaseStore:
                              'server_id TEXT NOT NULL,executor_id TEXT NOT NULL,session_id TEXT NOT NULL,'
                              'owner_generation INTEGER NOT NULL,witness BLOB NOT NULL,digest TEXT NOT NULL,'
                              'PRIMARY KEY(server_id,executor_id,session_id,owner_generation))')
-                if successor is not None:
-                    conn.execute(f'CREATE TABLE IF NOT EXISTS {successor} ('
-                                 'server_id TEXT NOT NULL,executor_id TEXT NOT NULL,session_id TEXT NOT NULL,'
-                                 'owner_generation INTEGER NOT NULL,successor_id TEXT NOT NULL,operation_id TEXT NOT NULL,'
-                                 'PRIMARY KEY(server_id,executor_id,session_id,owner_generation))')
+                conn.execute(f'CREATE TABLE IF NOT EXISTS {successor} ('
+                             'server_id TEXT NOT NULL,executor_id TEXT NOT NULL,session_id TEXT NOT NULL,'
+                             'owner_generation INTEGER NOT NULL,successor_id TEXT NOT NULL,operation_id TEXT NOT NULL,'
+                             'PRIMARY KEY(server_id,executor_id,session_id,owner_generation))')
             conn.execute('PRAGMA user_version=6')
             yield conn
             conn.commit()
@@ -138,8 +137,9 @@ class R4SessionReleaseStore:
             if witness['scope'] != scope:
                 return None
             expected = dict(witness)
-            if adapter_id == 'claude_stream':
-                expected['native_session_digest'] = saved_native_session_digest(witness['history']['session_uuid'])
+            native_field = {'claude_stream': 'session_uuid', 'pi_rpc': 'session_id'}.get(adapter_id)
+            if native_field is not None:
+                expected['native_session_digest'] = saved_native_session_digest(witness['history'][native_field])
             if any(expected.get(field) != value for field, value in source.items()):
                 return None
             return witness
@@ -150,8 +150,6 @@ class R4SessionReleaseStore:
     def claim_saved_successor(self, adapter_id, witness, *, session_id, operation_id):
         """Reserve the retired source durably before authorizing a native owner."""
         table, successor = _SAVED_CONTEXT_TABLES[adapter_id]
-        if successor is None:
-            raise ConnectorError('CAPABILITY_UNSUPPORTED', 'saved_context', 'The harness cannot open a saved successor.')
         scope = witness['scope']
         key = tuple(scope[field] for field in ('server_id', 'executor_id', 'session_id', 'session_owner_generation'))
         raw = json.dumps(witness, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()

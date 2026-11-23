@@ -28,7 +28,7 @@ from nexus_connector_core.session_release import (
     SESSION_RELEASE_REVISION, encode_session_release, decode_session_release,
 )
 from nexus_connector_core.saved_context_link import (
-    CLAUDE_SAVED_CONTEXT, CODEX_SAVED_CONTEXT, SAVED_CONTEXT_CODECS, SavedContextCodec,
+    CLAUDE_SAVED_CONTEXT, CODEX_SAVED_CONTEXT, PI_SAVED_CONTEXT, SAVED_CONTEXT_CODECS, SavedContextCodec,
 )
 from nexus_connector_core.startup_refusal_link import (
     STARTUP_REFUSAL_REVISION, encode_startup_refusal, decode_startup_refusal,
@@ -82,7 +82,8 @@ class R4Connection:
                  control_bytes=128 * 1024, max_requests=16, max_lanes=256,
                  request_timeout=15.0, send_timeout=5.0, heartbeat_seconds=15.0, initial_lanes=None, resume=None,
                  capacity_handler=None, max_capacity_requests=8, max_capacity_recovery=4, max_capacity_replies=64,
-                 presentation_handler=None, pi_presentation_host=None, saved_codex_handler=None, saved_claude_handler=None):
+                 presentation_handler=None, pi_presentation_host=None, saved_codex_handler=None,
+                 saved_claude_handler=None, saved_pi_handler=None):
         limits = (regular_items, control_items, regular_bytes, control_bytes, max_requests, max_lanes,
                   max_capacity_requests, max_capacity_recovery, max_capacity_replies)
         if (not state.control_ready or not boot_id or
@@ -97,15 +98,17 @@ class R4Connection:
             raise ValueError('Negotiated presentation reads require an installed handler.')
         self._presentation_handler = presentation_handler if presentation_negotiated else None
         self._saved_handlers = {}
-        for codec, handler in ((CODEX_SAVED_CONTEXT, saved_codex_handler), (CLAUDE_SAVED_CONTEXT, saved_claude_handler)):
+        for codec, handler in ((CODEX_SAVED_CONTEXT, saved_codex_handler), (CLAUDE_SAVED_CONTEXT, saved_claude_handler),
+                               (PI_SAVED_CONTEXT, saved_pi_handler)):
             if codec.link_revision in state.control_capabilities:
                 if not callable(handler):
                     raise ValueError('Negotiated saved context probes require an installed handler.')
                 self._saved_handlers[codec] = handler
-        if (CLAUDE_SAVED_CONTEXT.open_revision in state.control_capabilities
-                and (CLAUDE_SAVED_CONTEXT not in self._saved_handlers
-                     or CLAUDE_PRESENTATION_LINK_REVISION not in state.control_capabilities)):
-            raise ValueError('Negotiated saved Claude openings require presentation and proof support.')
+        for codec, presentation in ((CLAUDE_SAVED_CONTEXT, CLAUDE_PRESENTATION_LINK_REVISION),
+                                    (PI_SAVED_CONTEXT, PI_PRESENTATION_LINK_REVISION)):
+            if (codec.open_revision in state.control_capabilities
+                    and (codec not in self._saved_handlers or presentation not in state.control_capabilities)):
+                raise ValueError('Negotiated saved openings require presentation and proof support.')
         self._presentation_tasks = {}
         pi_negotiated = PI_PRESENTATION_LINK_REVISION in state.control_capabilities
         if pi_negotiated and pi_presentation_host is None:
