@@ -155,7 +155,6 @@ async def test_saved_codex_probe_checks_exact_closed_history_and_current_lane(tm
     assert evidence is not None
     source = dict(source_connection_id='prior', source_connection_generation=1,
         opening_operation_id='open', close_operation_id='close', stream_epoch='old-stream',
-        opening_binding_digest='sha256:' + 'a' * 64, close_binding_digest='sha256:' + 'b' * 64,
         resource_release_digest='sha256:' + 'c' * 64)
     store = R4SessionReleaseStore(tmp_path / 'releases.sqlite3')
     store.record_saved_codex_context(dict(source, scope=SCOPE, workspace_root=str(tmp_path), rollout=asdict(evidence)))
