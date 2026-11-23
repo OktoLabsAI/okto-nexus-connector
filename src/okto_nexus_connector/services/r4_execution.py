@@ -36,6 +36,7 @@ from ..storage.r4_publications import R4PublicationStore
 from .core_host import ExecutionRuntimeKey
 from .r4_saved_claude import SavedClaudeOpening, capture_saved_claude, record_retired_claude
 from .r4_saved_codex import SavedCodexOpening, capture_saved_codex, record_retired_codex
+from .r4_saved_pi import capture_saved_pi, record_retired_pi
 
 
 _SCOPE = ('server_id', 'executor_id', 'binding_id', 'agent_id', 'workspace_id',
@@ -120,6 +121,7 @@ class _Session:
     opened: bool = False
     codex_opening_profile: dict | None = None
     claude_opening_profile: dict | None = None
+    pi_opening_profile: dict | None = None
     resume_thread_id: str | None = None
     resume_claude_session_id: str | None = None
 
@@ -889,6 +891,9 @@ class R4ExecutionOwner:
                     and setup.claude_resume_profile is not None):
                 session.claude_opening_profile = dict(saved_launch_configuration(prepared),
                     claude_resume_profile=dict(setup.claude_resume_profile))
+            if (prepared.candidate.adapter_id == 'pi_rpc'
+                    and getattr(self.connection, 'pi_presentation_enabled', False)):
+                session.pi_opening_profile = saved_launch_configuration(prepared)
             self._prepared_openings[item.token] = (session, prepared)
         if action == 'runtime.open':
             retained_session, prepared = self._prepared_openings[item.token]
@@ -953,6 +958,10 @@ class R4ExecutionOwner:
                 observation = await capture_saved_claude(self.host, runtime, frame, scope=saved_scope,
                     epoch=session.stream_epoch, budget=budget)
                 context = self._context(item, runtime)
+            elif session.pi_opening_profile is not None:
+                observation = await capture_saved_pi(self.host, runtime, frame, scope=saved_scope,
+                    epoch=session.stream_epoch, budget=budget)
+                context = self._context(item, runtime)
             elif PRESENTATION_LINK_REVISION in self.connection.state.control_capabilities:
                 workspace = self.host.saved_codex_workspace(key, runtime)
                 if workspace is not None:
@@ -969,6 +978,9 @@ class R4ExecutionOwner:
                 if session.claude_opening_profile is not None:
                     await record_retired_claude(self.host, self.publications, self.session_releases.outbox,
                         frame, receipt, observation, scope=saved_scope, opening_profile=session.claude_opening_profile)
+                elif session.pi_opening_profile is not None:
+                    await record_retired_pi(self.host, self.publications, self.session_releases.outbox,
+                        frame, receipt, observation, scope=saved_scope, opening_profile=session.pi_opening_profile)
                 else:
                     await record_retired_codex(self.host, self.publications, self.session_releases.outbox,
                         frame, receipt, observation, scope=saved_scope, workspace=workspace,
