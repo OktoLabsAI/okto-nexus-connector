@@ -69,6 +69,10 @@ class R4SessionReleaseStore:
                          'CHECK(retired IN (0,1)))')
             conn.execute('CREATE INDEX IF NOT EXISTS reconciliation_checkpoint_pending '
                          'ON reconciliation_checkpoints(server_id,executor_id) WHERE retired=0')
+            conn.execute('CREATE TABLE IF NOT EXISTS saved_codex_contexts ('
+                         'server_id TEXT NOT NULL,executor_id TEXT NOT NULL,session_id TEXT NOT NULL,'
+                         'owner_generation INTEGER NOT NULL,witness BLOB NOT NULL,digest TEXT NOT NULL,'
+                         'PRIMARY KEY(server_id,executor_id,session_id,owner_generation))')
             conn.execute('PRAGMA user_version=6')
             yield conn
             conn.commit()
@@ -78,6 +82,26 @@ class R4SessionReleaseStore:
         finally:
             if conn is not None:
                 conn.close()
+
+    def record_saved_codex_context(self, witness):
+        """Keep a private host observation without adding it to the release wire document."""
+        scope = witness['scope']
+        key = tuple(scope[field] for field in ('server_id', 'executor_id', 'session_id', 'session_owner_generation'))
+        raw = json.dumps(witness, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
+        if len(raw) > 16384:
+            raise ConnectorError('CAPACITY_EXCEEDED', 'saved_codex_context', 'Saved context evidence is too large.')
+        digest = sha256(raw).hexdigest()
+        with self._transaction() as conn:
+            existing = conn.execute('SELECT digest,witness FROM saved_codex_contexts WHERE server_id=? '
+                'AND executor_id=? AND session_id=? AND owner_generation=?', key).fetchone()
+            if existing is not None:
+                if (existing['digest'], existing['witness']) != (digest, raw):
+                    raise ConnectorError('OPERATION_CONFLICT', 'saved_codex_context',
+                                         'Different evidence was already recorded for this source.')
+                return
+            if conn.execute('SELECT count(*) FROM saved_codex_contexts').fetchone()[0] >= 4096:
+                raise ConnectorError('CAPACITY_EXCEEDED', 'saved_codex_context', 'The saved context store is full.')
+            conn.execute('INSERT INTO saved_codex_contexts VALUES (?,?,?,?,?,?)', (*key, raw, digest))
 
     @staticmethod
     def _identity(*, scope, connection_id, connection_generation):

@@ -687,6 +687,19 @@ class CoreRuntimeHost:
             raise CoreError('STALE_GENERATION', stage)
         return result
 
+    def saved_codex_workspace(self, key, runtime):
+        from nexus_connector_core.native.codex_rollout import CODEX_SAVED_HISTORY_BUILD
+
+        selection = self._execution_selections.get(key)
+        if self._draining or self._runtimes.get(key) is not runtime or selection is None:
+            return None
+        candidate = selection.candidate
+        if (candidate.adapter_id != 'codex_app_server'
+                or (candidate.version, sys.platform, candidate.architecture, candidate.fingerprint)
+                != CODEX_SAVED_HISTORY_BUILD):
+            return None
+        return selection.workspace_root
+
     async def prove_r4_pi_presentation(self, scope, target, *, connection_id, connection_generation):
         stage = 'pi_presentation'
         key, runtime = self._existing_presentation_runtime(scope, stage)

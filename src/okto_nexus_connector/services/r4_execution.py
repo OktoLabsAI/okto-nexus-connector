@@ -25,6 +25,7 @@ from nexus_connector_core import (
     prepare_r4_startup_refusal, persist_r4_startup_refusal,
 )
 from nexus_connector_core.native.adapter_types import NativeAdapterError
+from nexus_connector_core.presentation_link import PRESENTATION_LINK_REVISION
 from nexus_connector_core.startup_refusal_link import STARTUP_REFUSAL_REVISION
 from nexus_connector_core.turn_operation import r4_turn_operation
 
@@ -32,6 +33,7 @@ from ..errors import ConnectorError
 from ..transport.lease_denial import LeaseRequestDenied
 from ..storage.r4_publications import R4PublicationStore
 from .core_host import ExecutionRuntimeKey
+from .r4_saved_codex import capture_saved_codex, record_retired_codex
 
 
 _SCOPE = ('server_id', 'executor_id', 'binding_id', 'agent_id', 'workspace_id',
@@ -897,12 +899,24 @@ class R4ExecutionOwner:
                 expected_turn_id=frame.get('expected_turn_id')), context))
             project = project_r4_steer_receipt if action == 'turn.steer' else project_r4_interrupt_receipt
         elif action == 'runtime.close':
+            observation = None
+            if PRESENTATION_LINK_REVISION in self.connection.state.control_capabilities:
+                workspace = self.host.saved_codex_workspace(key, runtime)
+                if workspace is not None:
+                    saved_scope = {field: frame[field] for field in _SCOPE}
+                    observation = await capture_saved_codex(self.host, runtime, frame, scope=saved_scope,
+                        epoch=session.stream_epoch, budget=session.deadline - self.clock() - 1)
+                    context = self._context(item, runtime)
             await self.host.close_native_actions(key)
             # The daemon owns the operation, not merely an observation window.
             # Core keeps its physical deadline and commits the eventual fact.
             receipt = await runtime.close(r4_close_operation(frame), context,
                                           wait_for_completion=True)
-            project = project_r4_close_receipt
+            projected = project_r4_close_receipt(frame, receipt, context, receipt_revision=1)
+            if receipt.stage == 'SUCCEEDED' and observation is not None:
+                await record_retired_codex(self.host, self.publications, self.session_releases.outbox,
+                    frame, receipt, observation, scope=saved_scope, workspace=workspace)
+            return projected
         elif action in ('approval.decide', 'input.provide'):
             response = None
             if payload.get('response_ref') is not None:

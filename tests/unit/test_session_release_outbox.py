@@ -15,6 +15,24 @@ def identity(frame):
     return {k: frame[k] for k in ('scope', 'connection_id', 'connection_generation')}
 
 
+def test_private_codex_witness_stays_separate_from_the_release_report(tmp_path):
+    path = tmp_path / 'releases.sqlite3'
+    original = request()
+    outbox = R4SessionReleaseStore(path)
+    assert outbox.prepare(original) == original
+    witness = {'scope': original['scope'], 'rollout': {'sha256': 'a' * 64}}
+    outbox.record_saved_codex_context(witness)
+    rebuilt = R4SessionReleaseStore(path)
+    rebuilt.record_saved_codex_context(witness)
+    with pytest.raises(ConnectorError, match='OPERATION_CONFLICT'):
+        rebuilt.record_saved_codex_context(witness | {'rollout': {'sha256': 'b' * 64}})
+    assert rebuilt.pending(**identity(original)) == original
+    rebuilt.acknowledge(session_release_accepted(original))
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM saved_codex_contexts').fetchone() == (1,)
+        assert conn.execute('PRAGMA user_version').fetchone() == (6,)
+
+
 def test_reconstruction_preserves_unknown_attempt_until_correlated_deferral(tmp_path):
     path = tmp_path / 'releases.sqlite3'
     original = request()
