@@ -101,6 +101,65 @@ async def test_saved_codex_grant_fences_two_successors_and_stages_only_the_owned
         await restored.grant(changed_capability, grant.session_id, context)
 
 
+async def test_saved_claude_grant_rechecks_private_proof_and_fences_one_successor(tmp_path, monkeypatch):
+    from dataclasses import asdict, replace
+    from types import SimpleNamespace
+    from nexus_connector_core import InstallationCandidate, LaunchIntent, PreparedLaunch
+    from nexus_connector_core.native.claude_saved_history import ClaudeSavedHistory
+    from nexus_connector_core.native.codex_rollout import saved_launch_configuration
+    from nexus_connector_core.saved_context_link import saved_native_session_digest
+    from okto_nexus_connector.services import r4_saved_claude
+
+    original = request()
+    scope = original['scope']
+    native_uuid = '51131bb3-7843-4c0e-a09b-83ec580e7c75'
+    history = ClaudeSavedHistory(native_uuid, str(tmp_path/'profile'), str(tmp_path),
+                                (1, 1), (1, 2), (1, 3), 100, 'a' * 64)
+    profile = {'state_home': history.state_home, 'settings_sha256': 'a' * 64}
+    monkeypatch.setattr(r4_saved_claude, 'observe_claude_resume_profile', lambda *_: profile)
+    monkeypatch.setattr(r4_saved_claude, 'observe_claude_saved_history', lambda *_: history)
+    monkeypatch.setattr(r4_saved_claude, 'reviewed_claude_terminal_candidate', lambda candidate: True)
+    candidate = InstallationCandidate('claude_stream', 'test-bin', 'fingerprint', 'explicit', 'selected',
+                                      version='fixture', architecture='fixture')
+    prepared = PreparedLaunch(LaunchIntent(scope['agent_id'], scope['workspace_id'], 'claude_stream'),
+        candidate, ('test-bin',), str(tmp_path), str(tmp_path), 'workspace', 'old-profile', ('mcp-cap:old',))
+    opening_profile = dict(saved_launch_configuration(prepared), claude_resume_profile=profile)
+    source = dict(close_operation_id='close', resource_release_digest=original['proof_digest'])
+    store = R4SessionReleaseStore(tmp_path / 'releases.sqlite3')
+    store.record_saved_context('claude_stream', dict(source, scope=scope, history=asdict(history),
+                                                    opening_profile=opening_profile))
+    source['native_session_digest'] = saved_native_session_digest(native_uuid)
+    assert r4_saved_claude.probe_saved_claude(store, dict(scope=scope, source=source))
+    assert not r4_saved_claude.probe_saved_claude(store,
+        dict(scope=scope, source=source | {'native_session_digest': 'sha256:' + 'b' * 64}))
+    assert store.saved_codex_context(scope, source) is None
+
+    frames = [dict(scope, session_id=session, operation_id='open-' + session) for session in ('a', 'b')]
+    def require_current():
+        pass
+
+    async def grant(frame, approved=profile):
+        opening = r4_saved_claude.SavedClaudeOpening(R4SessionReleaseStore(store.path), frame, source, scope,
+                                                   require_current=require_current)
+        target = replace(prepared, profile_fingerprint='new-profile', secret_refs=('mcp-cap:new',))
+        return await opening.grant(target, frame['session_id'], SimpleNamespace(**scope),
+                                   profile=approved, require_profile_current=require_current)
+
+    with pytest.raises(CoreError, match='PROFILE_DRIFT'):
+        await grant(frames[0], profile | {'settings_sha256': 'd' * 64})
+    outcomes = await asyncio.gather(*(grant(frame) for frame in frames), return_exceptions=True)
+    winners = [value for value in outcomes if not isinstance(value, BaseException)]
+    assert len(winners) == 1 and winners[0].history == history
+    assert [value.code for value in outcomes if isinstance(value, CoreError)] == ['OPERATION_CONFLICT']
+    winner = next(frame for frame in frames if frame['session_id'] == winners[0].session_id)
+    assert await grant(winner) == winners[0]
+
+    monkeypatch.setattr(r4_saved_claude, 'observe_claude_saved_history', lambda *_: replace(history, byte_size=200))
+    assert not r4_saved_claude.probe_saved_claude(store, dict(scope=scope, source=source))
+    with pytest.raises(CoreError, match='PROFILE_DRIFT'):
+        await grant(winner)
+
+
 def test_reconstruction_preserves_unknown_attempt_until_correlated_deferral(tmp_path):
     path = tmp_path / 'releases.sqlite3'
     original = request()

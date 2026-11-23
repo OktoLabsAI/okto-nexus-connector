@@ -212,7 +212,8 @@ async def test_saved_codex_open_retains_its_origin_on_the_canonical_operation_sl
         await attach(owner, socket)
         await socket.incoming.put(encode_saved_codex_open(frame, source_scope=SCOPE, source=source).decode())
         item = await asyncio.wait_for(owner.receive_operation(), 2)
-        assert item.resumes_saved_codex and item.codex_opening_source == (SCOPE, source)
+        assert item.saved_context.adapter_id == 'codex_app_server'
+        assert item.saved_opening_source == (SCOPE, source)
         assert owner.require_current(item) == frame
         owner.release_operation(item)
         assert owner.pending_operations == 0

@@ -1,5 +1,11 @@
 # Current development dependency
 
+Connector 0.0.15 and Nexus 0.3.8 use Core 0.0.16 from `0ba1ae8ba104994a3a9622bf3f37b6a70430b2e6`.
+The unpublished wheel SHA-256 is `0298bad384af5ba38f19aa6513972ab86524e2c21e42250ac1ea1b7a4706df1c`.
+Core validates the negotiated Claude history probe and requires a scoped envelope for a saved opening.
+
+## Previous development dependency
+
 Connector 0.0.15 and Nexus 0.3.8 use Core 0.0.16 from `da0676237759bf76381df56d85f3f7c722f74cbe`.
 The unpublished wheel SHA-256 is `8bad4dcc44a4fe91d72fb61f5882b1de3a9d1a019cdfec4f0b0e9176689bbd88`.
 Core observes the exact latest confirmed Claude dialogue under the same process and lease.

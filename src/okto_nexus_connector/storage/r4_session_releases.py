@@ -7,11 +7,15 @@ import json
 
 from nexus_connector_core import decode_r4_frame, encode_r4_frame
 from nexus_connector_core.protocol import canonical_json
+from nexus_connector_core.saved_context_link import saved_native_session_digest
 from nexus_connector_core.session_release import decode_session_release, encode_session_release
 
 from ..errors import ConnectorError
 
-_SAVED_CONTEXT_TABLES = {'codex_app_server': 'saved_codex_contexts', 'claude_stream': 'saved_claude_contexts'}
+_SAVED_CONTEXT_TABLES = {
+    'codex_app_server': ('saved_codex_contexts', 'saved_codex_successors'),
+    'claude_stream': ('saved_claude_contexts', 'saved_claude_successors'),
+}
 
 
 class R4SessionReleaseStore:
@@ -71,15 +75,15 @@ class R4SessionReleaseStore:
                          'CHECK(retired IN (0,1)))')
             conn.execute('CREATE INDEX IF NOT EXISTS reconciliation_checkpoint_pending '
                          'ON reconciliation_checkpoints(server_id,executor_id) WHERE retired=0')
-            for table in _SAVED_CONTEXT_TABLES.values():
+            for table, successor in _SAVED_CONTEXT_TABLES.values():
                 conn.execute(f'CREATE TABLE IF NOT EXISTS {table} ('
                              'server_id TEXT NOT NULL,executor_id TEXT NOT NULL,session_id TEXT NOT NULL,'
                              'owner_generation INTEGER NOT NULL,witness BLOB NOT NULL,digest TEXT NOT NULL,'
                              'PRIMARY KEY(server_id,executor_id,session_id,owner_generation))')
-            conn.execute('CREATE TABLE IF NOT EXISTS saved_codex_successors ('
-                         'server_id TEXT NOT NULL,executor_id TEXT NOT NULL,session_id TEXT NOT NULL,'
-                         'owner_generation INTEGER NOT NULL,successor_id TEXT NOT NULL,operation_id TEXT NOT NULL,'
-                         'PRIMARY KEY(server_id,executor_id,session_id,owner_generation))')
+                conn.execute(f'CREATE TABLE IF NOT EXISTS {successor} ('
+                             'server_id TEXT NOT NULL,executor_id TEXT NOT NULL,session_id TEXT NOT NULL,'
+                             'owner_generation INTEGER NOT NULL,successor_id TEXT NOT NULL,operation_id TEXT NOT NULL,'
+                             'PRIMARY KEY(server_id,executor_id,session_id,owner_generation))')
             conn.execute('PRAGMA user_version=6')
             yield conn
             conn.commit()
@@ -95,7 +99,7 @@ class R4SessionReleaseStore:
 
     def record_saved_context(self, adapter_id, witness):
         """Keep a private host observation without adding it to the release wire document."""
-        table = _SAVED_CONTEXT_TABLES[adapter_id]
+        table, _ = _SAVED_CONTEXT_TABLES[adapter_id]
         scope = witness['scope']
         key = tuple(scope[field] for field in ('server_id', 'executor_id', 'session_id', 'session_owner_generation'))
         raw = json.dumps(witness, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
@@ -115,36 +119,49 @@ class R4SessionReleaseStore:
             conn.execute(f'INSERT INTO {table} VALUES (?,?,?,?,?,?)', (*key, raw, digest))
 
     def saved_codex_context(self, scope, source):
+        return self.saved_context('codex_app_server', scope, source)
+
+    def saved_context(self, adapter_id, scope, source):
+        table, _ = _SAVED_CONTEXT_TABLES[adapter_id]
         key = tuple(scope[field] for field in ('server_id', 'executor_id', 'session_id', 'session_owner_generation'))
         with self._transaction() as conn:
-            row = conn.execute('SELECT digest,witness FROM saved_codex_contexts WHERE server_id=? '
+            row = conn.execute(f'SELECT digest,witness FROM {table} WHERE server_id=? '
                 'AND executor_id=? AND session_id=? AND owner_generation=?', key).fetchone()
             if row is None:
                 return None
             if sha256(row['witness']).hexdigest() != row['digest']:
-                raise ConnectorError('JOURNAL_UNAVAILABLE', 'saved_codex_context',
+                raise ConnectorError('JOURNAL_UNAVAILABLE', 'saved_context',
                                      'The saved context record failed its integrity check.')
             witness = json.loads(row['witness'])
-            if witness['scope'] != scope or any(witness[field] != value for field, value in source.items()):
+            if witness['scope'] != scope:
+                return None
+            expected = dict(witness)
+            if adapter_id == 'claude_stream':
+                expected['native_session_digest'] = saved_native_session_digest(witness['history']['session_uuid'])
+            if any(expected.get(field) != value for field, value in source.items()):
                 return None
             return witness
 
     def claim_saved_codex_successor(self, witness, *, session_id, operation_id):
+        self.claim_saved_successor('codex_app_server', witness, session_id=session_id, operation_id=operation_id)
+
+    def claim_saved_successor(self, adapter_id, witness, *, session_id, operation_id):
         """Reserve the retired source durably before authorizing a native owner."""
+        table, successor = _SAVED_CONTEXT_TABLES[adapter_id]
         scope = witness['scope']
         key = tuple(scope[field] for field in ('server_id', 'executor_id', 'session_id', 'session_owner_generation'))
         raw = json.dumps(witness, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
         with self._transaction() as conn:
-            current = conn.execute('SELECT witness,digest FROM saved_codex_contexts WHERE server_id=? '
+            current = conn.execute(f'SELECT witness,digest FROM {table} WHERE server_id=? '
                 'AND executor_id=? AND session_id=? AND owner_generation=?', key).fetchone()
             if current is None or (current['witness'], current['digest']) != (raw, sha256(raw).hexdigest()):
-                raise ConnectorError('PROFILE_DRIFT', 'saved_codex_context', 'The saved source evidence changed.')
-            conn.execute('INSERT OR IGNORE INTO saved_codex_successors VALUES (?,?,?,?,?,?)',
+                raise ConnectorError('PROFILE_DRIFT', 'saved_context', 'The saved source evidence changed.')
+            conn.execute(f'INSERT OR IGNORE INTO {successor} VALUES (?,?,?,?,?,?)',
                          (*key, session_id, operation_id))
-            claim = conn.execute('SELECT successor_id,operation_id FROM saved_codex_successors WHERE server_id=? '
+            claim = conn.execute(f'SELECT successor_id,operation_id FROM {successor} WHERE server_id=? '
                 'AND executor_id=? AND session_id=? AND owner_generation=?', key).fetchone()
             if tuple(claim) != (session_id, operation_id):
-                raise ConnectorError('OPERATION_CONFLICT', 'saved_codex_context',
+                raise ConnectorError('OPERATION_CONFLICT', 'saved_context',
                                      'The saved source already has an exclusive successor.')
 
     @staticmethod

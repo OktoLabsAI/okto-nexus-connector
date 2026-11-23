@@ -468,7 +468,8 @@ class CoreRuntimeHost:
     @_owned_composition
     async def build_r4(self, store, *, frame, candidates, environment, factory=None,
                        native_action_factory=None, opening_selection=None, pi_presentation_enabled=False,
-                       claude_presentation_enabled=False, saved_codex=None, codex_owned_home=None):
+                       claude_presentation_enabled=False, saved_codex=None, codex_owned_home=None,
+                       saved_claude=None, claude_resume_profile=None):
         """Compose an R4 runtime only from the approved host realization.
 
         Composition is effect-free and does not install execution authority.
@@ -511,7 +512,7 @@ class CoreRuntimeHost:
             raise CoreError('RUNTIME_DRAINING', 'runtime_composition', retry_safe=True)
         existing = self._runtimes.get(key)
         if existing is not None:
-            if (saved_codex is not None or self._execution_selections.get(key) != selection
+            if (saved_codex is not None or saved_claude is not None or self._execution_selections.get(key) != selection
                     or self._native_action_factories.get(key) is not native_action_factory):
                 raise ConnectorError('OPERATION_CONFLICT', 'runtime_composition', 'The runtime has a different opening selection.')
             return existing
@@ -540,22 +541,11 @@ class CoreRuntimeHost:
         hosted_claude = (claude_presentation_enabled and factory is None and qualified_environment
                          and reviewed_claude_terminal_candidate(candidate))
 
-        async def claude_grant(prepared, session_id, context, child_environment):
-            from nexus_connector_core.native.claude_terminal_profile import (
-                capture_claude_resume_profile, observe_claude_resume_profile,
-            )
+        async def claude_profile_guard(prepared, profile):
+            from nexus_connector_core.native.claude_terminal_profile import observe_claude_resume_profile
             from .launch_configuration import _resolve
 
-            profile = await asyncio.to_thread(capture_claude_resume_profile, prepared, child_environment)
-            if profile is None:
-                return None
-            fields = ('server_id', 'executor_id', 'binding_id', 'agent_id', 'workspace_id',
-                      'session_owner_generation', 'authorization_revision', 'configuration_revision')
-            approved_frame = decode_r4_frame(encoded)
-            if session_id != selection.session_id or any(
-                    getattr(context, name) != approved_frame[name] for name in fields):
-                raise CoreError('STALE_GENERATION', 'claude_terminal_open', retry_safe=True)
-            _, approved = await asyncio.to_thread(_resolve, store, approved_frame,
+            _, approved = await asyncio.to_thread(_resolve, store, decode_r4_frame(encoded),
                                                    candidates, running=(selection,))
             home = profile['state_home']
 
@@ -567,10 +557,33 @@ class CoreRuntimeHost:
                     raise CoreError('PROFILE_DRIFT', 'claude_terminal_open', retry_safe=True) from None
                 if observe_claude_resume_profile(home, prepared.cwd) != profile:
                     raise CoreError('PROFILE_DRIFT', 'claude_terminal_open', retry_safe=True)
+            return require_current
 
+        async def claude_grant(prepared, session_id, context, child_environment):
+            from nexus_connector_core.native.claude_terminal_profile import capture_claude_resume_profile
+
+            profile = await asyncio.to_thread(capture_claude_resume_profile, prepared, child_environment)
+            if profile is None:
+                return None
+            fields = ('server_id', 'executor_id', 'binding_id', 'agent_id', 'workspace_id',
+                      'session_owner_generation', 'authorization_revision', 'configuration_revision')
+            approved_frame = decode_r4_frame(encoded)
+            if session_id != selection.session_id or any(
+                    getattr(context, name) != approved_frame[name] for name in fields):
+                raise CoreError('STALE_GENERATION', 'claude_terminal_open', retry_safe=True)
+            require_current = await claude_profile_guard(prepared, profile)
+            home = profile['state_home']
             return ClaudeTerminalFreshGrant(home, session_id, *(getattr(context, field) for field in fields),
                 prepared.profile_fingerprint, prepared.root_fingerprint, require_current,
                 question_only=profile.get('question_only') is True, read_approval=profile.get('read_approval') is True)
+
+        async def resumed_claude_grant(prepared, session_id, context):
+            guard = await claude_profile_guard(prepared, claude_resume_profile)
+            return await saved_claude.grant(prepared, session_id, context, profile=claude_resume_profile,
+                                            require_profile_current=guard)
+
+        if saved_claude is not None and (not hosted_claude or claude_resume_profile is None):
+            raise CoreError('CAPABILITY_UNSUPPORTED', 'saved_claude_resume', retry_safe=True)
 
         runtime = create_runtime(journal=journal, environment=(checked_environment if saved_codex is None
                                                                else resumed_environment),
@@ -585,6 +598,7 @@ class CoreRuntimeHost:
             **({'codex_resume': saved_codex.grant} if saved_codex is not None else {}),
             pi_native_action=native_launch if native_action_factory is not None else None,
             **({'claude_fresh': claude_grant} if hosted_claude else {}),
+            **({'claude_resume': resumed_claude_grant} if saved_claude is not None else {}),
             **({'pi_hosted_rpc': True} if hosted_pi else {}))
         if native_action_factory is not None:
             native_owner = native_action_factory(runtime)

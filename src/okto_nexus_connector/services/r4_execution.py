@@ -34,7 +34,7 @@ from ..errors import ConnectorError
 from ..transport.lease_denial import LeaseRequestDenied
 from ..storage.r4_publications import R4PublicationStore
 from .core_host import ExecutionRuntimeKey
-from .r4_saved_claude import capture_saved_claude, record_retired_claude
+from .r4_saved_claude import SavedClaudeOpening, capture_saved_claude, record_retired_claude
 from .r4_saved_codex import SavedCodexOpening, capture_saved_codex, record_retired_codex
 
 
@@ -121,6 +121,7 @@ class _Session:
     codex_opening_profile: dict | None = None
     claude_opening_profile: dict | None = None
     resume_thread_id: str | None = None
+    resume_claude_session_id: str | None = None
 
 
 class R4ExecutionOwner:
@@ -777,14 +778,21 @@ class R4ExecutionOwner:
             if len(self._sessions) >= self.max_sessions:
                 raise ConnectorError('CAPACITY_EXCEEDED', 'r4_execution',
                                      'The execution session capacity is exhausted.')
-            saved_opening = None
-            if getattr(item, 'resumes_saved_codex', False):
-                source_scope, source = item.codex_opening_source
+            saved_codex = saved_claude = None
+            saved_context = getattr(item, 'saved_context', None)
+            if saved_context is not None:
+                source_scope, source = item.saved_opening_source
+                opening_class = {'codex_app_server': SavedCodexOpening,
+                                 'claude_stream': SavedClaudeOpening}[saved_context.adapter_id]
                 try:
-                    saved_opening = await asyncio.to_thread(SavedCodexOpening, self.session_releases.outbox,
+                    saved_opening = await asyncio.to_thread(opening_class, self.session_releases.outbox,
                         frame, source, source_scope, require_current=lambda: self.connection.require_current(item))
                 except (CoreError, ConnectorError):
                     return await self._refuse_failed_preparation(item, None, prelease=True)
+                if isinstance(saved_opening, SavedClaudeOpening):
+                    saved_claude = saved_opening
+                else:
+                    saved_codex = saved_opening
                 self.connection.require_current(item)
             try:
                 candidates = tuple(await self.candidate_provider(item.frame))
@@ -819,19 +827,26 @@ class R4ExecutionOwner:
                     any(type(ref) is not str or not ref for ref in setup.auth_refs)):
                 raise ConnectorError('VALIDATION_ERROR', 'r4_execution',
                                      'The approved launch configuration is invalid.')
+            if saved_claude is not None and (setup.claude_resume_profile != saved_claude.profile
+                    or not claude_options or self.native_factory is not None):
+                return await self._refuse_failed_preparation(item, None, prelease=True)
             runtime = await self.host.build_r4(self.store, frame=item.frame,
                 candidates=candidates, environment=setup.environment, factory=self.native_factory,
                 native_action_factory=setup.native_action_factory,
                 opening_selection=setup.opening_selection,
-                **({'saved_codex': saved_opening, 'codex_owned_home': setup.codex_owned_home}
-                   if saved_opening is not None else {}),
+                **({'saved_codex': saved_codex, 'codex_owned_home': setup.codex_owned_home}
+                   if saved_codex is not None else {}),
+                **({'saved_claude': saved_claude, 'claude_resume_profile': setup.claude_resume_profile}
+                   if saved_claude is not None else {}),
                 **({'pi_presentation_enabled': True} if getattr(self.connection, 'pi_presentation_enabled', False) else {}),
                 **claude_options)
             self.connection.require_current(item)
             session = _Session(runtime, frame['intent_hash'], 'stream_' + secrets.token_hex(16),
                 {k: frame[k] for k in _SCOPE}, frame['connection_id'], frame['connection_generation'])
-            if saved_opening is not None:
-                session.resume_thread_id = saved_opening.thread_id
+            if saved_codex is not None:
+                session.resume_thread_id = saved_codex.thread_id
+            if saved_claude is not None:
+                session.resume_claude_session_id = saved_claude.history.session_uuid
             self._sessions[key] = session
             try:
                 applied = await self.connection.apply_lease(runtime, scope={k: frame[k] for k in _SCOPE},
@@ -883,7 +898,11 @@ class R4ExecutionOwner:
             # prepare and environment discovery may yield. The current lane
             # and installed authority are checked again before open.
             context = self._context(item, runtime)
-            resume = ({'resume_thread_id': session.resume_thread_id} if session.resume_thread_id is not None else {})
+            resume = {}
+            if session.resume_thread_id is not None:
+                resume['resume_thread_id'] = session.resume_thread_id
+            if session.resume_claude_session_id is not None:
+                resume['resume_claude_session_id'] = session.resume_claude_session_id
             context = await self._bind(item, runtime, context, prepared=prepared,
                                        stream_epoch=session.stream_epoch, **resume)
             try:

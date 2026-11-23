@@ -28,8 +28,7 @@ from nexus_connector_core.session_release import (
     SESSION_RELEASE_REVISION, encode_session_release, decode_session_release,
 )
 from nexus_connector_core.saved_context_link import (
-    SAVED_CODEX_LINK_REVISION, SAVED_CODEX_OPEN, SAVED_CODEX_PROBE,
-    decode_saved_codex_open, encode_saved_codex_frame, saved_codex_result,
+    CLAUDE_SAVED_CONTEXT, CODEX_SAVED_CONTEXT, SAVED_CONTEXT_CODECS, SavedContextCodec,
 )
 from nexus_connector_core.startup_refusal_link import (
     STARTUP_REFUSAL_REVISION, encode_startup_refusal, decode_startup_refusal,
@@ -46,6 +45,8 @@ from nexus_connector_core.targeted_control_link import TARGETED_CONTROL_CODECS, 
 _CONTROL = frozenset({'turn.steer', 'turn.interrupt', 'runtime.close',
                       'approval.decide', 'input.provide'})
 _TARGETED_CONTROL = {codec.kind: codec for codec in TARGETED_CONTROL_CODECS}
+_SAVED_OPEN = {codec.open_type: codec for codec in SAVED_CONTEXT_CODECS}
+_SAVED_PROBE = {codec.probe_type: codec for codec in SAVED_CONTEXT_CODECS}
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,21 +58,21 @@ class ReceivedOperation:
     control: bool
     lane_attempt_id: str
     target: tuple[TargetedControlCodec, str] | None = None
-    resumes_saved_codex: bool = False
+    saved_context: SavedContextCodec | None = None
 
     @property
     def frame(self) -> dict:
-        if self.resumes_saved_codex:
-            return decode_saved_codex_open(self.encoded)['operation']
+        if self.saved_context is not None:
+            return self.saved_context.decode_open(self.encoded)['operation']
         if self.target is not None:
             return self.target[0].decode(self.encoded)['operation']
         return decode_r4_frame(self.encoded)
 
     @property
-    def codex_opening_source(self):
-        if not self.resumes_saved_codex:
+    def saved_opening_source(self):
+        if self.saved_context is None:
             return None
-        envelope = decode_saved_codex_open(self.encoded)
+        envelope = self.saved_context.decode_open(self.encoded)
         return envelope['source_scope'], envelope['source']
 
 
@@ -81,7 +82,7 @@ class R4Connection:
                  control_bytes=128 * 1024, max_requests=16, max_lanes=256,
                  request_timeout=15.0, send_timeout=5.0, heartbeat_seconds=15.0, initial_lanes=None, resume=None,
                  capacity_handler=None, max_capacity_requests=8, max_capacity_recovery=4, max_capacity_replies=64,
-                 presentation_handler=None, pi_presentation_host=None, saved_codex_handler=None):
+                 presentation_handler=None, pi_presentation_host=None, saved_codex_handler=None, saved_claude_handler=None):
         limits = (regular_items, control_items, regular_bytes, control_bytes, max_requests, max_lanes,
                   max_capacity_requests, max_capacity_recovery, max_capacity_replies)
         if (not state.control_ready or not boot_id or
@@ -95,10 +96,16 @@ class R4Connection:
         if presentation_negotiated and not callable(presentation_handler):
             raise ValueError('Negotiated presentation reads require an installed handler.')
         self._presentation_handler = presentation_handler if presentation_negotiated else None
-        saved_codex_negotiated = SAVED_CODEX_LINK_REVISION in state.control_capabilities
-        if saved_codex_negotiated and not callable(saved_codex_handler):
-            raise ValueError('Negotiated saved context probes require an installed handler.')
-        self._saved_codex_handler = saved_codex_handler if saved_codex_negotiated else None
+        self._saved_handlers = {}
+        for codec, handler in ((CODEX_SAVED_CONTEXT, saved_codex_handler), (CLAUDE_SAVED_CONTEXT, saved_claude_handler)):
+            if codec.link_revision in state.control_capabilities:
+                if not callable(handler):
+                    raise ValueError('Negotiated saved context probes require an installed handler.')
+                self._saved_handlers[codec] = handler
+        if (CLAUDE_SAVED_CONTEXT.open_revision in state.control_capabilities
+                and (CLAUDE_SAVED_CONTEXT not in self._saved_handlers
+                     or CLAUDE_PRESENTATION_LINK_REVISION not in state.control_capabilities)):
+            raise ValueError('Negotiated saved Claude openings require presentation and proof support.')
         self._presentation_tasks = {}
         pi_negotiated = PI_PRESENTATION_LINK_REVISION in state.control_capabilities
         if pi_negotiated and pi_presentation_host is None:
@@ -326,8 +333,8 @@ class R4Connection:
                 if codec is not None:
                     target = (codec, frame[codec.target_field])
                     frame = frame['operation']
-                saved_codex = frame['type'] == SAVED_CODEX_OPEN
-                if saved_codex:
+                saved_context = _SAVED_OPEN.get(frame['type'])
+                if saved_context is not None:
                     frame = frame['operation']
                 kind = frame['type']
                 release_reply = kind in ('session.release.accepted', 'session.release.deferred')
@@ -343,10 +350,11 @@ class R4Connection:
                 self._last_received_monotonic = time.monotonic()
                 if kind in CAPACITY_REQUEST_TYPES:
                     self._admit_capacity(frame, encoded)
-                elif kind in (PRESENTATION_READ, SAVED_CODEX_PROBE) or kind in PI_PRESENTATION_REQUESTS | CLAUDE_PRESENTATION_REQUESTS:
+                elif (kind == PRESENTATION_READ or kind in _SAVED_PROBE
+                      or kind in PI_PRESENTATION_REQUESTS | CLAUDE_PRESENTATION_REQUESTS):
                     self._admit_presentation(frame)
                 elif kind == 'operation.submit':
-                    self._admit(frame, encoded, target=target, resumes_saved_codex=saved_codex)
+                    self._admit(frame, encoded, target=target, saved_context=saved_context)
                 elif release_reply or startup_reply:
                     reply_type = 'startup.refuse.accepted' if startup_reply else 'session.release.accepted'
                     reply_id = envelope['request_id'] if startup_reply else envelope['release_id']
@@ -419,9 +427,9 @@ class R4Connection:
         elif frame['type'] in PI_PRESENTATION_REQUESTS:
             presentation_tasks = self._pi_presentation_tasks
             serve = self._serve_terminal_presentation(frame, claude=False)
-        elif frame['type'] == SAVED_CODEX_PROBE:
+        elif frame['type'] in _SAVED_PROBE:
             presentation_tasks = self._presentation_tasks
-            serve = self._serve_saved_codex(frame)
+            serve = self._serve_saved_context(frame, _SAVED_PROBE[frame['type']])
         else:
             presentation_tasks = self._presentation_tasks
             serve = self._serve_presentation(frame)
@@ -452,17 +460,17 @@ class R4Connection:
         if self.online and self.websocket is socket:
             await self.send(response.decode('utf-8'), expected_socket=socket)
 
-    async def _serve_saved_codex(self, frame):
+    async def _serve_saved_context(self, frame, codec):
         socket = self.websocket
         try:
             lane = self._lane(frame['scope'])
             async with asyncio.timeout(4):
-                available = await self._saved_codex_handler(frame)
+                available = await self._saved_handlers[codec](frame)
             available = available is True and self._lane(frame['scope']) == lane
         except (CoreError, ConnectorError, OSError, TimeoutError, ValueError, KeyError, TypeError):
             available = False
         if self.online and self.websocket is socket:
-            response = encode_saved_codex_frame(saved_codex_result(frame, available=available))
+            response = codec.encode_probe(codec.result(frame, available=available))
             await self.send(response.decode('utf-8'), expected_socket=socket)
 
     async def _serve_terminal_presentation(self, frame, *, claude):
@@ -824,14 +832,14 @@ class R4Connection:
         except CoreError:
             return False
 
-    def _admit(self, frame, encoded, *, target=None, resumes_saved_codex=False):
+    def _admit(self, frame, encoded, *, target=None, saved_context=None):
         lane = self._lane(frame)
         control = frame['action'] in _CONTROL
         used, limit = self._used[control], self.limits[control]
         if used[0] >= limit[0] or used[1] + len(encoded) > limit[1]:
             raise ConnectorError('CAPACITY_EXCEEDED', 'r4_link', 'The operation inbox capacity is exhausted.')
         item = ReceivedOperation(secrets.token_hex(16), encoded, control, lane.attach_request_id,
-                                 target, resumes_saved_codex)
+                                 target, saved_context)
         used[0] += 1
         used[1] += len(encoded)
         self._reservations[item.token] = item
