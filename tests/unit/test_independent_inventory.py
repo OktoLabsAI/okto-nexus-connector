@@ -141,7 +141,8 @@ async def test_failed_default_discovery_retries_only_its_adapter(control, monkey
         await dispose(owner, host)
 
 
-async def test_refresh_requires_post_claim_attempt_of_every_adapter(control, monkeypatch):
+@pytest.mark.parametrize('claim_reply_lost', [False, True])
+async def test_refresh_requires_post_claim_attempt_of_every_adapter(control, monkeypatch, claim_reply_lost):
     owner, peer, _, host, _ = control
     protocol = peer.r4_protocol
     async def supported():
@@ -151,7 +152,7 @@ async def test_refresh_requires_post_claim_attempt_of_every_adapter(control, mon
     started = [asyncio.Event(), asyncio.Event()]
     count, offset = 0, 0
     delivery = None
-    claims, acknowledgements = [], []
+    claims, claim_scopes, acknowledgements = [], [], []
     owner.clock = lambda: time.monotonic() + offset
     async def discover(*, adapter_ids, cancel_requested):
         nonlocal count
@@ -164,6 +165,9 @@ async def test_refresh_requires_post_claim_attempt_of_every_adapter(control, mon
         return []
     async def claim(ticket, **scope):
         claims.append(delivery)
+        claim_scopes.append((ticket, scope))
+        if claim_reply_lost and delivery is not None and claims.count(delivery) == 1:
+            raise ConnectorError('OUTCOME_UNKNOWN', 'http', possible_effect=True)
         return delivery
     original = peer.publish_inventory
     async def publish(ticket, *, executor_id, snapshot, refresh_delivery_id=None):
@@ -176,16 +180,37 @@ async def test_refresh_requires_post_claim_attempt_of_every_adapter(control, mon
     try:
         await asyncio.wait_for(started[0].wait(), 15)
         await eventually(lambda: bool(peer.publications))
+        connection = owner.connection
         delivery, offset = 'refresh-after-initial-start', 6
         await eventually(lambda: delivery in claims)
+        if claim_reply_lost:
+            assert owner.inventory_owner.failure is None
+            assert delivery not in acknowledgements
+            assert owner.connection is connection and connection.online
+            offset += 6
+            await eventually(lambda: claims.count(delivery) >= 2)
+            assert claim_scopes[-2] == claim_scopes[-1]
         releases[0].set()
         await asyncio.wait_for(started[1].wait(), 5)
         assert delivery not in acknowledgements
         releases[1].set()
         await eventually(lambda: delivery in acknowledgements)
         assert acknowledgements.count(delivery) == 1
-        assert peer.calls == 1
+        assert peer.calls == 1 and owner.connection is connection and connection.online
     finally:
         for event in releases:
             event.set()
         await dispose(owner, host)
+
+
+@pytest.mark.parametrize('code', ['PERMISSION_DENIED', 'CONFLICT', 'VERSION_INCOMPATIBLE'])
+async def test_inventory_claim_keeps_authority_and_protocol_failures_fatal(code):
+    from okto_nexus_connector.daemon.r4_inventory import R4InventoryOwner
+
+    async def claim():
+        raise ConnectorError(code, 'http')
+
+    inventory = R4InventoryOwner(SimpleNamespace(clock=time.monotonic), None, None, None, claim)
+    with pytest.raises(ConnectorError) as error:
+        await inventory._claim()
+    assert error.value.code == code

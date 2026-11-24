@@ -54,7 +54,14 @@ class R4InventoryOwner:
         return batch
 
     async def _claim(self):
-        delivery = await self.claim_refresh()
+        try:
+            delivery = await self.claim_refresh()
+        except ConnectorError as error:
+            if error.stage != 'http' or error.code not in {'OUTCOME_UNKNOWN', 'EXECUTOR_OFFLINE'}:
+                raise
+            # The same live producer recovers its pending delivery on the
+            # next poll. A lost reply does not change the control authority.
+            return
         if not self._stop.is_set() and delivery is not None and delivery != self._delivery:
             self._delivery = delivery
             self._frontier = self.observer.request_refresh()
