@@ -192,6 +192,16 @@ class R4DaemonExecution:
 
     async def _publish(self, frame):
         lane = await self._current(frame)
+        try:
+            await self.http.publish_operation_receipt(lane.ticket.ticket, frame=frame)
+            return
+        except ConnectorError as error:
+            if error.stage != 'http' or error.code not in {'OUTCOME_UNKNOWN', 'EXECUTOR_OFFLINE'}:
+                raise
+        # Retry the journaled receipt once. Nexus accepts the same revision
+        # and digest idempotently, with the lane revalidated for the retry.
+        await asyncio.sleep(.25)
+        lane = await self._current(frame)
         await self.http.publish_operation_receipt(lane.ticket.ticket, frame=frame)
 
     def _reviewed_replacement(self, lane, selected):

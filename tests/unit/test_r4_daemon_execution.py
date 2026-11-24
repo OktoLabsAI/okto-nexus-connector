@@ -125,6 +125,55 @@ async def test_automatic_lane_and_default_launch_publish_one_receipt(lifecycle, 
 
 
 @pytest.mark.parametrize("selection", [True], indirect=True)
+@pytest.mark.parametrize(("fault", "revoke", "failure", "attempt_count"), [
+    ("OUTCOME_UNKNOWN", False, None, 2),
+    ("EXECUTOR_OFFLINE", False, None, 2),
+    ("OUTCOME_UNKNOWN", True, "STALE_GENERATION", 1),
+    ("VERSION_INCOMPATIBLE", False, "VERSION_INCOMPATIBLE", 1),
+    ("AGENT_AUTH_REQUIRED", False, "AGENT_AUTH_REQUIRED", 1),
+    ("CONFLICT", False, "CONFLICT", 1),
+    ("UNAVAILABLE_TWICE", False, "EXECUTOR_OFFLINE", 2),
+])
+async def test_live_opening_receipt_retries_the_same_fact_under_current_authority(
+        lifecycle, fault, revoke, failure, attempt_count, monkeypatch):
+    from okto_nexus_connector.storage.r4_publications import R4PublicationStore
+    from tests.unit.test_r4_execution import failed
+
+    owner, http, store, opening, native, attached, published, _ = lifecycle
+    journal = R4PublicationStore.for_state(store)
+    publish = http.publish_operation_receipt
+    attempts = []
+
+    async def unstable(ticket, *, frame):
+        attempts.append((ticket, frame.copy()))
+        assert journal.ready(opening["server_id"], opening["executor_id"]) == [frame]
+        if revoke:
+            store.update(lambda s: setattr(s.execution_bindings[0], "state", "REVOKED"))
+        if len(attempts) == 1 or fault == "UNAVAILABLE_TWICE":
+            code = "EXECUTOR_OFFLINE" if fault == "UNAVAILABLE_TWICE" else fault
+            raise ConnectorError(code, "http", possible_effect=code == "OUTCOME_UNKNOWN")
+        await publish(ticket, frame=frame)
+
+    monkeypatch.setattr(http, "publish_operation_receipt", unstable)
+    await owner.sync()
+    await owner.connection.emit(opening)
+    if failure:
+        await failed(owner.owner)
+        assert owner.owner.failure.code == failure
+        assert journal.ready(opening["server_id"], opening["executor_id"]) == [attempts[0][1]]
+        assert published.empty()
+    else:
+        assert await observed(published, owner.owner) == attempts[0][1]
+        async with asyncio.timeout(5):
+            while owner.owner.pending_count:
+                await asyncio.sleep(.01)
+        assert not journal.pending(opening["server_id"], opening["executor_id"])
+        assert owner.ready and owner.connection.online and published.empty()
+    assert attempts == [attempts[0]] * attempt_count
+    assert len(native.opened) == len(attached) == 1
+
+
+@pytest.mark.parametrize("selection", [True], indirect=True)
 @pytest.mark.parametrize("fault", ["revoke", "identity", "origin"])
 async def test_change_during_ticket_reply_never_attaches_or_opens(lifecycle, fault):
     owner, http, store, _, native, attached, _, _ = lifecycle
