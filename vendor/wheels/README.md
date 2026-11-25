@@ -1,5 +1,8 @@
 # Current development dependency
 
+Connector 0.0.16 uses Core 0.0.17 from `6f071e7b8bb8a2a6fbfd0e6b68557a81567f78af`.
+SHA-256 `b3a4c4cf243a45443e8cf9444f139295a9abc00547e10b3a9223ef85c31fbbbb`.
+
 Connector 0.0.15 and Nexus 0.3.8 use Core 0.0.16 from `db402559ea571365dbe83833fe41d837618c177d`.
 The unpublished wheel SHA-256 is `f8a3dcb553613b23f380e38c09f183f6cfd809ccd08188a824da8075b9585876`.
 Core checks the retired Pi file immediately before spawn and confirms the original native branch before publishing the opening.
